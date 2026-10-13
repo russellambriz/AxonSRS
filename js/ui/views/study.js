@@ -102,21 +102,65 @@ class StudyScreen {
 
   async acquireLock() {
     if (!navigator.locks?.request) return true;
-    const tryLock = (steal) => new Promise((resolve) => {
+    if (await this.tryLock(false)) return true;
+    this.showLocked('Studying in another tab', 'To avoid recording the same review twice, Axon studies in one tab at a time.');
+    return false;
+  }
+
+  /** Request the study lock; `steal` takes it from another tab. */
+  tryLock(steal) {
+    return new Promise((resolve) => {
+      let held = false;
       navigator.locks.request('axon-study', steal ? { steal: true } : { ifAvailable: true }, (lock) => {
         if (!lock) {
           resolve(false);
           return undefined;
         }
+        held = true;
         resolve(true);
         return new Promise((release) => { this.releaseLock = release; });
-      }).catch(() => resolve(false));
+      }).catch(() => {
+        // Rejected after being held: another tab took over studying.
+        if (held && !this.destroyed) this.lockLost();
+        resolve(false);
+      });
     });
-    if (await tryLock(false)) return true;
+  }
+
+  lockLost() {
+    this.releaseLock = null;
+    this.cancelAutoAdvance();
+    this.trial.pause('hidden');
+    this.abort.abort();
+    this.abort = new AbortController();
+    for (const u of this.unsubs) u();
+    this.unsubs = [];
+    app.shortcuts.enableScope('study', false);
+    app.shortcuts.enableScope('study-manual', false);
+    app.setBusy('study', null);
+    this.showLocked('Studying moved to another tab', 'Your saved progress is kept. Anything not yet submitted here was not recorded.');
+  }
+
+  showLocked(title, message) {
     this.phase = 'locked';
-    replace(this.stageInner, h('div', { class: 'study-done' }, h('div', { class: 'empty' }, h('div', { class: 'art' }, icon('lock')), h('h2', {}, 'Studying in another tab'), h('p', {}, 'To avoid recording the same review twice, Axon studies in one tab at a time.'), h('div', { class: 'row', style: { justifyContent: 'center' } }, button('Study here instead', { kind: 'primary', onclick: async () => { if (await tryLock(true)) { this.bindEvents(); this.setupShortcuts(); await ensureMath(); this.next(); } } }), button('Go home', { href: '#/' })))));
+    this.root.dataset.phase = 'locked';
+    replace(this.stageInner, h('div', { class: 'study-done' }, h('div', { class: 'empty' }, h('div', { class: 'art' }, icon('lock')), h('h2', {}, title), h('p', {}, message), h('div', { class: 'row', style: { justifyContent: 'center' } }, button('Study here instead', { kind: 'primary', onclick: () => this.takeOver() }), button('Go home', { href: '#/' })))));
     this.composer.hidden = true;
-    return false;
+  }
+
+  async takeOver() {
+    if (!(await this.tryLock(true))) return;
+    // Continue from the latest saved state (the other tab may have moved on).
+    const latest = await store.getSession(this.session.id);
+    if (latest) this.session = latest;
+    await app.cache.load();
+    this.current = null;
+    this.composer.hidden = false;
+    replace(this.stageInner, this.metaEl, this.promptEl, this.occlusionEl, this.instructionEl, this.hintEl, this.solutionEl, this.feedbackEl);
+    this.bindEvents();
+    this.setupShortcuts();
+    await ensureMath();
+    this.next();
   }
 
   buildDom() {
