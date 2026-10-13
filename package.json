@@ -6,7 +6,7 @@
   "type": "module",
   "license": "MIT",
   "scripts": {
-    "test": "node --test tests/unit/",
+    "test": "node --test \"tests/unit/*.test.js\"",
     "test:browser": "node tests/browser/run.mjs",
     "test:all": "npm test && npm run test:browser",
     "serve": "node tests/serve.mjs",
