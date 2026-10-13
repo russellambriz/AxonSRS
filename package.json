@@ -1,0 +1,18 @@
+{
+  "name": "axon-srs",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Axon — offline-first, typed-answer spaced repetition PWA with response-time-informed grading.",
+  "type": "module",
+  "license": "MIT",
+  "scripts": {
+    "test": "node --test tests/unit/",
+    "test:browser": "node tests/browser/run.mjs",
+    "test:all": "npm test && npm run test:browser",
+    "serve": "node tests/serve.mjs",
+    "check": "node tests/check-shell.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
