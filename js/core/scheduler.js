@@ -157,8 +157,12 @@ export function fuzzInterval({ interval, elapsedDays, stability, params, seed })
 export function applyRating(state, rating, at, params, seed) {
   if (![1, 2, 3, 4].includes(rating)) throw new Error(`Invalid FSRS rating ${rating}`);
   const f = schedulerFor(params);
-  const prev = state ? deserialize(state) : createEmptyCard(new Date(at));
-  const { card } = f.next(prev, new Date(at), rating);
+  // A device clock that went backwards (or a skewed remote event) must not
+  // make the review unsaveable: never schedule before the previous review.
+  const clockClamped = !!(state?.last_review && at < state.last_review);
+  const when = clockClamped ? state.last_review : at;
+  const prev = state ? deserialize(state) : createEmptyCard(new Date(when));
+  const { card } = f.next(prev, new Date(when), rating);
   let next = serialize(card);
   let interval = { applied: false, original: next.scheduled_days, chosen: next.scheduled_days };
   if (next.state === State.Review && next.scheduled_days > 0) {
@@ -184,6 +188,7 @@ export function applyRating(state, rating, at, params, seed) {
       chosenIntervalDays: interval.chosen,
       fuzz: interval.applied ? { min: interval.min, max: interval.max, seed: interval.seed, version: interval.version } : null,
       due: next.due,
+      clockClamped,
     },
   };
 }

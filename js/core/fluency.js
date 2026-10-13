@@ -52,7 +52,6 @@ export const DEFAULT_GRADING_CONFIG = Object.freeze({
   weights: Object.freeze({ typing: 0.35, correction: 0.25, pause: 0.35 }),
   hintCeiling: 'good', // 'hard' | 'good'
   guessedGrade: 'hard', // 'again' | 'hard'
-  maxReadingShareForEasy: 0.5,
   minEffortForTyping: 4,
   baselineWindow: 200,
   // Conservative population priors, used only to blend while personal data accumulates.
@@ -249,7 +248,10 @@ export function adjustMeasurements(trial, config = DEFAULT_GRADING_CONFIG) {
   const warmup = config.heuristicsEnabled && trial.isWarmup ? clamp(config.warmupMs, 0, config.warmupMaxMs) : 0;
   const latency = Number.isFinite(raw.latencyMs) ? raw.latencyMs : NaN;
   const adjustedLatency = Number.isFinite(latency) ? Math.max(0, latency - reading.ms - warmup) : NaN;
-  const latencyForEasy = Number.isFinite(latency) ? Math.max(0, latency - reading.ms) : NaN;
+  // Easy must hold even when only half of the estimated reading time is
+  // subtracted (and no warm-up allowance), so the heuristic alone can never
+  // make an answer look fast enough for Easy.
+  const latencyForEasy = Number.isFinite(latency) ? Math.max(0, latency - reading.ms * 0.5) : NaN;
   const effort = raw.effort ?? raw.answerLength ?? 0;
   const typingInformative = effort >= config.minEffortForTyping && Number.isFinite(raw.typingMs) && raw.typingMs > 0;
   const msPerEffort = typingInformative ? raw.typingMs / effort : NaN;
@@ -398,13 +400,13 @@ export function gradeReview(trial, baseline, config = DEFAULT_GRADING_CONFIG) {
   } else {
     reasons.push('FLUENT');
     confidence = 0.6 + Math.min(0.2, Math.abs(hesitation - config.thresholds.hard) * 0.1);
-    const easyCandidate = hesitation <= config.thresholds.easy && zLatencyEasy <= config.thresholds.easy;
-    if (easyCandidate) {
+    const easyCandidate = hesitation <= config.thresholds.easy;
+    if (easyCandidate && zLatencyEasy > config.thresholds.easy) reasons.push('READING_ADJUSTMENT_DOMINANT');
+    else if (easyCandidate) {
       const blockers = [];
       if (ceiling < 4) blockers.push('EASY_BLOCKED_BY_CEILING');
       if (corrections > 0 || pauses > 0) blockers.push('EASY_BLOCKED_BY_CORRECTIONS');
       if (zTyping > 0.5) blockers.push('EASY_BLOCKED_BY_SLOW_TYPING');
-      if (adj.adjusted.readingShare > config.maxReadingShareForEasy) blockers.push('READING_ADJUSTMENT_DOMINANT');
       const prev = trial.history?.previousScheduled;
       if (!prev) blockers.push('EASY_NEEDS_HISTORY');
       else if (!prev.correct || prev.assisted || prev.grade < 3 || prev.typoTolerated) blockers.push('EASY_NEEDS_CONSISTENCY');
@@ -484,7 +486,7 @@ export const REASON_TEXT = Object.freeze({
   EASY_BLOCKED_BY_CEILING: 'Fast, but a hint or typo prevents Easy.',
   EASY_BLOCKED_BY_CORRECTIONS: 'Fast, but corrections or pauses prevent Easy.',
   EASY_BLOCKED_BY_SLOW_TYPING: 'Quick to start, but typing was slower than usual.',
-  READING_ADJUSTMENT_DOMINANT: 'Fast mainly because of the reading-time adjustment, so not Easy.',
+  READING_ADJUSTMENT_DOMINANT: 'Fast only after the reading-time estimate is subtracted, so not Easy.',
   EASY_NEEDS_HISTORY: 'Easy requires a previous fluent review of this card.',
   EASY_NEEDS_CONSISTENCY: 'Easy requires the previous review to have been fluent too.',
   WARMUP_APPLIED: 'First card of the session: a warm-up allowance was applied.',
