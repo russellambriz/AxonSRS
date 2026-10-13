@@ -1,0 +1,26 @@
+{
+  "name": "Axon — Adaptive Spaced Repetition",
+  "short_name": "Axon",
+  "description": "Offline-first, typed-answer spaced repetition with response-time-informed scheduling.",
+  "id": "./",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "display_override": ["standalone", "minimal-ui"],
+  "orientation": "any",
+  "background_color": "#f7f7f9",
+  "theme_color": "#5b5bd6",
+  "lang": "en",
+  "dir": "ltr",
+  "categories": ["education", "productivity"],
+  "icons": [
+    { "src": "./icons/icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any" },
+    { "src": "./icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" },
+    { "src": "./icons/icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }
+  ],
+  "shortcuts": [
+    { "name": "Study now", "url": "./#/study", "icons": [{ "src": "./icons/icon-192.png", "sizes": "192x192" }] },
+    { "name": "Import cards", "url": "./#/import", "icons": [{ "src": "./icons/icon-192.png", "sizes": "192x192" }] }
+  ]
+}

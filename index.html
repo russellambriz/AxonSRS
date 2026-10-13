@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content" />
+    <title>Axon</title>
+    <meta name="description" content="Axon — offline-first, typed-answer spaced repetition with response-time-informed scheduling." />
+    <meta name="theme-color" content="#f7f7f9" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#0e0e11" media="(prefers-color-scheme: dark)" />
+    <meta name="color-scheme" content="light dark" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-title" content="Axon" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="referrer" content="no-referrer" />
+    <link rel="manifest" href="./manifest.json" />
+    <link rel="icon" href="./icons/icon.svg" type="image/svg+xml" />
+    <link rel="icon" href="./icons/icon-192.png" type="image/png" sizes="192x192" />
+    <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png" />
+    <link rel="stylesheet" href="./vendor/katex/katex.min.css" />
+    <link rel="stylesheet" href="./css/app.css" />
+    <script>
+      // Apply the saved theme before first paint (per-device convenience only).
+      try {
+        var t = localStorage.getItem('axon-theme');
+        if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+        if (localStorage.getItem('axon-dyslexic') === '1') document.documentElement.classList.add('dyslexic');
+        var fs = parseFloat(localStorage.getItem('axon-font-scale'));
+        if (fs > 0.7 && fs < 1.6) document.documentElement.style.setProperty('--font-scale', fs);
+      } catch (e) {}
+    </script>
+  </head>
+  <body>
+    <div id="app">
+      <div class="loading-screen" role="status" aria-live="polite"><div class="spinner" aria-hidden="true"></div><span class="visually-hidden">Loading Axon…</span></div>
+    </div>
+    <noscript><p style="padding: 24px; font-family: system-ui">Axon needs JavaScript to run.</p></noscript>
+    <div id="sr-live" class="visually-hidden" role="status" aria-live="polite" aria-atomic="true"></div>
+    <div id="sr-alert" class="visually-hidden" role="alert" aria-live="assertive" aria-atomic="true"></div>
+    <script type="module" src="./js/main.js"></script>
+  </body>
+</html>
