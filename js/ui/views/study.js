@@ -254,8 +254,10 @@ class StudyScreen {
     on('study.why', () => this.feedbackEl.querySelector('details.why')?.toggleAttribute('open'));
     for (const r of [1, 2, 3, 4]) on(`study.grade${r}`, () => this.phase === 'grading' && this.manualGrade(r));
     this.unsubs.push(sc.on('study.focus', () => {
-      if (document.activeElement === this.input) this.input.blur();
-      else this.focusInput(true);
+      if (document.activeElement === this.input) {
+        this.deliberateBlur = true; // leave the field so single-key shortcuts work
+        this.input.blur();
+      } else this.focusInput(true);
       return true;
     }));
   }
@@ -299,7 +301,11 @@ class StudyScreen {
   onBlur() {
     // Some mobile browsers blur on "Done". Restore focus unless the user
     // deliberately tapped elsewhere (never fight the user or assistive tech).
-    if (this.destroyed || this.phase === 'done' || this.phase === 'paused') return;
+    if (this.destroyed || this.phase === 'done' || this.phase === 'paused' || this.phase === 'locked') return;
+    if (this.deliberateBlur) {
+      this.deliberateBlur = false;
+      return;
+    }
     const tappedElsewhere = this.userTappedElsewhere;
     setTimeout(() => {
       if (!tappedElsewhere && !document.querySelector('dialog[open]') && document.activeElement === document.body) this.focusInput();
