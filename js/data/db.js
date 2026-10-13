@@ -217,7 +217,9 @@ export function transaction(db, storeNames, mode, fn) {
         result = r;
       })
       .catch((err) => {
-        helper.abort(err);
+        // Browser storage errors (quota, clone, closed connection) get a
+        // clear message; Axon's own errors pass through unchanged.
+        helper.abort(typeof DOMException !== 'undefined' && err instanceof DOMException ? classifyError(err) : err);
       })
       .finally(() => {
         settled = true;
