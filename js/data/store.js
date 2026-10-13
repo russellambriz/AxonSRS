@@ -844,12 +844,17 @@ export class AxonStore {
   async replaceAll(dataset, { reason = 'replace' } = {}) {
     await this.snapshot(`before ${reason}`);
     const stores = ['decks', 'cards', 'units', 'events', 'revisions', 'tombstones', 'links', 'plans', 'conflicts', 'sessions'];
-    await this.tx([...stores, 'media'], 'readwrite', async (t) => {
+    await this.tx([...stores, 'media', 'settings'], 'readwrite', async (t) => {
       for (const s of stores) for (const k of await t.keys(s)) await t.delete(s, k);
       for (const s of ['decks', 'cards', 'units', 'events', 'revisions', 'tombstones', 'links', 'plans']) for (const r of dataset[s] || []) await t.put(s, r);
       for (const m of dataset.media || []) if (m.data) await t.put('media', { id: m.id, type: m.type, size: m.size, name: m.name || '', createdAt: m.createdAt || Date.now(), blob: new Blob([base64ToBytes(m.data)], { type: m.type }) });
+      // Synced (global) settings come from the backup; device settings
+      // (sync connection, appearance on this device) stay as they are.
+      if (dataset.settings?.values) await t.put('settings', { key: 'global', values: dataset.settings.values, updatedAt: dataset.settings.updatedAt || {} });
     });
     await this.rebuildSchedules();
+    await this.loadSettings();
+    this.emit('settings', { scope: 'global', keys: Object.keys(dataset.settings?.values || {}) });
     this.emit('decks', {});
     this.emit('cards', {});
   }
