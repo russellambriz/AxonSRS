@@ -719,6 +719,16 @@ class StudyScreen {
     }
   }
 
+  /** After answering, show the hidden label on the image itself. */
+  revealOcclusion() {
+    const occ = this.current?.content?.occlusion;
+    const el = this.occlusionEl.querySelector('.mask[data-active]');
+    if (!occ || !el) return;
+    const mask = occ.masks.find((m) => m.id === occ.activeMaskId);
+    el.classList.add('revealed');
+    el.firstChild.textContent = mask?.label[0] || '';
+  }
+
   retrySave() {
     if (this.phase !== 'error' || !this.current?.plan) return;
     this.setPhase('submitting');
@@ -731,6 +741,7 @@ class StudyScreen {
     if (cur.content.kind === 'occlusion') this.revealedInSession.add(cur.content.occlusion.activeMaskId);
     this.recordSiblingExposure();
     this.renderFeedback({});
+    this.revealOcclusion();
     const needsRetype = !correct && store.global.requireRetype !== false;
     if (needsRetype) {
       this.setPhase('retype');

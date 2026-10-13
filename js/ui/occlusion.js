@@ -134,7 +134,7 @@ export function occlusionView({ imageUrl, alt, masks, activeMaskId, mode = 'hide
     const active = m.id === activeMaskId;
     const box = { left: `${m.x * 100}%`, top: `${m.y * 100}%`, width: `${m.w * 100}%`, height: `${m.h * 100}%` };
     if (active) {
-      stage.append(h('div', { class: showAnswer ? 'mask revealed' : 'mask', style: box, 'aria-hidden': 'true' }, h('span', {}, showAnswer ? m.label[0] || '' : '?')));
+      stage.append(h('div', { class: showAnswer ? 'mask revealed' : 'mask', style: box, 'aria-hidden': 'true', dataset: { active: '1' } }, h('span', {}, showAnswer ? m.label[0] || '' : '?')));
       continue;
     }
     // Other masks: visible underlying image in hide-one mode or once
