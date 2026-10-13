@@ -3,7 +3,7 @@
  * form controls and a virtualised list for large card collections.
  */
 
-import { h, clear } from './dom.js';
+import { h, clear, labelControls } from './dom.js';
 import { icon } from './icons.js';
 
 /* ------------------------------------------------------------- toasts */
@@ -220,7 +220,11 @@ export function select({ options, value, onchange, label = '', id = null }) {
 }
 
 export function settingRow({ title, desc = '', control }) {
-  return h('div', { class: 'setting-row' }, h('div', { class: 'text' }, h('div', { class: 'title' }, title), desc ? h('div', { class: 'desc' }, desc) : null), h('div', { class: 'control' }, control));
+  const titleEl = h('div', { class: 'title' }, title);
+  const descEl = desc ? h('div', { class: 'desc' }, desc) : null;
+  const controlEl = h('div', { class: 'control' }, control);
+  labelControls(controlEl, titleEl, descEl);
+  return h('div', { class: 'setting-row' }, h('div', { class: 'text' }, titleEl, descEl), controlEl);
 }
 
 export function emptyState({ iconName = 'sparkles', title, text, actions = [] }) {

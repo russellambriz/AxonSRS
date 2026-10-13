@@ -22,7 +22,51 @@ export function h(tag, props = null, ...children) {
     }
   }
   append(el, children);
+  if (tag === 'div' && el.classList.contains('field')) linkField(el);
   return el;
+}
+
+let idCounter = 0;
+/** Unique element id for ARIA relationships. */
+export function uid(prefix = 'ax') {
+  idCounter += 1;
+  return `${prefix}-${idCounter}`;
+}
+
+const CONTROL = 'input:not([type="hidden"]), textarea, select';
+
+/**
+ * Associate a form field's <label> (and hint) with its control so screen
+ * readers announce the name, and clicking the label focuses the control.
+ */
+function linkField(field) {
+  const label = [...field.children].find((c) => c.tagName === 'LABEL' && !c.htmlFor && !c.querySelector(CONTROL));
+  const control = field.querySelector(CONTROL);
+  if (!label || !control) return;
+  if (!control.id) control.id = uid('field');
+  label.htmlFor = control.id;
+  const hint = [...field.children].find((c) => c.classList?.contains('hint'));
+  if (hint && !control.hasAttribute('aria-describedby')) {
+    if (!hint.id) hint.id = uid('hint');
+    control.setAttribute('aria-describedby', hint.id);
+  }
+}
+
+/**
+ * Name the controls of a settings row after its title (and describe them
+ * with its description) when they have no label of their own.
+ */
+export function labelControls(container, titleEl, descEl) {
+  const named = (c) => c.hasAttribute('aria-label') || c.hasAttribute('aria-labelledby') || [...(c.labels || [])].some((l) => l.textContent.trim());
+  const controls = [...container.querySelectorAll(CONTROL)].filter((c) => !named(c));
+  const targets = controls.length === 1 ? controls : controls.filter((c) => c.getAttribute('role') === 'switch');
+  if (!targets.length) return;
+  if (!titleEl.id) titleEl.id = uid('setting');
+  if (descEl && !descEl.id) descEl.id = uid('setting-desc');
+  for (const c of targets) {
+    c.setAttribute('aria-labelledby', titleEl.id);
+    if (descEl && !c.hasAttribute('aria-describedby')) c.setAttribute('aria-describedby', descEl.id);
+  }
 }
 
 export function append(el, children) {
