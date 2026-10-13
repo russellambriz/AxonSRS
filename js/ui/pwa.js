@@ -17,7 +17,14 @@ let reloading = false;
 export function registerServiceWorker() {
   if (!('serviceWorker' in navigator)) return null;
   if (location.protocol !== 'https:' && location.hostname !== 'localhost' && location.hostname !== '127.0.0.1') return null;
+  // The first install takes control of an uncontrolled page (clients.claim):
+  // nothing changed for it, so only an update to a new version reloads.
+  let hadController = !!navigator.serviceWorker.controller;
   navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (!hadController) {
+      hadController = true;
+      return;
+    }
     if (reloading) return;
     reloading = true;
     location.reload();
