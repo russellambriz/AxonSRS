@@ -166,6 +166,9 @@
   box-sizing: border-box;
 }
 
+/* The hidden attribute always wins over component display rules. */
+[hidden] { display: none !important; }
+
 html {
   -webkit-text-size-adjust: 100%;
   text-size-adjust: 100%;
@@ -729,6 +732,7 @@ kbd {
   border: 1px solid transparent;
 }
 .callout svg { width: 18px; height: 18px; flex: none; margin-top: 2px; color: var(--accent-text); }
+.callout > .btn { align-self: center; flex: none; }
 .callout.warning { background: var(--warning-soft); }
 .callout.warning svg { color: var(--warning); }
 .callout.danger { background: var(--danger-soft); }
