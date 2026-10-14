@@ -226,4 +226,34 @@ export const tests = [
       await ctx.close();
     },
   },
+  {
+    name: 'leech cards offer one-click fixes in the card browser and statistics',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser);
+      const page = await openApp(ctx, url);
+      await seedDeck(page, { cards: CARDS });
+      await startReview(page);
+      assert.equal(await answer(page, 'wrong'), 'retype'); // real history for the statistics page
+      const cardId = await inApp(page, async ({ store, app }) => {
+        const unit = (await store.listUnits()).find((u) => u.state);
+        await store.tx(['units'], 'readwrite', (t) => t.put('units', { ...unit, leech: true, state: { due: Date.now(), stability: 0.4, difficulty: 9, elapsed_days: 1, scheduled_days: 1, learning_steps: 0, reps: 9, lapses: 5, state: 2, last_review: Date.now() - 86400000 } }));
+        await app.cache.load();
+        return unit.cardId;
+      });
+      await page.evaluate(() => { location.hash = '#/cards'; });
+      await page.getByRole('button', { name: /^Fix leech/ }).click();
+      await page.getByRole('menuitem', { name: 'Add a hint' }).click();
+      await page.waitForFunction((id) => location.hash === `#/card/${id}?focus=hint`, cardId);
+      await page.waitForFunction(() => document.activeElement?.placeholder?.startsWith('Optional hint'));
+      await page.evaluate(() => { location.hash = '#/stats'; });
+      await page.getByRole('heading', { name: 'Leeches (1)' }).waitFor();
+      await page.getByRole('button', { name: 'Fix…' }).click();
+      await page.getByRole('menuitem', { name: 'Suspend' }).click();
+      await page.getByText('Suspended', { exact: true }).waitFor();
+      const card = (await idbAll(page, 'cards')).find((c) => c.id === cardId);
+      assert.equal(card.suspended, true);
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
 ];
