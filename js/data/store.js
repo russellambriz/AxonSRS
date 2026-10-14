@@ -19,6 +19,7 @@ import { replayUnit, statesEqual } from '../core/history.js';
 import { createBaseline, addSample, removeSample } from '../core/fluency.js';
 import { studyDay, systemTimeZone } from '../core/time.js';
 import { schedulerParams } from '../core/scheduler.js';
+import { dailyActivity } from '../core/stats.js';
 
 const UNIT_REVIEW_FIELDS = ['state', 'headEventId', 'lastReviewAt', 'perf', 'practiceSinceLast', 'lastPracticeAt', 'lastScheduled', 'introducedDay', 'leech', 'leechSince', 'suspended', 'suspendedAt', 'siblingExposedAt'];
 const TRASH_DAYS = 30;
@@ -468,6 +469,41 @@ export class AxonStore {
 
   eventsSince(ts) {
     return this.tx(['events'], 'readonly', (t) => t.getAllFromIndex('events', 'ts', IDBKeyRange.lowerBound(ts)));
+  }
+
+  /**
+   * Per-study-day activity (reviews, practice, correct, study time) for the
+   * home heatmap and streak, without loading the whole history each time.
+   * Cached in meta and topped up with events newer than the cache; if the
+   * event count shows anything else changed (sync merge, restore), it is
+   * rebuilt from scratch.
+   */
+  async activitySummary() {
+    const total = await this.tx(['events'], 'readonly', (t) => t.count('events'));
+    const cache = await this.getMeta('activity');
+    const toMap = (obj) => new Map(Object.entries(obj));
+    if (cache?.v === 1 && cache.count === total) return toMap(cache.days);
+    let days = null;
+    let lastTs = 0;
+    if (cache?.v === 1 && cache.count < total) {
+      const fresh = await this.tx(['events'], 'readonly', (t) => t.getAllFromIndex('events', 'ts', IDBKeyRange.lowerBound(cache.lastTs, true)));
+      if (cache.count + fresh.length === total) {
+        days = dailyActivity(fresh, toMap(cache.days));
+        lastTs = Math.max(cache.lastTs, ...fresh.map((e) => e.ts));
+      }
+    }
+    if (!days) {
+      const all = await this.allEvents();
+      days = dailyActivity(all);
+      for (const e of all) if (e.ts > lastTs) lastTs = e.ts;
+    }
+    await this.setMeta('activity', { v: 1, count: total, lastTs, days: Object.fromEntries(days) });
+    return days;
+  }
+
+  /** The most recent `limit` reviews and practice answers (for time estimates). */
+  recentRetrievals(limit = 300) {
+    return this.tx(['events'], 'readonly', (t) => t.lastFromIndex('events', 'ts', limit, (e) => e.type === 'review' || e.type === 'practice')).then((list) => list.reverse());
   }
 
   eventsForDay(day) {

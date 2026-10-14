@@ -191,6 +191,21 @@ export function transaction(db, storeNames, mode, fn) {
       add: (n, value) => request(tx.objectStore(n).add(value)),
       delete: (n, key) => request(tx.objectStore(n).delete(key)),
       clear: (n) => request(tx.objectStore(n).clear()),
+      // Newest-first scan of an index, stopping after `limit` matches.
+      lastFromIndex: (n, index, limit, filter = null) => new Promise((resolve, reject) => {
+        const out = [];
+        const req = tx.objectStore(n).index(index).openCursor(null, 'prev');
+        req.onsuccess = () => {
+          const c = req.result;
+          if (!c || out.length >= limit) {
+            resolve(out);
+            return;
+          }
+          if (!filter || filter(c.value)) out.push(c.value);
+          c.continue();
+        };
+        req.onerror = () => reject(classifyError(req.error));
+      }),
       abort: (reason) => {
         failure = reason;
         try {

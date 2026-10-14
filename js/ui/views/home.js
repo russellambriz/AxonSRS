@@ -7,7 +7,7 @@ import { store } from '../../data/store.js';
 import { page, button, kpi } from './common.js';
 import { toast, promptDialog, callout, barChart, chartWithTable, dataTable, errorToast } from '../components.js';
 import { startDaily, todayContext, createSession } from '../../study/session.js';
-import { dailyActivity, currentStreak, heatmapLevels, forecast } from '../../core/stats.js';
+import { currentStreak, heatmapLevels, forecast } from '../../core/stats.js';
 import { durationModel, estimateSessionMinutes, catchUpPlan } from '../../core/planner.js';
 import { addDays } from '../../core/time.js';
 import { createSampleDeck } from './sample.js';
@@ -27,9 +27,10 @@ export async function view(outlet) {
       return;
     }
     header.hidden = false;
-    const [tctx, recent, sessions, conflicts, imports] = await Promise.all([
+    const [tctx, recent, activity, sessions, conflicts, imports] = await Promise.all([
       todayContext(),
-      store.eventsSince(Date.now() - 400 * 86400000),
+      store.recentRetrievals(300),
+      store.activitySummary(),
       store.activeSessions(),
       store.listConflicts(),
       store.listImports(),
@@ -45,7 +46,6 @@ export async function view(outlet) {
     const total = reviews + counts.learning + newToday;
     const model = durationModel(recent);
     const est = estimateSessionMinutes({ reviews, news: newToday, learning: counts.learning }, model);
-    const activity = dailyActivity(recent);
     const streak = currentStreak(activity, tctx.today);
     const reviewedToday = tctx.events.filter((e) => e.type === 'review').length;
     const fc = forecast([...app.cache.units.values()], app.cache.cards, { today: tctx.today, days: 8, timeZone: tctx.timeZone, rolloverHour: tctx.rolloverHour });

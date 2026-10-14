@@ -40,8 +40,7 @@ export function answerClass(e, corr) {
   return e.response?.correct ? 'independent-correct' : 'incorrect';
 }
 
-export function dailyActivity(events) {
-  const days = new Map();
+export function dailyActivity(events, days = new Map()) {
   for (const e of events) {
     if (!isRetrieval(e) && e.type !== 'copy') continue;
     const d = e.studyDay;
