@@ -93,3 +93,11 @@ test('no tokens or secrets are committed', () => {
     assert.equal(/gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{40,}/.test(src), false, `${f} contains something that looks like a GitHub token`);
   }
 });
+
+test('app styles never target KaTeX’s internal class names', () => {
+  const classes = (css) => new Set([...css.replace(/\/\*[\s\S]*?\*\//g, '').replace(/url\([^)]*\)/g, '').matchAll(/\.([a-zA-Z][\w-]*)/g)].map((m) => m[1]));
+  const app = classes(read('css/app.css'));
+  const katex = classes(read('vendor/katex/katex.min.css'));
+  const clash = [...app].filter((c) => katex.has(c) && c !== 'katex' && c !== 'katex-display');
+  assert.deepEqual(clash, [], 'a shared class name lets app rules leak into rendered maths and chemistry');
+});

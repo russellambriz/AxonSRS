@@ -543,7 +543,7 @@ kbd {
 .field + .field { margin-top: var(--s4); }
 .field label, .field .label { font-size: 0.85rem; font-weight: 600; color: var(--text); }
 .field .hint { font-size: 0.8rem; color: var(--text-3); }
-.field .error { font-size: 0.8rem; color: var(--danger); }
+.field > .error { font-size: 0.8rem; color: var(--danger); }
 
 .input,
 .textarea,
@@ -947,8 +947,8 @@ dialog.sheet[open] { display: flex; flex-direction: column; animation: sheet-in 
 .browser-toolbar .search { position: relative; flex: 1 1 260px; min-width: 200px; }
 .browser-toolbar .search input { padding-left: 34px; }
 .browser-toolbar .search svg { position: absolute; left: 11px; top: 50%; width: 16px; height: 16px; transform: translateY(-50%); color: var(--text-3); }
-.vlist { position: relative; overflow-y: auto; -webkit-overflow-scrolling: touch; height: min(68dvh, 760px); border-top: 1px solid var(--border); }
-.vlist-inner { position: relative; }
+.virtual-list { position: relative; overflow-y: auto; -webkit-overflow-scrolling: touch; height: min(68dvh, 760px); border-top: 1px solid var(--border); }
+.virtual-list-inner { position: relative; }
 .card-row {
   position: absolute;
   left: 0;
@@ -1237,9 +1237,9 @@ body.studying { overflow: hidden; }
 }
 .setting-row { display: flex; justify-content: space-between; align-items: center; gap: var(--s4); padding: 14px 0; border-bottom: 1px solid var(--border); flex-wrap: wrap; }
 .setting-row:last-child { border-bottom: 0; }
-.setting-row .text { flex: 1 1 260px; min-width: 0; }
-.setting-row .text .title { font-weight: 600; font-size: 0.95rem; }
-.setting-row .text .desc { font-size: 0.82rem; color: var(--text-2); margin-top: 2px; }
+.setting-row > .text { flex: 1 1 260px; min-width: 0; }
+.setting-row > .text > .title { font-weight: 600; font-size: 0.95rem; }
+.setting-row > .text > .desc { font-size: 0.82rem; color: var(--text-2); margin-top: 2px; }
 .setting-row .control { flex: 0 1 auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .setting-row .control .input, .setting-row .control .select { width: auto; min-width: 140px; }
 

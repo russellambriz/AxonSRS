@@ -242,13 +242,13 @@ export function callout(kind, text, iconName = kind === 'danger' || kind === 'wa
  * browsing 10 000+ cards stays smooth.
  */
 export class VirtualList {
-  constructor({ rowHeight = 60, renderRow, className = 'vlist', overscan = 8 }) {
+  constructor({ rowHeight = 60, renderRow, className = 'virtual-list', overscan = 8 }) {
     this.rowHeight = rowHeight;
     this.renderRow = renderRow;
     this.overscan = overscan;
     this.items = [];
     this.el = h('div', { class: className, tabindex: '-1' });
-    this.inner = h('div', { class: 'vlist-inner' });
+    this.inner = h('div', { class: 'virtual-list-inner' });
     this.el.append(this.inner);
     this.rendered = new Map();
     this.raf = 0;
