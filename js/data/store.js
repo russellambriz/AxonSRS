@@ -23,6 +23,11 @@ import { schedulerParams } from '../core/scheduler.js';
 const UNIT_REVIEW_FIELDS = ['state', 'headEventId', 'lastReviewAt', 'perf', 'practiceSinceLast', 'lastPracticeAt', 'lastScheduled', 'introducedDay', 'leech', 'leechSince', 'suspended', 'suspendedAt', 'siblingExposedAt'];
 const TRASH_DAYS = 30;
 
+/** A fresh, never-reviewed unit for one direction/cloze/mask of a card. */
+function newUnitRecord(card, key, now) {
+  return { id: unitId(card.id, key), cardId: card.id, deckId: card.deckId, key, state: null, headEventId: null, active: true, suspended: false, suspendedAt: 0, overlays: {}, overlaysAt: 0, perf: { recent: [] }, createdAt: now, updatedAt: now };
+}
+
 function pick(obj, keys) {
   const out = {};
   for (const k of keys) if (k in obj) out[k] = obj[k];
@@ -261,7 +266,7 @@ export class AxonStore {
       const id = unitId(card.id, key);
       const u = byId.get(id);
       if (!u) {
-        await t.put('units', { id, cardId: card.id, deckId: card.deckId, key, state: null, headEventId: null, active: true, suspended: false, suspendedAt: 0, overlays: {}, overlaysAt: 0, perf: { recent: [] }, createdAt: now, updatedAt: now });
+        await t.put('units', newUnitRecord(card, key, now));
       } else if (!u.active || u.deckId !== card.deckId) {
         await t.put('units', { ...u, active: true, deckId: card.deckId, updatedAt: now });
       }
@@ -655,15 +660,26 @@ export class AxonStore {
         await t.put('revisions', revision);
         decks.set(record.id, record);
       }
-      const getDeck = async (id) => decks.get(id) || (await t.get('decks', id));
+      const getDeck = async (id) => {
+        if (!decks.has(id)) decks.set(id, await t.get('decks', id));
+        return decks.get(id);
+      };
+      // New cards have new ids, so their units are created directly and
+      // everything is written in batches (large imports stay fast).
+      const cardRecords = [];
+      const revisions = [];
+      const units = [];
       for (const c of newCards) {
         const deck = await getDeck(c.deckId);
         if (!deck) throw new StorageError('Import target deck is missing', 'not-found');
         const { record, revision } = stamp('cards', c, { deviceId: this.deviceId, ts: now });
-        await t.put('cards', record);
-        await t.put('revisions', revision);
-        await this.syncUnitsInTx(t, record, deck, now);
+        cardRecords.push(record);
+        revisions.push(revision);
+        for (const key of unitKeys(record, deck)) units.push(newUnitRecord(record, key, now));
       }
+      await t.putMany('cards', cardRecords);
+      await t.putMany('revisions', revisions);
+      await t.putMany('units', units);
       for (const c of updates) {
         const before = await t.get('cards', c.id);
         if (!before) continue;
@@ -801,26 +817,36 @@ export class AxonStore {
     const replayedIds = new Set(unitsOut.map((u) => u.id));
     const localIds = {};
     for (const type of ['decks', 'cards', 'links', 'plans']) localIds[type] = new Set(local[type].map((r) => r.id));
+    // Only records that differ from this device's copy are written.
+    const localById = {};
+    for (const type of ['decks', 'cards', 'links', 'plans', 'units', 'tombstones']) localById[type] = new Map((local[type] || []).map((r) => [r.id, r]));
+    const changed = (type, r) => {
+      const mine = localById[type].get(r.id);
+      return !mine || JSON.stringify(mine) !== JSON.stringify(r);
+    };
     await this.tx(['decks', 'cards', 'units', 'events', 'revisions', 'tombstones', 'links', 'plans', 'media', 'settings', 'conflicts'], 'readwrite', async (t) => {
       for (const type of ['decks', 'cards', 'links', 'plans']) {
         const keep = new Set(dataset[type].map((r) => r.id));
-        for (const r of dataset[type]) await t.put(type, r);
+        await t.putMany(type, dataset[type].filter((r) => changed(type, r)));
         for (const id of localIds[type]) if (!keep.has(id)) await t.delete(type, id);
       }
       const existingEvents = new Set(await t.keys('events'));
-      for (const e of dataset.events) if (!existingEvents.has(e.id)) await t.put('events', e);
-      for (const r of dataset.revisions) await t.put('revisions', r);
-      for (const tb of dataset.tombstones) await t.put('tombstones', tb);
+      await t.putMany('events', dataset.events.filter((e) => !existingEvents.has(e.id)));
+      const existingRevisions = new Set(await t.keys('revisions'));
+      await t.putMany('revisions', dataset.revisions.filter((r) => !existingRevisions.has(r.id)));
+      await t.putMany('tombstones', dataset.tombstones.filter((tb) => changed('tombstones', tb)));
       const cardIds = new Set(dataset.cards.map((c) => c.id));
+      const unitPuts = [];
       for (const u of dataset.units) {
         if (!cardIds.has(u.cardId)) {
-          await t.delete('units', u.id);
+          if (localById.units.has(u.id)) await t.delete('units', u.id);
           continue;
         }
         if (replayedIds.has(u.id)) continue;
-        await t.put('units', u);
+        if (changed('units', u)) unitPuts.push(u);
       }
-      for (const u of unitsOut) if (cardIds.has(u.cardId)) await t.put('units', u);
+      await t.putMany('units', unitPuts);
+      await t.putMany('units', unitsOut.filter((u) => cardIds.has(u.cardId)));
       for (const m of incoming.media || []) {
         if (!m.data) continue;
         const existing = await t.get('media', m.id);
@@ -845,8 +871,8 @@ export class AxonStore {
     await this.snapshot(`before ${reason}`);
     const stores = ['decks', 'cards', 'units', 'events', 'revisions', 'tombstones', 'links', 'plans', 'conflicts', 'sessions'];
     await this.tx([...stores, 'media', 'settings'], 'readwrite', async (t) => {
-      for (const s of stores) for (const k of await t.keys(s)) await t.delete(s, k);
-      for (const s of ['decks', 'cards', 'units', 'events', 'revisions', 'tombstones', 'links', 'plans']) for (const r of dataset[s] || []) await t.put(s, r);
+      for (const s of stores) await t.clear(s);
+      for (const s of ['decks', 'cards', 'units', 'events', 'revisions', 'tombstones', 'links', 'plans']) await t.putMany(s, dataset[s] || []);
       for (const m of dataset.media || []) if (m.data) await t.put('media', { id: m.id, type: m.type, size: m.size, name: m.name || '', createdAt: m.createdAt || Date.now(), blob: new Blob([base64ToBytes(m.data)], { type: m.type }) });
       // Synced (global) settings come from the backup; device settings
       // (sync connection, appearance on this device) stay as they are.
@@ -892,9 +918,7 @@ export class AxonStore {
       const replay = replayUnit(byUnit.get(u.id) || []);
       out.push({ ...u, state: replay.state, headEventId: replay.headEventId });
     }
-    await this.tx(['units'], 'readwrite', async (t) => {
-      for (const u of out) await t.put('units', u);
-    });
+    await this.tx(['units'], 'readwrite', (t) => t.putMany('units', out));
     this.emit('review', {});
     return out.length;
   }
@@ -928,8 +952,8 @@ export class AxonStore {
     const names = Object.keys(STORES).filter((n) => n !== 'secrets' && n !== 'meta');
     await this.tx(names, 'readwrite', async (t) => {
       for (const n of names) {
-        for (const k of await t.keys(n)) await t.delete(n, k);
-        for (const r of snap.dump[n] || []) await t.put(n, r);
+        await t.clear(n);
+        await t.putMany(n, snap.dump[n] || []);
       }
     });
     await this.loadSettings();

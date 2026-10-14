@@ -179,8 +179,18 @@ export function transaction(db, storeNames, mode, fn) {
       count: (n, query) => request(tx.objectStore(n).count(query)),
       keys: (n, query) => request(tx.objectStore(n).getAllKeys(query)),
       put: (n, value) => request(tx.objectStore(n).put(value)),
+      // Bulk write: queue every request at once (IndexedDB applies them in
+      // order) instead of waiting for each one — orders of magnitude
+      // faster for imports, restores and schedule rebuilds.
+      putMany: (n, values) => {
+        const os = tx.objectStore(n);
+        let last = null;
+        for (const v of values) last = os.put(v);
+        return last ? request(last) : Promise.resolve();
+      },
       add: (n, value) => request(tx.objectStore(n).add(value)),
       delete: (n, key) => request(tx.objectStore(n).delete(key)),
+      clear: (n) => request(tx.objectStore(n).clear()),
       abort: (reason) => {
         failure = reason;
         try {
