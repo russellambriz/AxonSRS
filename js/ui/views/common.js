@@ -3,6 +3,7 @@
 import { h } from '../dom.js';
 import { icon } from '../icons.js';
 import { app } from '../../app.js';
+import { store } from '../../data/store.js';
 import { unitStatus } from '../../core/queue.js';
 import { formatInterval } from '../../core/util.js';
 import { cardSummary } from '../../core/model.js';
@@ -101,4 +102,14 @@ export function kpi(label, value, note = '') {
 export function liveView(render) {
   const off = app.onChange(render);
   return { destroy: () => off() };
+}
+
+/** One-click fixes offered wherever a leech is shown (stats, card browser). */
+export function leechActions(card, { toast } = {}) {
+  return [
+    { label: 'Edit the prompt', icon: 'edit', run: () => app.navigate(`/card/${card.id}`) },
+    { label: 'Add a hint', icon: 'hint', run: () => app.navigate(`/card/${card.id}?focus=hint`) },
+    { label: 'Suspend', icon: 'pause', run: async () => { await store.saveCard({ ...card, suspended: true }); toast?.('Suspended'); } },
+    { label: 'Create related practice card', icon: 'link', run: () => app.navigate(`/card/new?deck=${card.deckId}&relatedTo=${card.id}`) },
+  ];
 }

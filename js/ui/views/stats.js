@@ -4,7 +4,7 @@ import { h, replace, percent, downloadBlob, formatDate } from '../dom.js';
 import { icon } from '../icons.js';
 import { app } from '../../app.js';
 import { store } from '../../data/store.js';
-import { page, button, kpi, plainFront } from './common.js';
+import { page, button, kpi, plainFront, leechActions } from './common.js';
 import { lineChart, barChart, calibrationChart, chartWithTable, dataTable, menu, toast, callout, errorToast } from '../components.js';
 import { summary, accuracySeries, dailyActivity, currentStreak, longestStreak, heatmapLevels, retentionCalibration, forecast, strongestWeakest, deckTrends, exposureBreakdown, correctionIndex, answerClass, isLeech } from '../../core/stats.js';
 import { comparisonReport, deidentifiedRows, toCsv } from '../../core/research.js';
@@ -119,12 +119,7 @@ export async function view(outlet) {
     leeches.length ? h('div', { class: 'list' }, leeches.slice(0, 40).map((u) => {
       const card = app.cache.cards.get(u.cardId);
       if (!card) return null;
-      const actions = h('button', { class: 'btn small', onclick: (e) => menu(e.currentTarget, [
-        { label: 'Edit the prompt', icon: 'edit', run: () => app.navigate(`/card/${card.id}`) },
-        { label: 'Add a hint', icon: 'hint', run: () => app.navigate(`/card/${card.id}`) },
-        { label: 'Suspend', icon: 'pause', run: async () => { await store.saveCard({ ...card, suspended: true }); toast('Suspended'); } },
-        { label: 'Create related practice card', icon: 'link', run: () => app.navigate(`/card/new?deck=${card.deckId}&relatedTo=${card.id}`) },
-      ]) }, 'Fix…', icon('chevronDown'));
+      const actions = h('button', { class: 'btn small', onclick: (e) => menu(e.currentTarget, leechActions(card, { toast })) }, 'Fix…', icon('chevronDown'));
       return h('div', { class: 'list-row' }, h('span', { class: 'chip danger' }, `${u.state?.lapses ?? 0} lapses`), h('a', { class: 'grow truncate', href: `#/card/${card.id}` }, plainFront(card)), actions);
     })) : h('p', { class: 'faint', style: { padding: '0 16px 16px' } }, 'No leeches. 🎉')));
 

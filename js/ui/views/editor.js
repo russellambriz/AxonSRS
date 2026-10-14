@@ -40,21 +40,21 @@ export async function newCardView(outlet, params, query) {
   return editorView(outlet, card, { isNew: true, relatedTo: query.relatedTo || null });
 }
 
-export async function view(outlet, { id }) {
+export async function view(outlet, { id }, query = {}) {
   await app.cache.ensure();
   const card = app.cache.cards.get(id) || (await store.getCard(id));
   if (!card) {
     outlet.append(h('div', { class: 'view narrow' }, h('div', { class: 'empty' }, h('h2', {}, 'Card not found'), h('p', {}, 'It may have been deleted.'), button('Back to decks', { href: '#/decks', kind: 'primary' }))));
     return null;
   }
-  return editorView(outlet, structuredClone(card), { isNew: false });
+  return editorView(outlet, structuredClone(card), { isNew: false, focus: query.focus || null });
 }
 
 /**
  * Editor UI. Also used inline from the study screen (onDone callback).
  * Returns { destroy } for router views or { el } when embedded.
  */
-export async function editorView(outlet, card, { isNew, embedded = false, onDone = null, relatedTo = null }) {
+export async function editorView(outlet, card, { isNew, embedded = false, onDone = null, relatedTo = null, focus = null }) {
   const original = structuredClone(card);
   const draft = structuredClone(card);
   let dirty = false;
@@ -490,7 +490,13 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
   renderRelated();
   renderPreview();
   renderHistory();
-  if (!embedded) setTimeout(() => frontInput.focus(), 30);
+  if (!embedded) {
+    setTimeout(() => {
+      const target = focus === 'hint' ? hintInput : frontInput;
+      target.focus();
+      if (focus) target.scrollIntoView({ block: 'center' });
+    }, 30);
+  }
   if (!embedded) app.leaveGuard = async () => (!dirty || confirmDialog({ title: 'Leave without saving?', message: 'Your changes to this card will be lost.', confirmLabel: 'Leave', danger: true }));
   return {
     el: container,
