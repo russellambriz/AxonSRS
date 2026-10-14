@@ -186,5 +186,6 @@ test('ordered multi-answer groups (cloze) need every part, in order', () => {
 
 test('diff highlights missing and extra characters', () => {
   assert.deepEqual(answerDiff('SO3^2-', 'SO4^2-'), [{ type: 'same', text: 'SO' }, { type: 'extra', text: '3' }, { type: 'missing', text: '4' }, { type: 'same', text: '^2-' }]);
+  assert.deepEqual(answerDiff('Canberra', 'Jupiter'), [{ type: 'extra', text: 'Canberra' }], 'unrelated answers are not interleaved');
   assert.equal(normalizeText('  A  B. '), 'a b');
 });

@@ -1144,6 +1144,7 @@ body.studying { overflow: hidden; }
   body.keyboard-open .composer { padding-bottom: 8px; }
 }
 .composer-inner { max-width: 720px; margin: 0 auto; display: flex; flex-direction: column; gap: 8px; }
+.live-preview:empty { display: none; }
 .live-preview { min-height: 26px; font-size: 1.05rem; text-align: center; color: var(--text-2); overflow-x: auto; white-space: nowrap; }
 .live-preview .err { font-size: 0.78rem; color: var(--warning); }
 .symbols {

@@ -28,14 +28,18 @@ function merge(segments) {
 /**
  * @returns {{type:'same'|'missing'|'extra', text:string}[]}
  *   'missing' = in expected but not typed; 'extra' = typed but not expected.
+ *   When the answers share less than `minShared` of their characters (a
+ *   different answer, not a slip), the typed text is returned as one
+ *   'extra' segment: interleaving unrelated words only adds noise.
  */
-export function diffAnswer(typed, expected) {
+export function diffAnswer(typed, expected, { minShared = 0.5 } = {}) {
   const a = [...typed];
   const b = [...expected];
   if (a.length * b.length > 250000) {
     return [{ type: 'extra', text: typed }, { type: 'missing', text: expected }];
   }
   const t = lcsTable(a, b);
+  if (a.length && b.length && t[0][0] / Math.max(a.length, b.length) < minShared) return [{ type: 'extra', text: typed }];
   const segs = [];
   let i = 0;
   let j = 0;
