@@ -30,6 +30,7 @@ export function registerServiceWorker() {
     location.reload();
   });
   const promise = navigator.serviceWorker.register('./sw.js', { scope: './' }).then((reg) => {
+    if (!reg) return null;
     const offer = (worker) => {
       if (!worker || !navigator.serviceWorker.controller) return;
       const apply = () => worker.postMessage({ type: 'SKIP_WAITING' });
