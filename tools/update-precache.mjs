@@ -38,6 +38,14 @@ if (process.argv[1] && relative(process.argv[1], fileURLToPath(import.meta.url))
   const files = shippedFiles();
   const list = files.map((f) => `  '${f}',`).join('\n');
   const next = sw.replace(/const PRECACHE = \[[\s\S]*?\];/, `const PRECACHE = [\n${list}\n];`);
-  writeFileSync(swPath, next);
-  console.log(`sw.js precache list updated (${files.length} files)`);
+  if (process.argv.includes('--check')) {
+    if (next !== sw) {
+      console.error('sw.js precache list is out of date — run: node tools/update-precache.mjs');
+      process.exit(1);
+    }
+    console.log(`sw.js precache list is current (${files.length} files)`);
+  } else {
+    writeFileSync(swPath, next);
+    console.log(`sw.js precache list updated (${files.length} files)`);
+  }
 }

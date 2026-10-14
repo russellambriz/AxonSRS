@@ -2,7 +2,7 @@
   "name": "axon-srs",
   "version": "1.0.0",
   "private": true,
-  "description": "Axon — offline-first, typed-answer spaced repetition PWA with response-time-informed grading.",
+  "description": "Axon \u2014 offline-first, typed-answer spaced repetition PWA with response-time-informed grading.",
   "type": "module",
   "license": "MIT",
   "scripts": {
@@ -10,7 +10,8 @@
     "test:browser": "node tests/browser/run.mjs",
     "test:all": "npm test && npm run test:browser",
     "serve": "node tests/serve.mjs",
-    "check": "node tests/check-shell.mjs"
+    "check": "node tools/update-precache.mjs --check && npm test",
+    "release": "node tools/bump-version.mjs"
   },
   "engines": {
     "node": ">=20"
