@@ -5,6 +5,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ROOT, newContext, openApp, seedDeck, idbAll, startReview, answer, waitPhase, waitReady, assertNoErrors } from './harness.mjs';
 import { precacheFromSw } from '../../tools/update-precache.mjs';
+import { CACHE_NAME } from '../../js/config.js';
 
 const CARDS = [['Capital of France?', 'Paris'], ['Capital of Italy?', 'Rome'], ['Capital of Spain?', 'Madrid'], ['Integrate 2x', 'x^2 + C', { answerMode: 'math' }]];
 const MAP = { France: 'Paris', Italy: 'Rome', Spain: 'Madrid', Integrate: 'x^2 + C' };
@@ -77,7 +78,7 @@ export const tests = [
       await page.evaluate(() => { window.__sameDocument = true; });
       await page.evaluate(async () => (await navigator.serviceWorker.getRegistration()).update());
       await page.locator('.update-banner').waitFor({ timeout: 20000 });
-      assert.deepEqual((await cacheNames(page)).sort(), ['axon-v1', 'axon-v9999'].sort(), 'new version fully cached; old one still serving');
+      assert.deepEqual((await cacheNames(page)).sort(), [CACHE_NAME, 'axon-v9999'].sort(), 'new version fully cached; old one still serving');
       await page.locator('.update-banner').getByRole('button', { name: 'Update' }).click();
       await page.getByText('Will update after you finish: the current card.').waitFor();
       assert.equal(await page.inputValue('.answer-input'), 'Pa', 'typed text kept');
