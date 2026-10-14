@@ -652,21 +652,21 @@ events** produced by Axon's own scheduler and grader over 200 days, and
 on a 4-vCPU Intel Xeon 2.1 GHz Linux container with 15 GB RAM. This is
 **not** a phone; expect mobile devices to be slower.
 
-| Operation | Measured |
+| Operation | Measured (two full runs) |
 | --- | --- |
-| Cold boot to home with counts (first boot builds the activity summary) | 2.4 s |
-| Later boots (summary cached) | 0.5 s |
-| Open the card browser (virtualised; < 120 rows in the DOM) | 86 ms |
-| Search 10,000 cards (including 350 ms debounce) | 250 ms |
-| Scroll the whole list, per frame | ~25 ms |
-| Deck page | 57 ms |
-| Statistics page (all 37,000 events) | 2.0 s |
-| Start a daily session | 0.33 s |
-| Answer → feedback including the database write | 0.36 s |
-| Replay and verify all 10,000 schedules | 2.4 s |
-| Sync merge with nothing new | 7.0 s |
-| Export a full backup | 11.4 s (136 MB JSON; 7.9 MB compressed) |
-| Bulk-write the whole generated collection (one-off, like restoring a huge backup or a first sync to a new device) | 89 s |
+| Cold boot to home with counts (first boot builds the activity summary) | 2.4–2.9 s |
+| Later boots (summary cached) | 0.5–0.6 s |
+| Open the card browser (virtualised; < 120 rows in the DOM) | 81–86 ms |
+| Search 10,000 cards (from typing to the filtered list) | 250–310 ms |
+| Scroll the whole list, per frame | 25–27 ms |
+| Deck page | 57–63 ms |
+| Statistics page (all 37,000 events) | 1.9–2.0 s |
+| Start a daily session | 0.32–0.33 s |
+| Answer → feedback including the database write | 0.35–0.36 s |
+| Replay and verify all 10,000 schedules | 2.3–2.4 s |
+| Sync merge with nothing new | 7.0–7.2 s |
+| Export a full backup | 11–13 s (136 MB JSON; 7.9 MB compressed) |
+| Bulk-write the whole generated collection (one-off, like restoring a huge backup or a first sync to a new device) | 89–93 s |
 | IndexedDB usage | 73 MB |
 
 Each review event is about 3.4 KB (it carries its scheduler parameters,
@@ -721,7 +721,7 @@ recognition and system TTS voices are **untested**.
 
 | Component | Version | Notes |
 | --- | --- | --- |
-| App | 1.0.1 | cache `axon-v2` |
+| App | 1.0.2 | cache `axon-v3` |
 | Scheduler | ts-fsrs 5.4.2 (FSRS-6, default parameters) + `axon-fuzz@1` | reference-checked against py-fsrs 6.3.2 |
 | Grading rules | `axon-fluency@1.0.0` | thresholds above; recorded on every review |
 | Reading/warm-up heuristic | `axon-reading@1` | can be disabled |
@@ -743,6 +743,8 @@ explicit, reversible migration is offered.
   can't be synced.
 - A first sync or restore of a very large history takes a while (about
   90 s for 37,000 events in the test environment).
+- The statistics page and a sync read the whole review history; with tens of
+  thousands of reviews they take a few seconds (see [Performance](#performance)).
 - Speech recognition usually needs a connection; some TTS voices do too.
 - Anki export is plain text (no `.apkg`, no FSRS state, media or history).
 - Only tested in Chromium; phone and tablet results are emulation (see
@@ -766,10 +768,10 @@ service-worker registration and its cache list.
 files):
 
 ```bash
-npm run release -- 1.0.2   # bumps CACHE_NAME (axon-vN → N+1) in sw.js and js/config.js,
+npm run release -- 1.0.3   # bumps CACHE_NAME (axon-vN → N+1) in sw.js and js/config.js,
                            # sets APP_VERSION, refreshes the pre-cache list
 npm run check              # pre-cache list current + unit tests
-git commit -am "Release 1.0.2" && git push origin main
+git commit -am "Release 1.0.3" && git push origin main
 ```
 
 Without a new cache name, installed copies keep serving the old version.

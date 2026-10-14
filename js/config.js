@@ -7,10 +7,10 @@
  */
 
 export const APP_NAME = 'Axon';
-export const APP_VERSION = '1.0.1';
+export const APP_VERSION = '1.0.2';
 
 /** Service-worker cache name. Must match CACHE_NAME in sw.js (tested). */
-export const CACHE_NAME = 'axon-v2';
+export const CACHE_NAME = 'axon-v3';
 
 /** IndexedDB structural schema version. */
 export const DB_NAME = 'axon';
