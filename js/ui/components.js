@@ -366,9 +366,17 @@ function compact(n) {
   return String(n);
 }
 
+/**
+ * Drawing width in SVG units, close to the space the chart will get, so
+ * axis labels stay legible on phones instead of being scaled down.
+ */
+function chartWidth() {
+  return Math.round(Math.min(560, Math.max(300, (globalThis.innerWidth || 560) - 72)));
+}
+
 /** Single-series column chart. data: [{ label, value, tick?, muted? }] */
 export function barChart(data, { height = 150, label = 'Chart', format = (v) => String(v) } = {}) {
-  const width = 560;
+  const width = chartWidth();
   const pad = { l: 30, r: 6, t: 10, b: 20 };
   const max = niceMax(Math.max(1, ...data.map((d) => d.value)));
   const band = (width - pad.l - pad.r) / Math.max(1, data.length);
@@ -402,7 +410,7 @@ export function barChart(data, { height = 150, label = 'Chart', format = (v) => 
 
 /** Single-series line with optional 95% interval band. points: [{ x, y, lo?, hi?, n? }] */
 export function lineChart(points, { height = 160, label = 'Chart', yMax = 1, format = (v) => `${Math.round(v * 100)}%` } = {}) {
-  const width = 560;
+  const width = chartWidth();
   const pad = { l: 38, r: 10, t: 10, b: 20 };
   const n = Math.max(1, points.length - 1);
   const x = (i) => pad.l + (points.length === 1 ? 0.5 : i / n) * (width - pad.l - pad.r);
