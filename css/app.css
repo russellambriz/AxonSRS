@@ -525,6 +525,13 @@ img { max-width: 100%; }
 .btn.icon { padding: 0; width: 38px; }
 .btn.icon.small { width: 30px; }
 .btn.block { width: 100%; }
+/* Touch screens: comfortable targets (44px; 40px for compact buttons). */
+@media (pointer: coarse) {
+  .btn { min-height: 44px; }
+  .btn.icon { width: 44px; }
+  .btn.small { min-height: 40px; padding: 0 12px; }
+  .btn.icon.small { width: 40px; }
+}
 .btn kbd { margin-left: 4px; }
 
 kbd {
