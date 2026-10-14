@@ -17,7 +17,7 @@
  * All paths are relative so the app works under /AxonSRS/ on GitHub Pages.
  */
 
-const CACHE_NAME = 'axon-v1';
+const CACHE_NAME = 'axon-v2';
 
 const PRECACHE = [
   './',
