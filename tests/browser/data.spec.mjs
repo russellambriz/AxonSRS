@@ -55,6 +55,7 @@ export const tests = [
       await addMedia(page);
       await studyTwo(page);
       await inApp(page, ({ store }) => store.setGlobal({ desiredRetention: 0.88 }));
+      await inApp(page, ({ store }) => store.tx(['calibration'], 'readwrite', (t) => t.put('calibration', { key: 'physical|recall', samples: [{ eventId: 'cal-1', ts: 1, lnLatency: 7, lnMsPerEffort: 5, latencyMs: 1000 }], updatedAt: 1 })));
       const original = await dataView(page);
       assert.ok(original.events.length >= 2 && original.media.length === 1);
       await page.goto(`${url}#/settings/data`);
@@ -94,6 +95,8 @@ export const tests = [
         const restored = await dataView(p2);
         assert.deepEqual(restored, original, `${kind} backup restores the same data`);
         assert.equal(await inApp(p2, ({ store }) => store.global.desiredRetention), 0.88);
+        const cal = (await idbAll(p2, 'calibration')).find((b) => b.key === 'physical|recall');
+        assert.ok(cal?.samples.some((x) => x.eventId === 'cal-1'), `${kind} backup restores personal timing baselines`);
         // The restored schedules replay exactly from the restored history.
         const verify = await inApp(p2, async ({ store }) => (await store.verifySchedules()).mismatches.length);
         assert.equal(verify, 0);

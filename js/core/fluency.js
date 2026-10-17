@@ -189,6 +189,14 @@ export function addSample(baseline, sample, window = DEFAULT_GRADING_CONFIG.base
   return { ...baseline, samples, updatedAt: sample.ts || Date.now() };
 }
 
+/** Union of two baselines' samples (by event id), newest `window` kept. */
+export function mergeBaselines(a, b, window = DEFAULT_GRADING_CONFIG.baselineWindow) {
+  const byId = new Map();
+  for (const s of [...(a?.samples || []), ...(b?.samples || [])]) if (s && s.eventId) byId.set(s.eventId, s);
+  const samples = [...byId.values()].sort((x, y) => (x.ts || 0) - (y.ts || 0)).slice(-window);
+  return { key: a?.key || b?.key, samples, updatedAt: Math.max(a?.updatedAt || 0, b?.updatedAt || 0) };
+}
+
 export function removeSample(baseline, eventId) {
   return { ...baseline, samples: baseline.samples.filter((s) => s.eventId !== eventId) };
 }

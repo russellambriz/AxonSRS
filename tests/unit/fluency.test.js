@@ -252,3 +252,12 @@ test('a prompt too long for the reading estimate makes timing unreliable instead
   const tooLong = readingFloor({ words: 70, mathTokens: 0, images: 0 });
   assert.equal(tooLong.reliable, false);
 });
+
+test('baselines from a backup merge with this device’s by event id, newest kept', async () => {
+  const { mergeBaselines } = await import('../../js/core/fluency.js');
+  const a = { key: 'k', samples: [{ eventId: 'e1', ts: 1 }, { eventId: 'e2', ts: 2 }], updatedAt: 2 };
+  const b = { key: 'k', samples: [{ eventId: 'e2', ts: 2 }, { eventId: 'e3', ts: 3 }], updatedAt: 3 };
+  const m = mergeBaselines(a, b, 2);
+  assert.deepEqual(m.samples.map((s) => s.eventId), ['e2', 'e3']);
+  assert.equal(mergeBaselines(null, b).samples.length, 2);
+});

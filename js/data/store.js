@@ -16,7 +16,7 @@ import { createDeck, createCard, unitKeys, unitId, DEFAULT_DECK_SETTINGS } from 
 import { stamp, revisionFor } from '../core/sync/versioning.js';
 import { mergeDatasets, emptyDataset } from '../core/sync/merge.js';
 import { replayUnit, statesEqual } from '../core/history.js';
-import { createBaseline, addSample, removeSample } from '../core/fluency.js';
+import { createBaseline, addSample, removeSample, mergeBaselines } from '../core/fluency.js';
 import { studyDay, systemTimeZone } from '../core/time.js';
 import { schedulerParams } from '../core/scheduler.js';
 import { dailyActivity } from '../core/stats.js';
@@ -860,7 +860,13 @@ export class AxonStore {
       const mine = localById[type].get(r.id);
       return !mine || JSON.stringify(mine) !== JSON.stringify(r);
     };
-    await this.tx(['decks', 'cards', 'units', 'events', 'revisions', 'tombstones', 'links', 'plans', 'media', 'settings', 'conflicts'], 'readwrite', async (t) => {
+    await this.tx(['decks', 'cards', 'units', 'events', 'revisions', 'tombstones', 'links', 'plans', 'media', 'settings', 'conflicts', 'calibration'], 'readwrite', async (t) => {
+      // Timing baselines from a backup are combined with this device's.
+      for (const incomingBase of incoming.calibration || []) {
+        if (!incomingBase?.key) continue;
+        const mine = await t.get('calibration', incomingBase.key);
+        await t.put('calibration', mergeBaselines(mine, incomingBase));
+      }
       for (const type of ['decks', 'cards', 'links', 'plans']) {
         const keep = new Set(dataset[type].map((r) => r.id));
         await t.putMany(type, dataset[type].filter((r) => changed(type, r)));
@@ -906,8 +912,14 @@ export class AxonStore {
   async replaceAll(dataset, { reason = 'replace' } = {}) {
     await this.snapshot(`before ${reason}`);
     const stores = ['decks', 'cards', 'units', 'events', 'revisions', 'tombstones', 'links', 'plans', 'conflicts', 'sessions'];
-    await this.tx([...stores, 'media', 'settings'], 'readwrite', async (t) => {
+    await this.tx([...stores, 'media', 'settings', 'calibration'], 'readwrite', async (t) => {
       for (const s of stores) await t.clear(s);
+      // Personal timing baselines travel in backups; keep this device's own
+      // when the backup has none.
+      if (dataset.calibration?.length) {
+        await t.clear('calibration');
+        await t.putMany('calibration', dataset.calibration);
+      }
       for (const s of ['decks', 'cards', 'units', 'events', 'revisions', 'tombstones', 'links', 'plans']) await t.putMany(s, dataset[s] || []);
       for (const m of dataset.media || []) if (m.data) await t.put('media', { id: m.id, type: m.type, size: m.size, name: m.name || '', createdAt: m.createdAt || Date.now(), blob: new Blob([base64ToBytes(m.data)], { type: m.type }) });
       // Synced (global) settings come from the backup; device settings
