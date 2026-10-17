@@ -23,6 +23,7 @@ export const FORMATS = Object.freeze({
   csv: 'CSV (comma)',
   csvSemicolon: 'CSV (semicolon)',
   anki: 'Anki plain-text export',
+  cloze: 'Cloze lines (one card per line)',
   notes: 'Structured notes (headings & bullets)',
   json: 'JSON',
 });
@@ -86,7 +87,10 @@ export function detectFormat(text) {
   if (fLines && bLines) candidates.push({ format: 'frontback', score: Math.min(0.97, 0.5 + 0.47 * ((fLines + bLines) / n)) });
   const tabLines = lines.filter((l) => l.includes('\t')).length;
   if (tabLines) candidates.push({ format: 'tsv', score: 0.5 + 0.45 * (tabLines / n) });
-  const dLines = lines.filter((l) => /\s::\s|[^:\\]::[^:]/.test(l)).length;
+  const outsideCloze = (l) => l.replace(/\{\{[\s\S]*?\}\}/g, '');
+  const dLines = lines.filter((l) => /\s::\s|[^:\\]::[^:]/.test(outsideCloze(l))).length;
+  const clozeLines = lines.filter((l) => /\{\{(?:c\d+::)?[^{}]+\}\}/.test(l)).length;
+  if (clozeLines) candidates.push({ format: 'cloze', score: 0.55 + 0.42 * (clozeLines / n) });
   if (dLines) candidates.push({ format: 'delimiter', score: 0.5 + 0.44 * (dLines / n), delimiter: '::' });
   for (const [fmt, delim] of [['csv', ','], ['csvSemicolon', ';']]) {
     const counts = lines.slice(0, 200).map((l) => countOutsideQuotes(l, delim));
@@ -128,6 +132,7 @@ export function parseImport(text, format, options = {}) {
     case 'csvSemicolon': return parseTable(src, ';', format, options);
     case 'anki': return parseAnki(src, options);
     case 'delimiter': return parseDelimiterLines(src, options.delimiter || '::', options);
+    case 'cloze': return parseClozeLines(src);
     case 'qa': return parseLabeled(src, /^\s*(q|question)\s*[:.]\s?/i, options);
     case 'frontback': return parseLabeled(src, /^\s*front\s*:\s?/i, options);
     case 'json': return parseJson(src, options);
@@ -164,11 +169,18 @@ function parseTable(src, delimiter, format, options) {
   const { rows, errors } = parseDelimited(src, delimiter);
   let mapping = options.mapping || null;
   let headerRow = null;
-  const dataRows = rows.filter((r) => !(r.fields.length === 1 && r.fields[0].trim().startsWith('#')));
+  const unused = [];
+  const dataRows = rows.filter((r) => {
+    const comment = r.fields.length === 1 && r.fields[0].trim().startsWith('#');
+    if (comment) unused.push({ line: r.line, text: r.raw, reason: 'Comment or heading line' });
+    return !comment;
+  });
   if (!mapping && dataRows.length) {
     const hm = headerMapping(dataRows[0].fields);
     if (hm && options.hasHeader !== false) {
       mapping = hm;
+      headerRow = dataRows.shift();
+    } else if (options.hasHeader === true) {
       headerRow = dataRows.shift();
     }
   } else if (options.hasHeader && dataRows.length) {
@@ -176,7 +188,6 @@ function parseTable(src, delimiter, format, options) {
   }
   const columnCount = Math.max(0, ...dataRows.map((r) => r.fields.length));
   if (!mapping) mapping = defaultMapping(columnCount);
-  const unused = [];
   const out = [];
   for (const r of dataRows) {
     if (r.fields.every((f) => !f.trim())) continue;
@@ -184,7 +195,8 @@ function parseTable(src, delimiter, format, options) {
       unused.push({ line: r.line, text: r.raw, reason: `Only one column — expected a ${delimiter === '\t' ? 'tab' : `"${delimiter}"`} separator` });
       continue;
     }
-    out.push({ line: r.line, raw: r.raw, fields: r.fields });
+    // Anki exports without header lines arrive here as TSV: convert their HTML too.
+    out.push({ line: r.line, raw: r.raw, fields: r.fields, html: r.fields.some(looksLikeHtml) || undefined });
   }
   return {
     format,
@@ -216,11 +228,19 @@ function parseAnki(src, options) {
   const columnCount = Math.max(0, ...parsed.rows.map((r) => r.fields.length));
   const mapping = options.mapping || defaultMapping(columnCount);
   if (!options.mapping) {
-    for (let i = 0; i < columnCount; i++) mapping[i] = i === 0 ? 'front' : i === 1 ? 'back' : 'ignore';
-    if (directives['tags column']) mapping[Number(directives['tags column']) - 1] = 'tags';
-    if (directives['deck column']) mapping[Number(directives['deck column']) - 1] = 'deck';
-    if (directives['notetype column']) mapping[Number(directives['notetype column']) - 1] = 'ignore';
-    if (directives['guid column']) mapping[Number(directives['guid column']) - 1] = 'ignore';
+    // Columns named by directives first; front and back are then the first
+    // two remaining columns (a GUID or note type column often comes first).
+    const special = {};
+    if (directives['guid column']) special[Number(directives['guid column']) - 1] = 'ignore';
+    if (directives['notetype column']) special[Number(directives['notetype column']) - 1] = 'ignore';
+    if (directives['deck column']) special[Number(directives['deck column']) - 1] = 'deck';
+    if (directives['tags column']) special[Number(directives['tags column']) - 1] = 'tags';
+    const free = [];
+    for (let i = 0; i < columnCount; i++) {
+      if (i in special) mapping[i] = special[i];
+      else free.push(i);
+    }
+    free.forEach((col, k) => { mapping[col] = k === 0 ? 'front' : k === 1 ? 'back' : 'ignore'; });
     if (directives.columns) {
       directives.columns.split(delimiter === '\t' ? '\t' : delimiter).forEach((name, i) => {
         const hm = headerMapping([name, 'x']);
@@ -248,6 +268,22 @@ function parseAnki(src, options) {
     unused,
     directives,
   };
+}
+
+/** One cloze card per line; an optional tab-separated extra and tags follow. */
+function parseClozeLines(src) {
+  const rows = [];
+  const unused = [];
+  src.split(/\r?\n/).forEach((text, i) => {
+    if (!text.trim()) return;
+    if (!/\{\{/.test(text)) {
+      unused.push({ line: i + 1, text, reason: 'No {{cloze}} on this line' });
+      return;
+    }
+    const [front, back = '', tags = ''] = text.split('\t');
+    rows.push({ line: i + 1, raw: text, fields: [front, back, tags] });
+  });
+  return { format: 'cloze', columns: ['Text', 'Extra', 'Tags'], hasHeader: false, mapping: { 0: 'front', 1: 'back', 2: 'tags' }, rows, errors: [], unused, directives: {} };
 }
 
 function parseDelimiterLines(src, delimiter, options) {
@@ -324,22 +360,31 @@ function parseJson(src, options) {
   }
   const list = Array.isArray(data) ? data : Array.isArray(data?.cards) ? data.cards : null;
   if (!list) return { format: 'json', rows: [], errors: [{ line: 1, message: 'JSON must be an array of cards or an Axon backup' }], unused: [], mapping: null, columns: null, directives: {} };
-  const rows = [];
+  // Every key becomes a column, mapped automatically when its name is known
+  // and shown (as "ignore") otherwise, so no field disappears unseen.
+  const keys = [];
   const unused = [];
+  const objects = [];
   list.forEach((item, i) => {
-    if (!item || typeof item !== 'object') {
+    if (!item || typeof item !== 'object' || Array.isArray(item)) {
       unused.push({ line: i + 1, text: JSON.stringify(item), reason: 'Not an object' });
       return;
     }
-    const named = {};
-    for (const [k, v] of Object.entries(item)) {
-      const hm = headerMapping([k, 'x']);
-      const name = hm && hm[0] !== 'ignore' ? hm[0] : LABELS[k.toLowerCase()];
-      if (name) named[name] = Array.isArray(v) ? (name === 'tags' ? v.join(' ') : v.map(String).map((s) => s.replace(/\|/g, '\\|')).join(' | ')) : String(v ?? '');
-    }
-    rows.push({ line: i + 1, raw: JSON.stringify(item), named });
+    for (const k of Object.keys(item)) if (!keys.includes(k)) keys.push(k);
+    objects.push({ line: i + 1, item });
   });
-  return { format: 'json', columns: null, hasHeader: false, mapping: null, rows, errors: [], unused, directives: {} };
+  const autoMapping = {};
+  const used = new Set();
+  keys.forEach((k, i) => {
+    const hm = headerMapping([k, 'x']);
+    const name = hm && hm[0] !== 'ignore' ? hm[0] : LABELS[k.toLowerCase()];
+    autoMapping[i] = name && !used.has(name) ? name : 'ignore';
+    if (name) used.add(name);
+  });
+  const mapping = options.mapping || autoMapping;
+  const asText = (v, name) => (Array.isArray(v) ? (name === 'tags' ? v.join(' ') : v.map(String).map((s) => s.replace(/\|/g, '\\|')).join(' | ')) : v != null && typeof v === 'object' ? JSON.stringify(v) : String(v ?? ''));
+  const rows = objects.map(({ line, item }) => ({ line, raw: JSON.stringify(item), fields: keys.map((k, i) => asText(item[k], mapping[i])) }));
+  return { format: 'json', columns: keys, hasHeader: true, mapping, rows, errors: [], unused, directives: {} };
 }
 
 /* ------------------------------------------------------------------ */
@@ -385,6 +430,7 @@ export function buildDrafts(parsed, options = {}) {
       hint: (f.hint || '').trim(),
       explanation: (f.explanation || '').trim(),
       taskType: (f.taskType || '').trim().toLowerCase() || options.defaultTaskType || 'recall',
+      taskTypeFromFile: !!(f.taskType || '').trim(),
       answerMode: (f.answerMode || '').trim().toLowerCase() || options.defaultAnswerMode || '',
       warnings,
       include: true,
@@ -449,24 +495,31 @@ export function markDuplicates(drafts, existing = []) {
     if (!existingByFront.has(fk)) existingByFront.set(fk, c);
   }
   const seen = new Map();
+  // `userAction` is an explicit choice from the preview; it survives edits
+  // and re-checks. Without one, duplicates default to skip and the rest to
+  // import. An invalid draft is skipped until it is fixed.
   return drafts.map((d) => {
-    const out = { ...d, duplicate: null, action: d.status === 'invalid' ? 'skip' : (d.action || 'import') };
-    if (d.status === 'invalid') return out;
+    const chosen = d.userAction || null;
+    const out = { ...d, duplicate: null, action: 'import' };
+    if (d.status === 'invalid') return { ...out, action: 'skip' };
     const key = draftKey(d);
     if (seen.has(key)) {
       out.duplicate = { type: 'within', ofDraft: seen.get(key), identical: true };
-      out.action = 'skip';
+      out.action = chosen === 'import' ? 'import' : 'skip';
       return out;
     }
     seen.set(key, d.id);
     const ex = existingByKey.get(key);
     if (ex) {
       out.duplicate = { type: 'existing', cardId: ex.id, deckId: ex.deckId, identical: true };
-      out.action = 'skip';
+      out.action = chosen || 'skip';
       return out;
     }
     const similar = existingByFront.get(dedupeKey(d.front));
-    if (similar) out.duplicate = { type: 'similar', cardId: similar.id, deckId: similar.deckId, identical: false };
+    if (similar) {
+      out.duplicate = { type: 'similar', cardId: similar.id, deckId: similar.deckId, identical: false };
+      out.action = chosen || 'import';
+    } else if (chosen === 'skip') out.action = 'skip';
     return out;
   });
 }

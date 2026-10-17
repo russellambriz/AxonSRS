@@ -131,7 +131,7 @@ export async function view(outlet, params, query) {
       parts.push(settingRow({ title: 'First row is a header', control: switchControl({ checked: !!st.parsed?.hasHeader, onchange: (v) => { st.options.hasHeader = v; st.options.mapping = null; reparse(); render(); } }) }));
     }
     if (st.format === 'notes') {
-      parts.push(settingRow({ title: 'Use top-level headings as deck names', desc: 'Otherwise headings become tags.', control: switchControl({ checked: st.options.headingsAsDecks, onchange: (v) => { st.options.headingsAsDecks = v; reparse(); } }) }));
+      parts.push(settingRow({ title: 'Use top-level headings as deck names', desc: 'Otherwise headings become tags.', control: switchControl({ checked: st.options.headingsAsDecks, onchange: (v) => { st.options.headingsAsDecks = v; reparse(); render(); } }) }));
     }
     if (st.parsed?.mapping && st.parsed.columns) {
       const sample = st.parsed.rows[0]?.fields || [];
@@ -149,7 +149,7 @@ export async function view(outlet, params, query) {
     return [
       h('section', { class: 'panel' }, parts),
       callout('info', `${s.total} card draft${s.total === 1 ? '' : 's'} found · ${s.invalid} with problems · ${s.duplicates} duplicate${s.duplicates === 1 ? '' : 's'} · ${s.unused} line${s.unused === 1 ? '' : 's'} not recognised`),
-      h('div', { class: 'row between' }, button('Back', { iconName: 'chevronLeft', onclick: () => go(1) }), button('Preview', { kind: 'primary', iconName: 'chevronRight', onclick: () => { rebuild(); go(3); } })),
+      h('div', { class: 'row between' }, button('Back', { iconName: 'chevronLeft', onclick: () => go(1) }), button('Preview', { kind: 'primary', iconName: 'chevronRight', onclick: () => go(3) })),
     ];
   }
 
@@ -158,7 +158,7 @@ export async function view(outlet, params, query) {
     const s = importSummary(st.drafts, st.parsed.unused, st.parsed.errors);
     const rows = st.drafts.slice(0, st.shown).map((d, i) => draftRow(d, i));
     const table = h('div', { class: 'table-wrap' }, h('table', { class: 'import-table' },
-      h('thead', {}, h('tr', {}, h('th', {}, h('span', { class: 'visually-hidden' }, 'Include')), h('th', {}, 'Line'), h('th', {}, 'Front'), h('th', {}, 'Back'), h('th', {}, 'Tags'), h('th', {}, 'Status'))),
+      h('thead', {}, h('tr', {}, h('th', {}, h('span', { class: 'visually-hidden' }, 'Include')), h('th', {}, 'Line'), h('th', {}, 'Front'), h('th', {}, 'Back'), h('th', {}, 'Tags'), h('th', {}, 'Deck'), h('th', {}, 'Status'))),
       h('tbody', {}, rows)));
     const unused = st.parsed.unused || [];
     const errors = st.parsed.errors || [];
@@ -195,8 +195,10 @@ export async function view(outlet, params, query) {
   function draftRow(d, i) {
     const update = (patch) => {
       const next = validateDraft({ ...st.drafts[i], ...patch });
+      // A fixed row is included again; the user's duplicate choice is kept.
+      if (st.drafts[i].status === 'invalid' && next.status === 'valid') next.include = true;
       st.drafts[i] = next;
-      st.drafts = markDuplicates(st.drafts.map((x) => ({ ...x, action: x.action })), [...app.cache.cards.values()]);
+      st.drafts = markDuplicates(st.drafts, [...app.cache.cards.values()]);
       render();
     };
     const include = h('input', { type: 'checkbox', 'aria-label': `Include line ${d.line}` });
@@ -209,9 +211,10 @@ export async function view(outlet, params, query) {
     if (d.duplicate) {
       const label = d.duplicate.type === 'within' ? 'Duplicate within this import' : d.duplicate.type === 'existing' ? 'Already in your collection' : 'Same front as an existing card';
       status.push(h('div', { class: 'small', style: { color: 'var(--warning)' } }, label));
-      if (d.duplicate.type !== 'within') {
-        status.push(select({ label: 'Duplicate handling', options: [{ value: 'skip', label: 'Skip (keep existing + history)' }, { value: 'update', label: 'Update existing (keeps history)' }, { value: 'import', label: 'Import as new' }], value: d.action, onchange: (v) => { st.drafts[i] = { ...st.drafts[i], action: v, include: true }; render(); } }));
-      }
+      const options = d.duplicate.type === 'within'
+        ? [{ value: 'skip', label: 'Skip (keep the first one)' }, { value: 'import', label: 'Import this one too' }]
+        : [{ value: 'skip', label: 'Skip (keep existing + history)' }, { value: 'update', label: 'Update existing (keeps history)' }, { value: 'import', label: 'Import as new' }];
+      status.push(select({ label: 'Duplicate handling', options, value: d.action, onchange: (v) => { st.drafts[i] = { ...st.drafts[i], userAction: v, action: v, include: true }; render(); } }));
     }
     if (d.cloze) status.push(h('div', { class: 'faint tiny' }, d.cloze.map((c) => `${c.key}: “${c.prompt}” → ${c.expected}`).join(' · ')));
     if (!status.length) status.push(h('span', { class: 'chip success' }, 'OK'));
@@ -221,7 +224,23 @@ export async function view(outlet, params, query) {
       editable(d.front, (v) => update({ front: v }), `Front, line ${d.line}`),
       editable(d.back, (v) => update({ back: v }), `Back, line ${d.line}`),
       editable(d.tags.join(' '), (v) => update({ tags: normalizeTags(v) }), `Tags, line ${d.line}`),
-      h('td', { style: { minWidth: '200px' } }, status));
+      editable(d.deck, (v) => update({ deck: v.trim() }), `Deck, line ${d.line} (empty: the target deck)`),
+      h('td', { style: { minWidth: '220px' } }, status, moreFields(d, update)));
+  }
+
+  /** Hint, explanation and task type of one draft, editable on demand. */
+  function moreFields(d, update) {
+    const area = (value, label, key) => {
+      const t = h('textarea', { class: 'textarea small', rows: '2', 'aria-label': `${label}, line ${d.line}` });
+      t.value = value;
+      t.addEventListener('change', () => update({ [key]: t.value }));
+      return h('div', { class: 'field' }, h('label', {}, label), t);
+    };
+    const summary = [d.hint && 'hint', d.explanation && 'explanation'].filter(Boolean).join(', ');
+    return h('details', { class: 'disclosure small' }, h('summary', {}, summary ? `More fields (${summary})` : 'More fields'),
+      area(d.hint, 'Hint', 'hint'),
+      area(d.explanation, 'Explanation', 'explanation'),
+      select({ label: `Task type, line ${d.line}`, options: Object.entries(TASK_TYPE_LABELS).map(([value, label]) => ({ value, label })), value: d.taskType, onchange: (v) => update({ taskType: v }) }));
   }
 
   function downloadNotImported() {
@@ -288,7 +307,22 @@ export async function view(outlet, params, query) {
         };
         if (d.action === 'update' && d.duplicate?.cardId) {
           const existing = app.cache.cards.get(d.duplicate.cardId);
-          if (existing) updates.push({ ...existing, ...fields, deckId: existing.deckId, tags: [...new Set([...existing.tags, ...fields.tags])] });
+          if (existing) {
+            // Fields the import leaves blank keep their current value, and
+            // the existing accepted answers stay after the imported ones.
+            const back = fields.kind === 'cloze' ? (fields.back.length ? fields.back : existing.back) : [...new Set([...fields.back, ...existing.back])];
+            updates.push({
+              ...existing,
+              front: fields.front.length ? fields.front : existing.front,
+              back,
+              hint: fields.hint || existing.hint,
+              explanation: fields.explanation || existing.explanation,
+              answerMode: fields.answerMode || existing.answerMode,
+              taskType: d.taskTypeFromFile ? fields.taskType : existing.taskType,
+              deckId: existing.deckId,
+              tags: [...new Set([...existing.tags, ...fields.tags])],
+            });
+          }
         } else {
           newCards.push(createCard(fields, store.deviceId));
         }

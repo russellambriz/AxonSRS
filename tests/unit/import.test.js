@@ -2,7 +2,7 @@
 // quoted separators and malformed rows; never silently discarding input.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { detectFormat, parseImport, buildDrafts, markDuplicates, importSummary, notImportedText } from '../../js/core/import/index.js';
+import { detectFormat, parseImport, buildDrafts, markDuplicates, importSummary, notImportedText, validateDraft } from '../../js/core/import/index.js';
 import { parseDelimited } from '../../js/core/import/csv.js';
 import { htmlToText } from '../../js/core/import/html.js';
 
@@ -128,4 +128,51 @@ test('duplicates within the import and against existing cards', () => {
   assert.equal(s.toImport, 2);
   assert.equal(s.skipped, 2);
   assert.match(notImportedText(marked, [{ line: 9, text: 'zzz', reason: 'x' }]), /line 9/);
+});
+
+test('nothing is dropped silently: # lines in tables, unknown JSON keys, headers the user marks', () => {
+  const t = parseImport('# Chapter 3\nfront\tback\na\tb', 'tsv');
+  assert.ok(t.unused.some((u) => u.text === '# Chapter 3'), 'comment line reported');
+  const hdr = parseImport('Word,Meaning\nchat,cat', 'csv', { hasHeader: true });
+  assert.equal(hdr.rows.length, 1, 'an unrecognised header row is still treated as a header when asked');
+  const json = parseImport(JSON.stringify([{ front: 'a', back: 'b', source: 'book', page: 3 }]), 'json');
+  assert.deepEqual(json.columns, ['front', 'back', 'source', 'page']);
+  assert.equal(json.mapping[2], 'ignore', 'unknown keys are visible columns, mapped to ignore');
+  const remapped = buildDrafts(parseImport(JSON.stringify([{ front: 'a', back: 'b', source: 'book' }]), 'json', { mapping: { 0: 'front', 1: 'back', 2: 'tags' } }));
+  assert.deepEqual(remapped[0].tags, ['book'], 'and can be mapped');
+});
+
+test('Anki exports with GUID, note type and deck columns map front and back correctly', () => {
+  const src = '#separator:tab\n#html:true\n#guid column:1\n#notetype column:2\n#deck column:3\nabc123\tBasic\tChem\tSulfate\tSO<sub>4</sub><sup>2-</sup>';
+  const parsed = parseImport(src, 'anki');
+  const [d] = buildDrafts(parsed);
+  assert.equal(d.front, 'Sulfate');
+  assert.equal(d.deck, 'Chem');
+  assert.equal(d.status, 'valid');
+  const old = buildDrafts(parseImport('Capital<br>of France\t<b>Paris</b>', 'tsv'));
+  assert.equal(old[0].back, '**Paris**', 'HTML in a header-less Anki export is converted to Markdown');
+  assert.equal(old[0].front.includes('<br>'), false);
+});
+
+test('pasted cloze lines are detected as cloze, not the :: separator', () => {
+  const src = '{{c1::Paris}} is the capital of {{c2::France}}\n{{c1::Rome}} is the capital of Italy';
+  assert.equal(detectFormat(src).format, 'cloze');
+  const drafts = buildDrafts(parseImport(src, 'cloze'));
+  assert.deepEqual(drafts.map((d) => [d.kind, d.status]), [['cloze', 'valid'], ['cloze', 'valid']]);
+});
+
+test('duplicate choices survive edits, fixed rows can be imported, within-import duplicates can be kept', () => {
+  const existing = [{ id: 'c1', deckId: 'd', front: ['Sulfate'], back: ['SO4^2-'] }];
+  let drafts = markDuplicates(buildDrafts(parseImport('Sulfate\tSO4^2-\nNitrate\t\nNitrate\tNO3^-\nNitrate\tNO3^-', 'tsv')), existing);
+  assert.equal(drafts[0].action, 'skip');
+  drafts[0] = { ...drafts[0], userAction: 'update' };
+  drafts = markDuplicates(drafts, existing);
+  assert.equal(drafts[0].action, 'update', 'an explicit choice survives a re-check');
+  assert.equal(drafts[1].status, 'invalid');
+  drafts[1] = validateDraft({ ...drafts[1], back: 'NO3^-' });
+  drafts = markDuplicates(drafts, existing);
+  assert.equal(drafts[1].action, 'import', 'a fixed row is no longer stuck on skip');
+  const within = drafts.findIndex((d) => d.duplicate?.type === 'within');
+  drafts[within] = { ...drafts[within], userAction: 'import' };
+  assert.equal(markDuplicates(drafts, existing)[within].action, 'import');
 });
