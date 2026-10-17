@@ -69,8 +69,11 @@ export class MathParseError extends Error {
 function preprocess(input) {
   let s = String(input).normalize('NFC');
   s = s.replace(/[\u200B-\u200D\uFEFF]/g, '');
-  // Mixed numbers like 1½ mean 1 + 1/2.
-  s = s.replace(/(\d)([½⅓⅔¼¾⅕⅖⅗⅘⅙⅚⅛⅜⅝⅞])/g, (_, d, f) => `(${d}+${VULGAR[f]})`);
+  // Mixed numbers (1½, "1 1/2") are the improper fraction they stand for,
+  // so 1½, 1 1/2 and 3/2 are the same fraction written differently.
+  const mixed = (w, n, d) => `(${Number(w) * Number(d) + Number(n)}/${d})`;
+  s = s.replace(/(^|[^\d.])(\d+)([½⅓⅔¼¾⅕⅖⅗⅘⅙⅚⅛⅜⅝⅞])/g, (_, pre, w, f) => pre + mixed(w, ...VULGAR[f].split('/')));
+  s = s.replace(/(^|[^\d.\w)])(\d+)\s+(\d+)\s*\/\s*(\d+)(?![\d.])/g, (_, pre, w, n, d) => pre + mixed(w, n, d));
   s = s.replace(/[½⅓⅔¼¾⅕⅖⅗⅘⅙⅚⅛⅜⅝⅞]/g, (f) => `(${VULGAR[f]})`);
   s = s.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻⁼⁽⁾ⁿⁱˣ]+/g, (run) => `^(${[...run].map((c) => SUPERSCRIPTS[c]).join('')})`);
   s = s.replace(/[₀₁₂₃₄₅₆₇₈₉₊₋₌₍₎ₐₑₒₓₙᵢⱼₖₘₜ]+/g, (run) => `_(${[...run].map((c) => SUBSCRIPTS[c]).join('')})`);
@@ -810,16 +813,26 @@ function randomPointsEqual(a, b, symbols) {
   const names = [...symbols];
   const rand = seededRandom(`${keyOf(a)}|${keyOf(b)}`);
   let valid = 0;
-  for (let trial = 0; trial < 16 && valid < 8; trial++) {
+  let negatives = 0;
+  // Points on both sides of zero and at several magnitudes, so |x| and x,
+  // or √(x²) and x, are told apart. Tight tolerance: x and x + 1e-10 differ.
+  for (let trial = 0; trial < 32 && valid < 12; trial++) {
     const env = {};
-    for (const n of names) env[n] = 0.3 + rand() * 2.4;
+    const negative = trial % 2 === 1;
+    for (const n of names) {
+      const magnitude = trial % 4 === 3 ? 3 + rand() * 17 : 0.3 + rand() * 2.7;
+      env[n] = negative ? -magnitude : magnitude;
+    }
     const x = evaluate(a, env);
     const y = evaluate(b, env);
     if (!Number.isFinite(x) && !Number.isFinite(y)) continue;
-    if (!nearlyEqual(x, y, 1e-9, 1e-11)) return false;
+    if (!nearlyEqual(x, y, 1e-12, 1e-13)) return false;
     valid++;
+    if (negative) negatives++;
   }
-  return valid >= 6;
+  // Expressions defined only for positive values (√x, ln x) are compared
+  // where they are defined; otherwise both signs must have been checked.
+  return valid >= 6 && (negatives > 0 || valid >= 8);
 }
 
 const INTEGRATION_CONSTANTS = new Set(['C', 'c', 'K']);
@@ -829,7 +842,10 @@ export function mathDiagnostics(userTree, expectedTree) {
   const ek = keyOf(expectedTree);
   if (userTree.k !== 'rel' && expectedTree.k !== 'rel') {
     if (keyOf(negate(userTree)) === ek) diagnostics.push('sign-error');
-    else {
+    else if (userTree.k === 'add' && expectedTree.k === 'add' && userTree.terms.length === expectedTree.terms.length && userTree.terms.some((_, i) => keyOf(makeAdd(userTree.terms.map((t, j) => (j === i ? negate(t) : t)))) === ek)) {
+      // One term with the wrong sign: x - 2 for x + 2.
+      diagnostics.push('sign-error');
+    } else {
       const free = freeSymbols(userTree).size + freeSymbols(expectedTree).size;
       if (!free) {
         const a = evaluate(userTree);

@@ -36,8 +36,16 @@ const CONFUSABLE_PREFIXES = [
 const CONFUSABLE_SUFFIXES = [
   ['ate', 'ite'], ['ide', 'ate'], ['ide', 'ite'], ['ous', 'ic'], ['phagia', 'phasia'], ['ectomy', 'otomy'],
   ['ostomy', 'otomy'], ['ectomy', 'ostomy'], ['emia', 'uria'], ['itis', 'osis'], ['plasia', 'plasty'], ['ase', 'ose'],
+  // Chemical nomenclature: element vs anion, alkane/alkene/alkyne, alcohol/aldehyde/ketone.
+  ['ine', 'ide'], ['ine', 'ite'], ['ine', 'ate'], ['ane', 'ene'], ['ene', 'yne'], ['ane', 'yne'],
+  ['anol', 'anal'], ['anol', 'anone'], ['anal', 'anone'], ['ol', 'al'],
 ];
-const CONFUSABLE_WORDS = [['ileum', 'ilium'], ['mucous', 'mucus'], ['perineal', 'peroneal'], ['prostate', 'prostrate'], ['palpation', 'palpitation']];
+const CONFUSABLE_WORDS = [
+  ['ileum', 'ilium'], ['mucous', 'mucus'], ['perineal', 'peroneal'], ['prostate', 'prostrate'], ['palpation', 'palpitation'],
+  ['neuron', 'neutron'], ['neurons', 'neutrons'], ['artery', 'arteriole'], ['arteries', 'arterioles'], ['vein', 'venule'], ['veins', 'venules'],
+  ['mitosis', 'meiosis'], ['absorption', 'adsorption'], ['absorb', 'adsorb'], ['affect', 'effect'], ['allele', 'allelle'],
+  ['ileal', 'iliac'], ['xylem', 'phloem'], ['diffusion', 'infusion'], ['efflux', 'influx'], ['anion', 'cation'], ['anode', 'cathode'],
+];
 
 function crossesConfusable(a, b) {
   for (const [x, y] of CONFUSABLE_PREFIXES) {
@@ -56,6 +64,7 @@ function crossesConfusable(a, b) {
 export function normalizeText(text, { caseSensitive = false } = {}) {
   let s = basicNormalize(stripFormatting(text));
   s = normalizeProsePunctuation(s);
+  s = s.replace(/(\d)\s+(?=[°%‰′″])/g, '$1');
   s = s.replace(/\s*([,;:])\s*/g, '$1 ').replace(/\s+/g, ' ').trim();
   s = s.replace(/[.!?;,:]+$/u, '').trim();
   return caseSensitive ? s : s.toLocaleLowerCase();
@@ -132,9 +141,32 @@ function compareText(input, expected, opts) {
  * @param {string[]} accepted
  * @param {object} options see DEFAULT_MATCH_OPTIONS
  */
+const ENTITIES = { '&amp;': '&', '&lt;': '<', '&gt;': '>', '&quot;': '"', '&#39;': "'", '&nbsp;': ' ' };
+
+/**
+ * Remove display-only markup from an answer before comparing it: images,
+ * HTML tags, maths delimiters ($…$, \\(…\\)), \\ce{…} and HTML entities.
+ * <sub>/<sup> keep their content (as ^… for superscripts in maths and
+ * chemistry, so SO<sub>4</sub><sup>2-</sup> reads as SO4^2-). Applied to
+ * both the stored and the typed answer, so the same answer written with or
+ * without formatting compares equal.
+ */
+export function answerForMatching(text, mode = 'text') {
+  let s = String(text ?? '');
+  s = s.replace(/!\[[^\]]*\]\([^)]*\)/g, ' ').replace(/<img\b[^>]*>/gi, ' ');
+  const sup = mode === 'text' ? '$1' : '^($1)';
+  s = s.replace(/<sub>([\s\S]*?)<\/sub>/gi, '$1').replace(/<sup>([\s\S]*?)<\/sup>/gi, sup);
+  s = s.replace(/<\/?[a-z][^>]*>/gi, '');
+  s = s.replace(/&(?:amp|lt|gt|quot|#39|nbsp);/g, (e) => ENTITIES[e]);
+  s = s.replace(/\\ce\{((?:[^{}]|\{[^{}]*\})*)\}/g, '$1');
+  s = s.replace(/\$\$([\s\S]+?)\$\$/g, '$1').replace(/\$([^$\n]+?)\$/g, '$1');
+  s = s.replace(/\\\(([\s\S]+?)\\\)/g, '$1').replace(/\\\[([\s\S]+?)\\\]/g, '$1');
+  return s.replace(/\s+/g, ' ').trim();
+}
+
 export function matchAnswer(input, accepted, options = {}) {
   const opts = { ...DEFAULT_MATCH_OPTIONS, ...options };
-  const typed = String(input ?? '');
+  const typed = answerForMatching(input, opts.mode);
   const result = {
     version: MATCHER_VERSION,
     mode: opts.mode,
@@ -152,7 +184,7 @@ export function matchAnswer(input, accepted, options = {}) {
     result.diagnostics.push('empty');
     return result;
   }
-  const answers = (accepted || []).filter((a) => basicNormalize(a));
+  const answers = (accepted || []).map((a) => answerForMatching(a, opts.mode)).filter((a) => basicNormalize(a));
   if (!answers.length) {
     result.diagnostics.push('no-accepted-answers');
     return result;
@@ -200,9 +232,30 @@ export function matchAnswer(input, accepted, options = {}) {
       warnings: tolerant.cmp.warnings,
     };
   }
-  result.diagnostics = [...diagnostics];
   result.closestIndex = closestAnswerIndex(typed, answers);
+  const unit = unitDiagnostic(typed, answers[result.closestIndex]);
+  if (unit) diagnostics.add(unit);
+  result.diagnostics = [...diagnostics];
   return result;
+}
+
+const QUANTITY_RE = /^\s*([-+−]?(?:\d+(?:[.,]\d+)?|[.,]\d+)(?:\s*(?:e|E)[-+]?\d+|\s*[×x*]\s*10\s*\^\s*\(?[-+]?\d+\)?)?)\s*(.*?)\s*$/;
+
+/**
+ * Number-with-unit answers ("3e8 m/s", "25 °C"): when the number is right
+ * but the unit is missing or different, say so ("unit-missing" /
+ * "unit-mismatch"). The answer is still marked wrong.
+ */
+export function unitDiagnostic(typed, expected) {
+  if (!expected) return null;
+  const e = QUANTITY_RE.exec(expected);
+  const t = QUANTITY_RE.exec(typed);
+  if (!e || !t || !e[2] || !/[A-Za-zµμ°Ω%‰]/.test(e[2])) return null;
+  if (!compareMath(t[1], e[1], { equivalence: 'numeric' }).equal) return null;
+  const norm = (u) => u.replace(/\s+/g, '').replace(/·|\*/g, '.');
+  if (!t[2]) return 'unit-missing';
+  if (norm(t[2]) !== norm(e[2])) return 'unit-mismatch';
+  return null;
 }
 
 export function closestAnswerIndex(typed, answers) {
@@ -221,7 +274,7 @@ export function closestAnswerIndex(typed, answers) {
 
 /** Diff for the correction screen, computed on lightly normalised forms. */
 export function answerDiff(typed, expected) {
-  return diffAnswer(basicNormalize(typed), basicNormalize(stripFormatting(expected)));
+  return diffAnswer(basicNormalize(typed), basicNormalize(stripFormatting(answerForMatching(expected))));
 }
 
 /**
@@ -265,6 +318,8 @@ export const DIAGNOSTIC_LABELS = Object.freeze({
   'unbalanced-parentheses': 'Unbalanced parentheses',
   'incomplete-expression': 'Expression is incomplete',
   'unreadable-expression': 'Could not read the expression',
+  'unit-missing': 'Missing unit',
+  'unit-mismatch': 'Different unit',
   'charge-sign': 'Charge sign error',
   'charge-mismatch': 'Charge mismatch',
   'charge-missing': 'Missing ionic charge',

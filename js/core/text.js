@@ -17,9 +17,17 @@ export function collapseWhitespace(text) {
   return String(text).replace(ZERO_WIDTH, '').replace(SPACES, ' ').trim();
 }
 
-/** NFC + invisible characters removed + whitespace collapsed. */
+/**
+ * Characters that look identical but have different code points (micro
+ * sign vs Greek mu, increment vs Delta, ohm/angstrom signs, the Unicode
+ * minus). NFC handles some of these; the rest are folded explicitly.
+ */
+const LOOKALIKES = { '\u00B5': '\u03BC', '\u2206': '\u0394', '\u2126': '\u03A9', '\u212B': '\u00C5', '\u2212': '-' };
+const LOOKALIKE_RE = /[\u00B5\u2206\u2126\u212B\u2212]/g;
+
+/** NFC + look-alikes folded + invisible characters removed + whitespace collapsed. */
 export function basicNormalize(text) {
-  return collapseWhitespace(String(text).normalize('NFC'));
+  return collapseWhitespace(String(text).normalize('NFC').replace(LOOKALIKE_RE, (c) => LOOKALIKES[c]));
 }
 
 export function normalizeProsePunctuation(text) {

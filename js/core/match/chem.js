@@ -30,9 +30,11 @@ const EQUILIBRIUM_ARROWS = ['<=>', '<-->', '<->', '⇌', '⇄', '↔', '⟷'];
 function preprocess(input) {
   let s = String(input).normalize('NFC').replace(/[\u200B-\u200D\uFEFF]/g, '');
   s = s.replace(/[₀₁₂₃₄₅₆₇₈₉]/g, (c) => SUB[c]);
+  s = s.replace(/[−–—]/g, '-');
   // Superscript runs become caret charges; a leading superscript before an
   // element is an isotope mass number, e.g. ¹⁴C.
-  s = s.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+/g, (run) => `^{${[...run].map((c) => SUP[c] ?? c).join('')}}`);
+  // A plain sign right after superscript digits belongs to the charge (SO4²-).
+  s = s.replace(/[⁰¹²³⁴⁵⁶⁷⁸⁹⁺⁻]+[+-]?/g, (run) => `^{${[...run].map((c) => SUP[c] ?? c).join('')}}`);
   s = s.replace(/[−–—]/g, '-').replace(/[·•∙⋅×*]/g, '.').replace(/\s+/g, ' ').trim();
   return s;
 }
@@ -194,13 +196,14 @@ function parseFormulaPart(text, allowCharge) {
     if (ch === '^') {
       i++;
       let body;
-      if (text[i] === '{') {
-        const close = text.indexOf('}', i);
-        if (close < 0) throw new ChemParseError('Unclosed charge braces', 'charge');
+      if (text[i] === '{' || text[i] === '(') {
+        const close = text.indexOf(text[i] === '{' ? '}' : ')', i);
+        if (close < 0) throw new ChemParseError('Unclosed charge brackets', 'charge');
         body = text.slice(i + 1, close);
         i = close + 1;
       } else {
-        const m = /^(\d*[+-]+|[+-]\d*)/.exec(text.slice(i));
+        // Sign-first with digits (^-2, ^+3) before digits-first (^2-, ^+).
+        const m = /^([+-]\d+|\d*[+-]+)/.exec(text.slice(i));
         if (!m) throw new ChemParseError('Charge expected after ^', 'charge');
         body = m[0];
         i += m[0].length;
@@ -391,6 +394,11 @@ export function compareChem(userInput, expectedInput) {
     const keyFor = (sp) => speciesKey(e.state ? sp : { ...sp, state: null });
     if (keyFor(u) === eKey) return { equal: true, method: 'chem', diagnostics: [] };
     if (u.alternative && keyFor(u.alternative) === eKey) {
+      return { equal: true, method: 'chem', diagnostics: [], warnings: ['ambiguous-charge-read'] };
+    }
+    // A stored answer written ambiguously (Fe3+) also accepts its charge
+    // reading (Fe^3+), with the same warning.
+    if (e.alternative && (keyFor(u) === speciesKey(e.alternative) || (u.alternative && keyFor(u.alternative) === speciesKey(e.alternative)))) {
       return { equal: true, method: 'chem', diagnostics: [], warnings: ['ambiguous-charge-read'] };
     }
     return { equal: false, method: 'none', diagnostics: speciesDiagnostics(u, e) };

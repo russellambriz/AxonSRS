@@ -189,3 +189,65 @@ test('diff highlights missing and extra characters', () => {
   assert.deepEqual(answerDiff('Canberra', 'Jupiter'), [{ type: 'extra', text: 'Canberra' }], 'unrelated answers are not interleaved');
   assert.equal(normalizeText('  A  B. '), 'a b');
 });
+
+test('display formatting in a stored or typed answer never causes a wrong result', () => {
+  const ok = (typed, stored, mode = 'text') => assert.equal(matchAnswer(typed, [stored], { mode }).correct, true, `${typed} vs ${stored} (${mode})`);
+  ok('1/2', '$\\frac{1}{2}$', 'math');
+  ok('2x+1', '$2x + 1$', 'math');
+  ok('x^2', '$x^{2}$', 'math');
+  ok('$x^2$', 'x^2', 'math');
+  ok('H2O', '\\ce{H2O}', 'chem');
+  ok('H2O', '$\\ce{H2O}$', 'chem');
+  ok('SO4^2-', 'SO<sub>4</sub><sup>2-</sup>', 'chem');
+  ok('Paris', '<b>Paris</b>');
+  ok('H2O', 'H<sub>2</sub>O');
+  ok('conditional probability', 'conditional probability\n\n![diagram](axon-media:sha256-x)');
+  ok('µ', 'μ');
+  ok('∆H', 'ΔH');
+  ok('5°C', '5 °C');
+  ok('50 %', '50%');
+  assert.equal(matchAnswer('Rome', ['<b>Paris</b>']).correct, false);
+});
+
+test('chemistry accepts more charge notations without loosening identity', () => {
+  const chem = (typed, stored) => matchAnswer(typed, [stored], { mode: 'chem' });
+  for (const [t, s] of [['SO4^-2', 'SO4^2-'], ['Fe^+3', 'Fe^3+'], ['SO4^(2-)', 'SO4^2-'], ['SO4²-', 'SO4^2-'], ['SO4²−', 'SO4^2-']]) assert.equal(chem(t, s).correct, true, `${t} = ${s}`);
+  const amb = chem('Fe^3+', 'Fe3+');
+  assert.equal(amb.correct, true, 'a stored ambiguous charge accepts its charge reading');
+  assert.deepEqual(amb.warnings, ['ambiguous-charge-read']);
+  for (const [t, s] of [['Fe^2+', 'Fe3+'], ['SO4^2+', 'SO4^2-'], ['SO3^2-', 'SO4^2-'], ['SO4^-3', 'SO4^2-']]) assert.equal(chem(t, s).correct, false, `${t} ≠ ${s}`);
+});
+
+test('typo tolerance never confuses chemical or anatomical terms that differ by a few letters', () => {
+  for (const [t, e] of [['chlorine', 'chloride'], ['fluorine', 'fluoride'], ['alkane', 'alkene'], ['alkene', 'alkyne'], ['butane', 'butene'], ['neutron', 'neuron'], ['neuron', 'neutron'], ['arteries', 'arterioles'], ['ethanol', 'ethanal'], ['mitosis', 'meiosis']]) {
+    assert.equal(matchAnswer(t, [e]).correct, false, `${t} ≠ ${e}`);
+  }
+  for (const [t, e] of [['Canbera', 'Canberra'], ['photosynthesys', 'photosynthesis'], ['mitochondira', 'mitochondria']]) {
+    const r = matchAnswer(t, [e]);
+    assert.equal(r.correct && r.typoTolerated, true, `${t} ≈ ${e}`);
+  }
+});
+
+test('maths: mixed numbers are fractions, and algebraic checks sample both signs', () => {
+  const m = (t, e, eq = 'notation') => matchAnswer(t, [e], { mode: 'math', mathEquivalence: eq }).correct;
+  assert.equal(m('1 1/2', '1/2'), false, '1 1/2 is not 1 × 1/2');
+  assert.equal(m('1 1/2', '3/2'), true);
+  assert.equal(m('1½', '1 1/2'), true);
+  assert.equal(m('2 1/2', '1', 'numeric'), false);
+  assert.equal(m('abs(x)', 'x', 'algebraic'), false);
+  assert.equal(m('sqrt(x^2)', 'x', 'algebraic'), false);
+  assert.equal(m('x', 'x+1e-10', 'algebraic'), false);
+  assert.equal(m('(x+1)^2', 'x^2+2x+1', 'algebraic'), true);
+  assert.equal(m('sin(x)^2+cos(x)^2', '1', 'algebraic'), true);
+});
+
+test('diagnostics: one flipped sign in a sum, and a missing or different unit', () => {
+  const d = (t, e, mode = 'math') => matchAnswer(t, [e], { mode }).diagnostics;
+  assert.ok(d('x - 2', 'x + 2').includes('sign-error'));
+  assert.ok(d('x^2 - 3x + 2', 'x^2 + 3x + 2').includes('sign-error'));
+  assert.equal(d('x + 3', 'x + 2').includes('sign-error'), false);
+  assert.ok(d('3e8', '3e8 m/s', 'text').includes('unit-missing'));
+  assert.ok(d('3e8 km/s', '3e8 m/s', 'text').includes('unit-mismatch'));
+  assert.ok(d('25', '25 °C', 'text').includes('unit-missing'));
+  assert.equal(d('4e8 m/s', '3e8 m/s', 'text').includes('unit-mismatch'), false, 'a different number is not a unit error');
+});
