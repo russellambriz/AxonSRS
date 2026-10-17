@@ -270,8 +270,13 @@ export function classifyEdit(before, after, deck) {
   for (const key of keys) {
     const a = unitContent(before, key);
     const b = unitContent(after, key);
-    const promptA = semanticForm(a.prompt);
-    const promptB = semanticForm(b.prompt);
+    // A cloze prompt shows the other blanks' answers; editing a sibling's
+    // answer must not count as a change to this blank. Compare the text
+    // around the blanks instead.
+    const clozeKey = unitKind(key) === 'cloze';
+    const skeleton = (card) => String(card.front[0] || '').replace(/\{\{[\s\S]*?\}\}/g, '{{}}');
+    const promptA = semanticForm(clozeKey ? skeleton(before) : a.prompt);
+    const promptB = semanticForm(clozeKey ? skeleton(after) : b.prompt);
     const primaryA = (a.answerGroups || []).map((g) => semanticForm(g[0])).join(';');
     const primaryB = (b.answerGroups || []).map((g) => semanticForm(g[0])).join(';');
     const altsA = JSON.stringify(a.answerGroups);

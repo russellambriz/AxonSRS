@@ -2,7 +2,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { parseCloze, clozeKeys, clozePrompt, clozeReveal, clozeAnswerGroups, clozeInstruction, addClozeAlias, clozePreview } from '../../js/core/cloze.js';
-import { createCard, unitKeys, unitContent } from '../../js/core/model.js';
+import { createCard, createDeck, classifyEdit, unitKeys, unitContent } from '../../js/core/model.js';
 
 test('numbered clozes become separate units with stable ids', () => {
   const text = '{{c1::Paris}} is the capital of {{c2::France}}.';
@@ -73,4 +73,11 @@ test('import preview lists generated questions and answers', () => {
   const p = clozePreview('{{c1::H2O}} is {{c2::water}}');
   assert.deepEqual(p.rows.map((r) => [r.key, r.expected]), [['c1', 'H2O'], ['c2', 'water']]);
   assert.equal(p.rows[0].prompt, '[…] is water');
+});
+
+test('editing one cloze answer is not a substantive change for its siblings', () => {
+  const deck = createDeck({ name: 'd' });
+  const a = createCard({ deckId: deck.id, front: '{{c1::Paris}} is the capital of {{c2::France}}', back: '' });
+  assert.deepEqual(classifyEdit(a, { ...a, front: ['{{c1::Paris}} is the capital of {{c2::the French Republic}}'] }, deck), { c1: 'formatting', c2: 'substantive' });
+  assert.deepEqual(classifyEdit(a, { ...a, front: ['{{c1::Paris}} was the capital of {{c2::France}}'] }, deck), { c1: 'substantive', c2: 'substantive' });
 });
