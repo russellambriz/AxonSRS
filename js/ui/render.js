@@ -76,21 +76,34 @@ DOMPurify.addHook('afterSanitizeAttributes', (node) => {
   }
 });
 
+// Only the tags and attributes listed above survive. (USE_PROFILES must not
+// be set: it replaces these allow-lists with DOMPurify's broad HTML profile.)
 function sanitize(html) {
   return DOMPurify.sanitize(html, {
     ALLOWED_TAGS,
     ALLOWED_ATTR,
+    FORBID_ATTR: ['style', 'srcset'],
     ALLOWED_URI_REGEXP: /^(?:https?:|mailto:|axon-media:|#)/i,
+    // Plain-value attributes that must not be checked as URIs.
+    ADD_URI_SAFE_ATTR: ['start', 'colspan', 'rowspan'],
     ALLOW_DATA_ATTR: false,
-    USE_PROFILES: { html: true },
   });
 }
 
 const MATH_RE = /\$\$([\s\S]+?)\$\$|\\\[([\s\S]+?)\\\]|\\\(([\s\S]+?)\\\)|(?<![\\$\w])\$(?!\s)([^$\n]+?)(?<!\s)\$(?!\d)|\\ce\{((?:[^{}]|\{[^{}]*\})*)\}/g;
 
+// Fenced code blocks and inline code spans are kept out of maths extraction,
+// so `$HOME` or \(…\) inside code stays literal.
+const CODE_RE = /(^|\n)(```|~~~)[^\n]*\n[\s\S]*?(?:\n\2[^\n]*(?=\n|$)|$)|(`+)(?!`)[\s\S]*?[^`]\3(?!`)/g;
+
 function extractMath(text) {
   const segments = [];
-  const out = text.replace(MATH_RE, (m, d1, d2, i1, i2, ce) => {
+  const code = [];
+  const guarded = text.replace(CODE_RE, (m) => {
+    code.push(m);
+    return `\u0000AXONCODE${code.length - 1}\u0000`;
+  });
+  const replaced = guarded.replace(MATH_RE, (m, d1, d2, i1, i2, ce) => {
     let tex;
     let display = false;
     if (d1 != null || d2 != null) {
@@ -101,6 +114,7 @@ function extractMath(text) {
     segments.push({ tex, display, source: m });
     return `AXONMATH${segments.length - 1}X`;
   });
+  const out = replaced.replace(/\u0000AXONCODE(\d+)\u0000/g, (_, i) => code[Number(i)]);
   return { text: out, segments };
 }
 
@@ -212,8 +226,12 @@ export function answerHtml(answer, mode) {
     if (hasMath(answer)) return markdownToHtml(answer, { inline: true });
     return katexHtml(`\\ce{${toMhchem(answer)}}`, false);
   }
-  return markdownToHtml(answer, { inline: true });
+  // Multi-line answers (lists, headings, code blocks) get full Markdown.
+  return markdownToHtml(answer, { inline: !BLOCK_MARKDOWN_RE.test(answer) });
 }
+
+// Only multi-line answers: a one-line answer such as "1. e4" stays literal.
+const BLOCK_MARKDOWN_RE = /\n/;
 
 /** Live preview of what the learner is typing (math/chem modes). */
 export function livePreviewHtml(input, mode) {
