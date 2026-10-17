@@ -39,7 +39,7 @@ function audit(page, { touch }) {
       if (!nameOf(el)) problems.push(`unnamed ${el.tagName.toLowerCase()}${el.className ? `.${String(el.className).split(' ').join('.')}` : ''}`);
     }
     if (isTouch) {
-      for (const el of document.querySelectorAll('.bottom-nav a, .submit-btn, .answer-input, .composer .actions .btn, .btn.primary')) {
+      for (const el of document.querySelectorAll('.bottom-nav a, .submit-btn, .answer-input, .composer .actions .btn, .btn.primary, .toast .btn, .symbols button, .segmented button, .confidence button, .row-check')) {
         if (!visible(el)) continue;
         const r = el.getBoundingClientRect();
         if (r.height < 40 || r.width < 40) problems.push(`small touch target ${el.tagName.toLowerCase()}.${[...el.classList].join('.')} ${Math.round(r.width)}×${Math.round(r.height)}`);

@@ -87,7 +87,7 @@ export function cardBrowser({ deckId = null, initialQuery = '' } = {}) {
     back.innerHTML = backHtml;
     sub.innerHTML = backHtml;
     const r = h('div', { class: ['card-row', checked && 'selected'], role: 'row', tabindex: '0', 'aria-label': plainFront(card), onclick: () => app.navigate(`/card/${card.id}`), onkeydown: (e) => { if (e.key === 'Enter') app.navigate(`/card/${card.id}`); if (e.key === ' ') { e.preventDefault(); toggle(card.id, e.shiftKey); } } },
-      h('div', {}, cb),
+      h('label', { class: 'row-check', onclick: (e) => e.stopPropagation() }, cb),
       h('div', { class: 'front-wrap' }, front, sub),
       back,
       h('div', { class: 'badges' }, card.kind !== 'basic' ? h('span', { class: 'chip' }, card.kind === 'cloze' ? 'Cloze' : 'Image') : null, cardStatusChips(card),

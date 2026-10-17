@@ -27,19 +27,20 @@
   --surface-3: #e9e9ef;
   --border: #e3e3ea;
   --border-strong: #d0d0da;
+  --control-border: #8a8a97; /* 3:1 against surfaces (WCAG 1.4.11) */
   --text: #17171c;
   --text-2: #50505c;
-  --text-3: #85858f;
+  --text-3: #686873; /* ≥ 4.5:1 on every light surface */
   --accent: #5b5bd6;
   --accent-hover: #4c4cc4;
   --accent-contrast: #ffffff;
   --accent-soft: #ececfd;
   --accent-text: #4747b8;
-  --success: #16855b;
+  --success: #11734e;
   --success-soft: #e3f5ec;
-  --danger: #cf3a3a;
+  --danger: #b92f2f;
   --danger-soft: #fdeaea;
-  --warning: #b26b00;
+  --warning: #8a5300;
   --warning-soft: #fff4dc;
   --info-soft: #e8f1fd;
   --focus: #5b5bd6;
@@ -91,9 +92,10 @@
     --surface-3: #26262d;
     --border: #2a2a31;
     --border-strong: #3a3a43;
+    --control-border: #70707b;
     --text: #ececf1;
     --text-2: #a7a7b2;
-    --text-3: #75757f;
+    --text-3: #93939e;
     --accent: #8486f5;
     --accent-hover: #9597f7;
     --accent-contrast: #0e0e11;
@@ -127,9 +129,10 @@
   --surface-3: #26262d;
   --border: #2a2a31;
   --border-strong: #3a3a43;
+  --control-border: #70707b;
   --text: #ececf1;
   --text-2: #a7a7b2;
-  --text-3: #75757f;
+  --text-3: #93939e;
   --accent: #8486f5;
   --accent-hover: #9597f7;
   --accent-contrast: #0e0e11;
@@ -564,7 +567,7 @@ kbd {
   min-height: 40px;
   padding: 8px 12px;
   border-radius: var(--radius-s);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   background: var(--surface);
   color: var(--text);
   transition: border-color var(--dur), box-shadow var(--dur);
@@ -626,7 +629,7 @@ kbd {
   height: 22px;
   border-radius: 11px;
   background: var(--surface-3);
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--control-border);
   position: relative;
   transition: background var(--dur);
   flex: none;
@@ -1060,9 +1063,8 @@ body.studying { overflow: hidden; }
   padding: var(--safe-top) var(--safe-right) 0 var(--safe-left);
   transform: translateY(var(--vv-top, 0px));
 }
-@media (min-width: 700px) {
-  .study { position: relative; inset: auto; z-index: auto; height: 100dvh; transform: none; }
-}
+/* The study screen covers the whole window at every size: a distraction-free
+   review on desktop, and keyboard-aware sizing on tablets as well as phones. */
 .study-top {
   display: flex;
   align-items: center;
@@ -1182,7 +1184,7 @@ body.studying { overflow: hidden; }
   height: 52px;
   padding: 0 16px;
   border-radius: 14px;
-  border: 1.5px solid var(--border-strong);
+  border: 1.5px solid var(--control-border);
   background: var(--surface);
   font-size: 1.15rem;
   /* ≥16px prevents iOS zoom on focus */
@@ -1299,3 +1301,17 @@ body.studying { overflow: hidden; }
 .card-row .katex { font-size: 1em; }
 .card-row .front, .card-row .back, .card-row .sub { line-height: 1.5; padding: 5px 0 6px; }
 body.studying .toasts { top: calc(56px + var(--safe-top)); bottom: auto; }
+
+/* Row checkboxes sit in a label so the whole cell is the tap area. */
+.row-check { display: inline-flex; align-items: center; justify-content: center; min-width: 32px; min-height: 32px; cursor: pointer; }
+
+/* Touch screens: every control at least 40–44 px (kept last so it wins
+   over the component rules above). */
+@media (pointer: coarse) {
+  .toast .btn { min-height: 40px; }
+  .symbols button { min-width: 44px; height: 44px; }
+  .segmented button { min-height: 40px; }
+  .confidence button { width: 44px; height: 44px; }
+  .row-check { min-width: 44px; min-height: 44px; }
+  .card-row input[type='checkbox'] { width: 22px; height: 22px; }
+}
