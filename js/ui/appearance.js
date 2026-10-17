@@ -19,6 +19,11 @@ export function applyAppearance(device) {
   }
 }
 
+/** True when the device or the in-app setting asks for reduced motion. */
+export function reducedMotion() {
+  return document.documentElement.classList.contains('reduce-motion') || !!globalThis.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+}
+
 /** Announce text to screen readers via the live regions in index.html. */
 export function announce(text, { assertive = false } = {}) {
   const el = document.getElementById(assertive ? 'sr-alert' : 'sr-live');

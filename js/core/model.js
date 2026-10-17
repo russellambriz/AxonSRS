@@ -172,7 +172,10 @@ export function unitContent(card, key) {
     occlusion: null,
   };
   if (kind === 'forward') {
-    return { ...base, prompt: card.front[0] || '', answerGroups: [card.back], answerDisplay: card.back[0] || '', answerSide: 'back' };
+    // Every part of the front is shown: a "|" in a prompt such as P(A|B)
+    // must not cut the question short (alternatives only matter when the
+    // front is typed as an answer in reverse).
+    return { ...base, prompt: card.front.join(' | '), answerGroups: [card.back], answerDisplay: card.back[0] || '', answerSide: 'back' };
   }
   if (kind === 'reverse') {
     return { ...base, prompt: card.back[0] || '', answerGroups: [card.front], answerDisplay: card.front[0] || '', answerSide: 'front' };

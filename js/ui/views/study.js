@@ -21,8 +21,8 @@ import { app } from '../../app.js';
 import { store } from '../../data/store.js';
 import { button } from './common.js';
 import { toast, sheet, confirmDialog, errorToast, menu, callout } from '../components.js';
-import { renderInto, answerHtml, livePreviewHtml, ensureMath, markdownToHtml, mediaUrl } from '../render.js';
-import { announce } from '../appearance.js';
+import { renderInto, answerHtml, livePreviewHtml, ensureMath, markdownToHtml, mediaUrl, resolveMedia } from '../render.js';
+import { announce, reducedMotion } from '../appearance.js';
 import { startViewport, keyboardLikelyOpen, viewportState } from '../viewport.js';
 import { TrialRecorder } from '../../study/trial.js';
 import { MODES } from '../../study/session.js';
@@ -562,7 +562,7 @@ class StudyScreen {
     if (this.phase === 'question') {
       if (!this.input.value.trim()) {
         announce('Type an answer first, or use Reveal.', { assertive: true });
-        this.input.animate?.([{ transform: 'translateX(0)' }, { transform: 'translateX(-4px)' }, { transform: 'translateX(4px)' }, { transform: 'translateX(0)' }], { duration: 180 });
+        this.shake();
         return;
       }
       this.enterArmed = !fromEnter || synthetic;
@@ -879,8 +879,15 @@ class StudyScreen {
       parts.push(h('div', { class: 'faint small' }, 'Type the correct answer once to reinforce it (this is not counted as recall).'));
     }
     replace(this.feedbackEl, h('section', { class: ['feedback', correct || overridden ? 'correct' : 'incorrect'], 'aria-label': 'Feedback' }, parts));
+    resolveMedia(this.feedbackEl, mediaFetcher);
     announce(`${verdict}. ${correct ? '' : `The answer is ${plainText(cur.content.answerDisplay)}.`} ${gradeName && !pending ? `Graded ${gradeName}.` : ''}`, { assertive: !correct });
-    requestAnimationFrame(() => this.feedbackEl.scrollIntoView({ block: 'nearest', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }));
+    requestAnimationFrame(() => this.feedbackEl.scrollIntoView({ block: 'nearest', behavior: reducedMotion() ? 'auto' : 'smooth' }));
+  }
+
+  /** Brief horizontal shake of the answer field (skipped for reduced motion). */
+  shake() {
+    if (reducedMotion()) return;
+    this.input.animate?.([{ transform: 'translateX(0)' }, { transform: 'translateX(-4px)' }, { transform: 'translateX(4px)' }, { transform: 'translateX(0)' }], { duration: 180 });
   }
 
   renderActions() {
@@ -957,7 +964,7 @@ class StudyScreen {
       ? text.split(';').length === cur.content.answerGroups.length && text.split(';').every((p, i) => matchAnswer(p.trim(), cur.content.answerGroups[i], opts).correct)
       : matchAnswer(text, cur.content.answerGroups[0], opts).correct;
     if (!ok) {
-      this.input.animate?.([{ transform: 'translateX(0)' }, { transform: 'translateX(-4px)' }, { transform: 'translateX(4px)' }, { transform: 'translateX(0)' }], { duration: 180 });
+      this.shake();
       announce('That does not match the correct answer yet.', { assertive: true });
       return;
     }

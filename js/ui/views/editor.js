@@ -123,7 +123,7 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
       renderOcclusionEditor();
     } else {
       frontLabel.textContent = 'Front';
-      frontHint.textContent = 'In “Back → Front” or “Both” decks this side is also typed as an answer.';
+      frontHint.textContent = 'In “Back → Front” or “Both” decks this side is also typed as an answer, and | separates accepted answers (type \\| for a literal pipe).';
       backLabel.textContent = 'Back';
       backHint.textContent = 'Separate accepted answers with | (type \\| for a literal pipe).';
     }
