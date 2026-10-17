@@ -66,8 +66,11 @@ export function planReview(ctx) {
   };
   const grading = gradeReview(enrichedTrial, baseline, gradingConfig);
   const usesManual = gradeMode === 'manual' || (gradeMode === 'research' && research?.arm === 'standard');
-  if (usesManual && ![1, 2, 3, 4].includes(manualRating)) throw new Error('Manual grading requires a rating');
-  const rating = usesManual ? manualRating : grading.grade;
+  // Self-grading applies only to answers the matcher accepted: a wrong
+  // answer is recorded as Again in every mode (use "Mark correct" to
+  // overrule the matcher).
+  if (usesManual && match.correct && ![1, 2, 3, 4].includes(manualRating)) throw new Error('Manual grading requires a rating');
+  const rating = usesManual && match.correct ? manualRating : usesManual ? 1 : grading.grade;
   const predictedR = retrievability(unit.state, now, params);
   const elapsedDays = elapsedDaysOf(unit, now);
   const wasNew = !unit.state || unit.state.state === State.New;
@@ -110,6 +113,9 @@ export function planReview(ctx) {
     },
     assistance: { hintShown: !!trial.assistance?.hintShown, revealed: !!trial.assistance?.revealed, solutionViewed: !!trial.assistance?.solutionViewed },
     modality: trial.modality || { kind: 'unknown', confidence: 0 },
+    // Prompt size, so the review can be re-graded from its own measurements
+    // (alias rescue / mark correct) with the same reading-time estimate.
+    promptStats: trial.prompt ? { words: trial.prompt.words || 0, mathTokens: trial.prompt.mathTokens || 0, images: trial.prompt.images || 0, chars: trial.prompt.chars || 0 } : null,
     grading: { ...grading, mode: usesManual ? 'manual' : 'auto', shadowGrade: usesManual ? grading.grade : null },
     rating,
     predictedR,
@@ -169,9 +175,16 @@ export function planReview(ctx) {
  * failed review's scheduling effect is replaced exactly once even if
  * later reviews exist.
  */
-export function planOverride({ eventId, now, deviceId, seq, target, kind, manualRating = null, unit, unitEvents, alias = null, studyDay, gradingConfig = DEFAULT_GRADING_CONFIG }) {
+export function planOverride({ eventId, now, deviceId, seq, target, kind, manualRating = null, unit, unitEvents, alias = null, studyDay, gradingConfig = DEFAULT_GRADING_CONFIG, baseline = null }) {
   const original = target.grading?.grade ?? target.rating;
-  const og = kind === 'manual' ? { grade: manualRating, reasons: ['MANUAL_GRADE'] } : overrideGrade(kind, original, gradingConfig);
+  let og = kind === 'manual' ? { grade: manualRating, reasons: ['MANUAL_GRADE'] } : overrideGrade(kind, original, gradingConfig);
+  if (kind === 'alias' || kind === 'correct') {
+    // Grade the rescued answer as a correct one from the measurements taken
+    // when it was typed (never the time spent on the feedback screen), so
+    // hesitation, hints and calibration rules still apply.
+    const regraded = regradeAsCorrect(target, baseline, gradingConfig);
+    if (regraded) og = { grade: regraded.grade, reasons: [og.reasons[0], ...regraded.reasons], explanation: regraded.explanation };
+  }
   const correction = {
     id: eventId,
     type: 'correction',
@@ -189,6 +202,7 @@ export function planOverride({ eventId, now, deviceId, seq, target, kind, manual
     newRating: og.grade,
     previousRating: target.rating,
     reasons: og.reasons,
+    explanation: og.explanation || null,
     alias,
     // The rescue uses the original pre-feedback measurements; the time
     // spent on the feedback screen is never treated as retrieval.
@@ -197,6 +211,29 @@ export function planOverride({ eventId, now, deviceId, seq, target, kind, manual
   if (target.type !== 'review') return { event: correction, unit };
   const replay = replayUnit([...unitEvents, correction]);
   return { event: correction, unit: { ...unit, state: replay.state, headEventId: replay.headEventId }, replay };
+}
+
+/**
+ * Re-grade a review as if its answer had been accepted, from the event's own
+ * recorded measurements. Returns null for events recorded before prompt
+ * statistics were stored (the override then falls back to Good).
+ */
+export function regradeAsCorrect(target, baseline, gradingConfig = DEFAULT_GRADING_CONFIG) {
+  const raw = target.grading?.measurements?.raw;
+  if (!raw || !target.promptStats) return null;
+  return gradeReview({
+    correct: true,
+    typoTolerated: false,
+    taskType: target.taskType || 'recall',
+    raw,
+    modality: target.modality || { kind: 'unknown', confidence: 0 },
+    prompt: target.promptStats,
+    assistance: target.assistance || {},
+    isWarmup: !!target.flags?.warmup,
+    editorOpened: !!target.flags?.editedDuringReview,
+    clockAnomaly: !!target.flags?.clockAnomaly,
+    history: { previousScheduled: target.prevUnitMeta?.lastScheduled || null },
+  }, baseline, gradingConfig);
 }
 
 /** Plan an undo (void) of a review; practice events have no schedule effect. */

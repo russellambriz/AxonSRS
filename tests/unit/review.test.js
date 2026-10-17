@@ -146,7 +146,10 @@ test('manual grading uses the chosen rating and keeps Axon’s grade as a shadow
   assert.equal(p.event.rating, 4);
   assert.equal(p.event.grading.mode, 'manual');
   assert.equal(p.event.grading.shadowGrade, 3);
-  assert.throws(() => review({ unit, card, deck, text: 'x', at: T0, gradeMode: 'manual' }));
+  assert.throws(() => review({ unit, card, deck, text: 'SO4^2-', at: T0, gradeMode: 'manual' }), /requires a rating/);
+  // A wrong answer is Again in manual mode too, whatever was chosen.
+  const wrong = review({ unit, card, deck, text: 'SO3^2-', at: T0, gradeMode: 'manual', manualRating: 4 });
+  assert.equal(wrong.event.rating, 1);
 });
 
 test('exposure events are typed separately and never carry schedule effects', () => {
@@ -194,4 +197,17 @@ test('a backwards device clock never makes a review unsaveable', () => {
   const b = review({ unit: a.unit, card, deck, text: 'SO4^2-', at: T0 - DAY });
   assert.equal(b.event.transition.clockClamped, true);
   assert.ok(b.unit.state.last_review >= a.unit.state.last_review);
+});
+
+test('alias rescue re-grades from the original measurements (hint ceiling still applies)', async () => {
+  const { DEFAULT_GRADING_CONFIG } = await import('../../js/core/fluency.js');
+  const deck = makeDeck({ answerMode: 'text' });
+  const card = makeCard({ answerMode: 'text', front: 'Largest planet', back: 'Jupiter' });
+  const [unit] = makeUnits(card, deck);
+  const failed = review({ unit, card, deck, text: 'Iuppiter', at: T0, eventId: 'h1' });
+  assert.ok(failed.event.promptStats, 'prompt size is recorded for re-grading');
+  failed.event.assistance.hintShown = true;
+  const rescue = planOverride({ eventId: 'o9', now: T0 + 4000, deviceId: 'dev-A', seq: 3, target: failed.event, kind: 'alias', unit: failed.unit, unitEvents: [failed.event], alias: 'Iuppiter', studyDay: '2026-01-05', gradingConfig: { ...DEFAULT_GRADING_CONFIG, hintCeiling: 'hard' } });
+  assert.equal(rescue.event.newRating, 2, 'a hinted rescue respects the Hard ceiling');
+  assert.ok(rescue.event.reasons.includes('ALIAS_RESCUE') && rescue.event.reasons.includes('HINT_CEILING'));
 });

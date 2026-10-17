@@ -602,7 +602,7 @@ class StudyScreen {
     cur.trial = trial;
     cur.match = match;
     cur.raw = raw;
-    if (cur.grade.mode === 'manual') {
+    if (cur.grade.mode === 'manual' && match.correct) {
       this.renderFeedback({ pending: true });
       this.setPhase('grading');
       return;
@@ -1008,7 +1008,8 @@ class StudyScreen {
         alias = cur.trial.responseText.trim();
         cardUpdate = this.cardWithAlias(app.cache.cards.get(cur.card.id), cur, alias);
       }
-      const plan = planOverride({ eventId: uuid(), now: Date.now(), deviceId: store.deviceId, seq: null, target, kind, unit, unitEvents, alias, studyDay: store.today(), gradingConfig: this.gradingConfig });
+      const baseline = await store.getBaseline(baselineKey(target.modality?.kind || 'unknown', target.taskType || 'recall'));
+      const plan = planOverride({ eventId: uuid(), now: Date.now(), deviceId: store.deviceId, seq: null, target, kind, unit, unitEvents, alias, studyDay: store.today(), gradingConfig: this.gradingConfig, baseline });
       // Remove the failure requeue; the rescued answer counts once.
       let session = this.session;
       if (kind === 'alias' || kind === 'correct') {

@@ -31,13 +31,13 @@ export const FUZZ_VERSION = 'axon-fuzz@1';
 export const SCHEDULER_VERSION = `${FSRS_LIBRARY} (FSRS-6) + ${FUZZ_VERSION}`;
 
 /** Automatic grading rules (Axon Retrieval Fluency). */
-export const GRADING_VERSION = 'axon-fluency@1.0.0';
+export const GRADING_VERSION = 'axon-fluency@1.1.0';
 
 /** Reading-time floor and warm-up heuristics. */
-export const READING_HEURISTIC_VERSION = 'axon-reading@1';
+export const READING_HEURISTIC_VERSION = 'axon-reading@2';
 
 /** Answer matching engine. */
-export const MATCHER_VERSION = 'axon-match@1.0.0';
+export const MATCHER_VERSION = 'axon-match@1.1.0';
 
 /** Library versions shown in Settings → About and README. */
 export const LIBRARIES = Object.freeze({

@@ -238,3 +238,17 @@ test('overrides: knew raises, guessed never Easy, alias rescue is Good', () => {
   assert.equal(overrideGrade('guessed', 3, mergeGradingConfig({ guessedGrade: 'again' })).grade, 1);
   assert.equal(overrideGrade('alias', 1).grade, 3);
 });
+
+test('voice answers stay voice even when a keyboard type is chosen in Settings', () => {
+  assert.equal(classifyModality({ textInputs: 1, voiceInputs: 1 }, 'physical').kind, 'voice');
+  assert.equal(classifyModality({ textInputs: 1, dictationInputs: 1 }, 'touch').kind, 'voice');
+  assert.equal(classifyModality({ textInputs: 6, keydownWithCode: 6 }, 'touch').kind, 'touch');
+});
+
+test('a prompt too long for the reading estimate makes timing unreliable instead of Hard', () => {
+  const long = readingFloor({ words: 50, mathTokens: 0, images: 0 });
+  assert.equal(long.reliable, true, '50 words fit within the cap');
+  assert.ok(long.ms <= DEFAULT_GRADING_CONFIG.reading.maxMs);
+  const tooLong = readingFloor({ words: 70, mathTokens: 0, images: 0 });
+  assert.equal(tooLong.reliable, false);
+});

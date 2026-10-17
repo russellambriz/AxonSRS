@@ -38,7 +38,7 @@ export const DEFAULT_GRADING_CONFIG = Object.freeze({
     msPerWord: 160,
     msPerMathToken: 120,
     msPerImage: 700,
-    maxMs: 4000,
+    maxMs: 10000,
     maxReliableWords: 60,
     maxReliableImages: 1,
   }),
@@ -104,7 +104,9 @@ export function readingFloor(stats, config = DEFAULT_GRADING_CONFIG) {
   const r = config.reading;
   if (!config.heuristicsEnabled) return { ms: 0, applied: false, reliable: true, version: r.version };
   const estimate = r.baseMs + stats.words * r.msPerWord + stats.mathTokens * r.msPerMathToken + stats.images * r.msPerImage;
-  const reliable = stats.words <= r.maxReliableWords && stats.images <= r.maxReliableImages && estimate <= r.maxMs * 1.5;
+  // Beyond the cap the estimate would be cut short, so a long prompt could
+  // look hesitant: treat it as unreliable (grading falls back to Good).
+  const reliable = stats.words <= r.maxReliableWords && stats.images <= r.maxReliableImages && estimate <= r.maxMs;
   return { ms: Math.round(Math.min(estimate, r.maxMs)), estimateMs: Math.round(estimate), applied: true, reliable, version: r.version };
 }
 
@@ -117,7 +119,10 @@ export function readingFloor(stats, config = DEFAULT_GRADING_CONFIG) {
  * Returns { kind, confidence, evidence } where kind may be 'unknown'.
  */
 export function classifyModality(signals = {}, override = null) {
-  if (override && override !== 'auto') {
+  // Speech is detected per review even when a keyboard type is chosen in
+  // Settings, so voice answers never enter a keyboard baseline.
+  const spoken = (signals.voiceInputs || 0) > 0 || (signals.dictationInputs || 0) > 0;
+  if (override && override !== 'auto' && !(spoken && override !== 'voice')) {
     return { kind: override, confidence: 1, source: 'override', evidence: ['user override'] };
   }
   const s = {
