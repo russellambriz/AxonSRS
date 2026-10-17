@@ -66,7 +66,7 @@ export const tests = [
         c.height = 12;
         c.getContext('2d').fillRect(0, 0, 12, 12);
         const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
-        return (await store.putMedia(blob, { name: 'sq.png' })).id;
+        return store.putMedia(blob, { name: 'sq.png' });
       });
       await seedDeck(page, { cards: [['What is P(A|B) called?', `conditional probability\n\n![diagram](axon-media:${mediaId})`]] });
       await startReview(page);

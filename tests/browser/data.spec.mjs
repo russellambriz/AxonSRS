@@ -28,7 +28,7 @@ async function addMedia(page) {
     c.height = 8;
     c.getContext('2d').fillRect(0, 0, 4, 4);
     const blob = await new Promise((r) => c.toBlob(r, 'image/png'));
-    return (await store.putMedia(blob, { name: 'dot.png' })).id;
+    return store.putMedia(blob, { name: 'dot.png' });
   });
 }
 
