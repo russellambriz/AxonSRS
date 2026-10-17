@@ -306,6 +306,12 @@ export async function openWithSafety(opts = {}) {
 }
 
 export async function writeSnapshot({ reason, dump, schemaVersion = DB_VERSION, keep = 3 }) {
+  // Snapshots can be downloaded, so credentials (a remembered Gist token or
+  // sync key) are never written into them.
+  if (dump && 'secrets' in dump) {
+    dump = { ...dump };
+    delete dump.secrets;
+  }
   const sdb = await openSnapshotDb();
   try {
     const id = `snap-${Date.now()}`;

@@ -54,6 +54,7 @@ export const tests = [
       await answerShown(page);
       await advance(page);
       const v1Events = await idbAll(page, 'events');
+      await inApp(page, ({ store }) => store.setSecret('gistToken', 'remembered-token-value'));
       // Ship a "new release" with DB_VERSION 2 and one extra migration that
       // rewrites every card record and adds an index.
       const config = readFileSync(join(ROOT, 'js/config.js'), 'utf8');
@@ -89,6 +90,8 @@ export const tests = [
       assert.ok(snap, 'snapshot taken before the upgrade');
       assert.equal(snap.dump.cards.length, 3);
       assert.equal(snap.dump.cards[0].migratedV2, undefined, 'snapshot holds the pre-upgrade records');
+      assert.equal(snap.dump.secrets, undefined, 'credentials are never written into a downloadable snapshot');
+      assert.equal(JSON.stringify(snap).includes('remembered-token-value'), false);
       // Rolling back to the old release must refuse to open (not wipe) v2 data.
       srv.overrides.clear();
       await page.goto(url);
