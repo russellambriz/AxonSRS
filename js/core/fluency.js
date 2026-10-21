@@ -26,8 +26,8 @@ import { median, mad, clamp } from './util.js';
 export const GRADE = Object.freeze({ again: 1, hard: 2, good: 3, easy: 4 });
 const GRADE_NAME = { 1: 'Again', 2: 'Hard', 3: 'Good', 4: 'Easy' };
 
-export const MODALITIES = Object.freeze(['physical', 'touch', 'voice', 'unknown']);
-export const MODALITY_LABELS = Object.freeze({ physical: 'Physical keyboard', touch: 'Touchscreen keyboard', voice: 'Voice', unknown: 'Unknown / other' });
+export const MODALITIES = Object.freeze(['physical', 'touch', 'voice', 'handwriting', 'unknown']);
+export const MODALITY_LABELS = Object.freeze({ physical: 'Physical keyboard', touch: 'Touchscreen keyboard', voice: 'Voice', handwriting: 'Handwriting (pen, likely)', unknown: 'Unknown / other' });
 
 export const DEFAULT_GRADING_CONFIG = Object.freeze({
   version: GRADING_VERSION,
@@ -59,6 +59,7 @@ export const DEFAULT_GRADING_CONFIG = Object.freeze({
     physical: Object.freeze({ latencyMs: 1800, latencyScale: 0.55, msPerEffort: 220, typingScale: 0.45 }),
     touch: Object.freeze({ latencyMs: 2300, latencyScale: 0.6, msPerEffort: 360, typingScale: 0.5 }),
     voice: Object.freeze({ latencyMs: 2000, latencyScale: 0.6, msPerEffort: 150, typingScale: 0.6 }),
+    handwriting: Object.freeze({ latencyMs: 2500, latencyScale: 0.65, msPerEffort: 550, typingScale: 0.6 }),
   }),
 });
 
@@ -119,10 +120,11 @@ export function readingFloor(stats, config = DEFAULT_GRADING_CONFIG) {
  * Returns { kind, confidence, evidence } where kind may be 'unknown'.
  */
 export function classifyModality(signals = {}, override = null) {
-  // Speech is detected per review even when a keyboard type is chosen in
-  // Settings, so voice answers never enter a keyboard baseline.
+  // Speech and handwriting are detected per review even when a keyboard
+  // type is chosen in Settings, so they never enter a keyboard baseline.
   const spoken = (signals.voiceInputs || 0) > 0 || (signals.dictationInputs || 0) > 0;
-  if (override && override !== 'auto' && !(spoken && override !== 'voice')) {
+  const written = (signals.handwritingInputs || 0) > 0;
+  if (override && override !== 'auto' && !(spoken && override !== 'voice') && !(written && override !== 'handwriting')) {
     return { kind: override, confidence: 1, source: 'override', evidence: ['user override'] };
   }
   const s = {
@@ -136,6 +138,7 @@ export function classifyModality(signals = {}, override = null) {
     finePointer: false,
     voiceInputs: 0,
     dictationInputs: 0,
+    handwritingInputs: 0,
     ...signals,
   };
   const evidence = [];
@@ -143,6 +146,14 @@ export function classifyModality(signals = {}, override = null) {
     const typed = s.textInputs - s.voiceInputs - s.dictationInputs;
     if (typed <= 1) return { kind: 'voice', confidence: s.voiceInputs > 0 ? 0.95 : 0.75, source: 'detected', evidence: ['speech input'] };
     return { kind: 'unknown', confidence: 0.3, source: 'detected', evidence: ['mixed speech and typing'] };
+  }
+  // Text that arrives without key presses right after a pen touched the
+  // field is most likely handwriting recognition (e.g. Scribble). It is
+  // an inference, so the confidence stays well below certain.
+  if (s.handwritingInputs > 0) {
+    const typed = s.textInputs - s.handwritingInputs;
+    if (typed <= 1) return { kind: 'handwriting', confidence: 0.7, source: 'detected', evidence: ['text inserted without key presses after pen input'] };
+    return { kind: 'unknown', confidence: 0.3, source: 'detected', evidence: ['mixed handwriting and typing'] };
   }
   const n = Math.max(1, s.textInputs);
   let physical = 0;
@@ -288,8 +299,9 @@ export function adjustMeasurements(trial, config = DEFAULT_GRADING_CONFIG) {
   if (Number.isFinite(latency) && latency < config.anticipatoryMs) flag('ANTICIPATORY');
   if (reading.applied && !reading.reliable) flag('READING_UNRELIABLE');
   const toolbarShare = (origins.toolbar || 0) / Math.max(1, raw.answerLength || 1);
-  const typingExcluded = !typingInformative || toolbarShare > 0.3 || (origins.composition || 0) > 0 || modality.kind === 'voice';
-  if (typingExcluded && typingInformative) excluded.push({ metric: 'typing', reason: toolbarShare > 0.3 ? 'TOOLBAR_HEAVY' : modality.kind === 'voice' ? 'VOICE' : 'IME_COMPOSITION' });
+  const handwritten = modality.kind === 'handwriting' || (origins.handwriting || 0) > 0;
+  const typingExcluded = !typingInformative || toolbarShare > 0.3 || (origins.composition || 0) > 0 || modality.kind === 'voice' || handwritten;
+  if (typingExcluded && typingInformative) excluded.push({ metric: 'typing', reason: toolbarShare > 0.3 ? 'TOOLBAR_HEAVY' : modality.kind === 'voice' ? 'VOICE' : handwritten ? 'HANDWRITING' : 'IME_COMPOSITION' });
   if (!typingInformative) excluded.push({ metric: 'typing', reason: 'ANSWER_TOO_SHORT_FOR_TYPING_SPEED' });
   return {
     reliable,
