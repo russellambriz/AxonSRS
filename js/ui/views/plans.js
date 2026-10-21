@@ -5,10 +5,22 @@ import { icon } from '../icons.js';
 import { app } from '../../app.js';
 import { store } from '../../data/store.js';
 import { page, button, checklist, kpi } from './common.js';
-import { sheet, toast, confirmDialog, callout, settingRow, errorToast } from '../components.js';
+import { sheet, toast, confirmDialog, callout, settingRow, errorToast, dataTable } from '../components.js';
 import { analyzeExamPlan } from '../../core/planner.js';
 import { addDays } from '../../core/time.js';
+import { pluralize } from '../../core/util.js';
 import { createSession } from '../../study/session.js';
+
+const TIMING_BASIS = {
+  scope: 'your own reviews of cards in this plan',
+  scheduled: 'your own reviews in all decks (too few in this plan yet)',
+  all: 'all your sessions, practice included (too few reviews yet)',
+  default: 'provisional defaults',
+};
+
+function topicName(t) {
+  return t.kind === 'tag' ? t.id : `${app.cache.decks.get(t.id)?.name || '(deleted deck)'} (untagged cards)`;
+}
 
 export async function view(outlet) {
   await app.cache.ensure();
@@ -22,23 +34,29 @@ export async function view(outlet) {
     }
     const tctx = app.timeCtx();
     replace(body, plans.sort((a, b) => a.examDate.localeCompare(b.examDate)).map((plan) => {
-      const a = analyzeExamPlan(plan, { units: [...app.cache.units.values()], cardsById: app.cache.cards, events, today: tctx.today, now: tctx.now, params: store.paramsFor(null) });
+      const a = analyzeExamPlan(plan, { units: [...app.cache.units.values()], cardsById: app.cache.cards, events, today: tctx.today, now: tctx.now, timeZone: tctx.timeZone, rolloverHour: tctx.rolloverHour, params: store.paramsFor(null), paramsFor: (deckId) => store.paramsFor(app.cache.decks.get(deckId)) });
+      const topics = a.weakTopics.slice(0, 3).map(topicName).join(', ');
       return h('section', { class: 'panel stack' },
         h('div', { class: 'row between' }, h('div', {}, h('h2', {}, plan.name || 'Exam'), h('div', { class: 'faint small' }, `${plan.examDate} · ${a.daysLeft} day${a.daysLeft === 1 ? '' : 's'} left · ${a.totalUnits} study units`)),
           h('div', { class: 'row tight' }, button('Practise', { kind: 'primary', iconName: 'play', onclick: async () => { try { const s = await createSession({ mode: 'exam', plan, deckIds: plan.deckIds, limit: 30 }); if (!s.queue.length) return toast('Nothing to practise in this plan yet'); app.navigate(`/study/session/${s.id}`); } catch (err) { errorToast(err); } } }), button('Edit', { onclick: () => editPlan(plan, render) }), button('Delete', { kind: 'ghost', onclick: async () => { if (await confirmDialog({ title: 'Delete plan?', message: 'Only the plan is removed; cards and history are unaffected.', confirmLabel: 'Delete', danger: true })) { await store.deletePlan(plan.id); render(); } } }))),
         h('div', { class: 'kpis' },
           kpi('Coverage', percent(a.coverage), `target ${percent(a.targetCoverage)} · ${a.unintroduced} not yet introduced`),
           kpi('Observed recall', a.observedRecall.accuracy != null ? percent(a.observedRecall.accuracy) : '—', `${a.observedRecall.n} first attempts in scope`),
-          kpi('Predicted recall now', a.predictedRecallNow != null ? percent(a.predictedRecallNow) : '—', 'model estimate'),
-          kpi('Weak topics', String(a.weak), 'low retrievability, leeches or recent misses')),
+          kpi('Predicted recall now', a.predictedRecallNow != null ? percent(a.predictedRecallNow) : '—', a.practicedUnits ? 'model estimate · excludes recent practice' : 'model estimate'),
+          kpi('Weak topics', String(a.weakTopics.length), a.weakTopics.length ? `${topics}${a.weakTopics.length > 3 ? ' …' : ''} · ${pluralize(a.weak, 'weak card')}` : `${pluralize(a.weak, 'weak card')} (low retrievability, leeches or recent misses)`)),
+        a.weakTopics.length ? h('div', { class: 'stack', style: { gap: '4px' } }, h('h3', {}, 'Weak topics'),
+          dataTable(['Topic', 'Weak cards', 'Studied', 'Not yet introduced'], a.weakTopics.slice(0, 8).map((t) => [topicName(t), `${t.weak} (${percent(t.weak / t.studied)})`, String(t.studied), String(t.units - t.studied)]), { caption: 'Weak topics in this plan' }),
+          h('p', { class: 'faint tiny' }, 'Topics are card tags (the deck for untagged cards). A topic is weak when at least a fifth of its studied cards have low predicted recall, are leeches or were missed recently.')) : null,
         h('div', { class: 'timing' },
           h('span', {}, 'Estimated remaining work ', h('b', {}, `${Math.round(a.estimatedMinutes)} min`)),
           h('span', {}, 'Budget until exam ', h('b', {}, `${Math.round(a.budgetMinutes)} min`)),
           h('span', {}, 'Needed per day ', h('b', {}, `${Math.round(a.minutesPerDayNeeded)} min`)),
           h('span', {}, 'New per day ', h('b', {}, String(a.newPerDayNeeded)))),
+        h('p', { class: 'faint tiny' }, `Work counted: ${pluralize(a.toIntroduce, 'new card')}, about ${pluralize(Math.round(a.expectedReviews), 'review')} the schedule asks for before the exam (repeat reviews, follow-ups of new cards and an allowance for lapses) and one practice of each weak card. Time per card, including feedback and re-asks, comes from ${TIMING_BASIS[a.timing.review.basis]}. More misses than usual mean more work.`),
         a.likelyInsufficient ? callout('warning', `At ${plan.dailyMinutes} min/day the budget is unlikely to cover the planned work. Consider more time per day, a lower target coverage, or prioritising weak topics.`) : callout('success', 'The daily budget looks sufficient for the planned work.'),
         a.provisional ? h('p', { class: 'faint tiny' }, 'Time estimates are provisional until Axon has enough of your own review timings.') : null,
-        a.predictedRecallAtExamWithoutStudy != null ? h('p', { class: 'faint tiny' }, `If you stopped studying today, the model predicts about ${percent(a.predictedRecallAtExamWithoutStudy)} average recall on exam day. This is an estimate, not a guarantee of readiness or a score.`) : null);
+        a.predictedRecallAtExamWithoutStudy != null ? h('p', { class: 'faint tiny' }, `If you stopped studying today, the model predicts about ${percent(a.predictedRecallAtExamWithoutStudy)} average recall on exam day. This is an estimate, not a guarantee of readiness or a score.`) : null,
+        a.practicedUnits ? h('p', { class: 'faint tiny' }, `${pluralize(a.practicedUnits, 'card')} in this plan had optional practice since the last scheduled review. The memory model has not incorporated that practice, so predicted recall may be incomplete for them.`) : null);
     }));
   }
   await render();
