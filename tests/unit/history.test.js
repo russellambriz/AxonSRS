@@ -5,7 +5,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeDeck, makeCard, makeUnits, review, T0, DAY, MIN } from './helpers.js';
-import { replayUnit, orderEvents, detectConcurrent, effectiveHistory, statesEqual, timestampIssues, resolveCorrections, setReplayPolicy, clockConflicts, exposureSince, siblingExposureTimes } from '../../js/core/history.js';
+import { replayUnit, orderEvents, detectConcurrent, effectiveHistory, statesEqual, timestampIssues, resolveCorrections, setReplayPolicy, clockConflicts, exposureSince, siblingExposureTimes, CLOCK_EVENTS_LISTED } from '../../js/core/history.js';
 import { schedulerParams, applyRating } from '../../js/core/scheduler.js';
 
 function chain() {
@@ -109,6 +109,11 @@ test('incoming events with implausible timestamps are flagged for reconciliation
   assert.equal(future.id, 'clock:future-timestamp:dev-C:f1', 'stable id, so a repeated merge does not duplicate it');
   assert.deepEqual(clockConflicts([], { known, now }), []);
   assert.deepEqual(clockConflicts(known, { now }), [], 'plausible history raises nothing');
+  // A long-wrong clock is one bounded entry, with the full count.
+  const many = Array.from({ length: CLOCK_EVENTS_LISTED + 100 }, (_, i) => ({ id: `m${String(i).padStart(4, '0')}`, type: 'review', ts: now + DAY + i, deviceId: 'dev-G', seq: i + 1, unitId: 'u6', rating: 3 }));
+  const [big] = clockConflicts(many, { now });
+  assert.equal(big.total, many.length);
+  assert.equal(big.events.length, CLOCK_EVENTS_LISTED);
 });
 
 test('exposure since the last review is derived from every device’s events', () => {

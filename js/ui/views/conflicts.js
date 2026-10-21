@@ -57,7 +57,9 @@ export async function view(outlet) {
       if (c.kind === 'clock') {
         const [title, text] = CLOCK_ISSUES[c.issue] || ['Implausible timestamps', () => ''];
         const reviews = c.events.filter((e) => e.type === 'review');
-        const n = c.events.length;
+        const n = c.total ?? c.events.length;
+        // Very long runs are only partly listed; they can be kept, not discounted here.
+        const partial = n > c.events.length;
         return h('section', { class: 'panel stack' }, h('h3', {}, title),
           h('p', { class: 'muted small' }, `${n} event${n === 1 ? '' : 's'} from ${c.deviceId === store.deviceId ? 'this device' : 'another device'}. ${text(n === 1)}`),
           callout('info', 'Suspicious events are kept in your history and counted in time order; a review is never replayed before the review it was based on. Keep them as they are, or stop counting the suspicious reviews in scheduling (their records stay in the history).'),
@@ -65,9 +67,9 @@ export async function view(outlet) {
             const card = app.cache.cards.get(e.cardId);
             return h('tr', {}, h('td', {}, formatDate(e.ts, { dateStyle: 'medium', timeStyle: 'short' })), h('td', { class: 'small' }, card ? valueText(card.front[0]) : '—'), h('td', {}, e.type), h('td', {}, RATING_LABELS[e.rating] || ''));
           })))),
-          n > 10 ? h('p', { class: 'faint small' }, `and ${n - 10} more`) : null,
+          n > 10 ? h('p', { class: 'faint small' }, `and ${n - 10} more${partial ? '. Too many to stop counting one by one here: they are kept.' : ''}`) : null,
           h('div', { class: 'row' }, button(n === 1 ? 'Keep it' : 'Keep them', { kind: 'primary', onclick: () => resolveClock(c, false) }),
-            reviews.length ? button(`Don’t count ${reviews.length === 1 ? 'this review' : `these ${reviews.length} reviews`}`, { onclick: () => resolveClock(c, true) }) : null));
+            reviews.length && !partial ? button(`Don’t count ${reviews.length === 1 ? 'this review' : `these ${reviews.length} reviews`}`, { onclick: () => resolveClock(c, true) }) : null));
       }
       return null;
     }));

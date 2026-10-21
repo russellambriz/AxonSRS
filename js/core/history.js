@@ -36,6 +36,7 @@ import { SCHEDULER_VERSION } from '../config.js';
 /** Events that change FSRS state when replayed. 'reset' returns a unit to New. */
 export const SCHEDULING_TYPES = new Set(['review', 'reset']);
 export const CLOCK_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
+export const CLOCK_EVENTS_LISTED = 500;
 
 let recomputeOtherVersions = false;
 
@@ -272,7 +273,8 @@ export function timestampIssues(event, { now = Date.now(), parent = null, previo
  * before them, or with a clock jump during the answer. The events are never
  * dropped: they are kept and replayed as usual (with causal repair), and the
  * entry lets the user keep them or stop counting the suspicious reviews.
- * One entry per issue and device.
+ * One entry per issue and device, listing at most CLOCK_EVENTS_LISTED
+ * events (with the total), so a long-wrong clock cannot bloat the store.
  * @param {object[]} incoming events new to this device
  * @param {{ known?: object[], now?: number }} opts events already here; this device's clock
  */
@@ -316,7 +318,8 @@ export function clockConflicts(incoming, { known = [], now = Date.now() } = {}) 
       recordId: events[0].id,
       deviceId,
       detectedAt: now,
-      events: events.map((e) => ({ id: e.id, type: e.type, ts: e.ts, unitId: e.unitId || null, cardId: e.cardId || null, rating: e.rating ?? null, correct: e.response?.correct ?? null })),
+      total: events.length,
+      events: events.slice(0, CLOCK_EVENTS_LISTED).map((e) => ({ id: e.id, type: e.type, ts: e.ts, unitId: e.unitId || null, cardId: e.cardId || null, rating: e.rating ?? null, correct: e.response?.correct ?? null })),
     };
   });
 }
