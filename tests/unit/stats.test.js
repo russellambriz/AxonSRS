@@ -5,6 +5,7 @@ import assert from 'node:assert/strict';
 import {
   answerClass, correctionIndex, dailyActivity, currentStreak, longestStreak, accuracySeries,
   summary, eventualSuccess, retentionCalibration, forecast, exposureBreakdown, unitHistory, heatmapLevels, isLeech,
+  outcome, effectiveRetrievals, retractActivity, latencySeries, selfRatingAnalysis, recentWeeks, deckTrends,
 } from '../../js/core/stats.js';
 import { durationModel, estimateSessionMinutes, catchUpPlan, analyzeExamPlan, PROVISIONAL_SECONDS, MIN_SAMPLES_FOR_ESTIMATE } from '../../js/core/planner.js';
 import { assignArm, createStudy, comparisonReport, deidentifiedRows, toCsv } from '../../js/core/research.js';
@@ -212,6 +213,118 @@ test('de-identified export contains no content, answers or raw ids', () => {
   assert.match(csv, /latencyMs/);
   assert.equal(deidentifiedRows([e], { salt: 'fixed' })[0].event, rows[0].event, 'stable within one export salt');
   assert.notEqual(deidentifiedRows([e], { salt: 'other' })[0].event, rows[0].event);
+});
+
+const corrOf = (id, targetId, kind, reason, at) => ({ id, type: 'correction', kind, reason, targetId, newRating: kind === 'override' ? 3 : undefined, ts: at, deviceId: 'dev', seq: 1000 + n++ });
+
+test('a rescued answer counts as correct in every accuracy figure; a guess, a hint or a reveal is not independent recall', () => {
+  const rescued = ev({ unitId: 'ra', response: { correct: false } });
+  const guessed = ev({ unitId: 'rb' });
+  const revealed = ev({ unitId: 'rc', response: { correct: false }, assistance: { revealed: true } });
+  const hinted = ev({ unitId: 'rd', response: { correct: false }, assistance: { hintShown: true } });
+  const plain = ev({ unitId: 're' });
+  const events = [rescued, guessed, revealed, hinted, plain,
+    corrOf('c1', rescued.id, 'override', 'alias', T0 + DAY), corrOf('c2', guessed.id, 'override', 'guessed', T0 + DAY),
+    corrOf('c3', revealed.id, 'override', 'correct', T0 + DAY), corrOf('c4', hinted.id, 'override', 'alias', T0 + DAY)];
+  const corr = correctionIndex(events);
+  assert.deepEqual(outcome(rescued, corr), { cls: 'overridden', correct: true, independent: true, rescued: true });
+  assert.equal(outcome(guessed, corr).independent, false, '“I guessed” is not recall');
+  assert.equal(outcome(revealed, corr).correct, false, 'a revealed answer marked correct is still not recalled');
+  assert.deepEqual([outcome(hinted, corr).correct, outcome(hinted, corr).independent], [true, false]);
+  const [day] = accuracySeries(events);
+  assert.deepEqual([day.n, day.independentCorrect, day.rescued, day.overridden, day.revealed], [5, 2, 1, 3, 1]);
+  assert.equal(summary(events, [], { today: '2026-01-05', now: T0, params }).firstAttemptAccuracy.p, 2 / 5);
+  assert.equal(eventualSuccess(events).firstAttempt, 4 / 5, 'within sessions the rescue is a first-try success');
+});
+
+test('undone reviews and practice count nowhere: today, study time, activity, streaks, eventual success and observed recall', () => {
+  const before = ev({ unitId: 'va', studyDay: '2026-01-04', activeMs: 3000 });
+  const undone = ev({ unitId: 'vb', activeMs: 5000 });
+  const undonePractice = ev({ unitId: 'vc', type: 'practice', mode: 'cram', activeMs: 7000 });
+  const kept = ev({ unitId: 'vd', activeMs: 2000 });
+  const voids = [corrOf('x1', undone.id, 'void', 'undo', T0 + 60000), corrOf('x2', undonePractice.id, 'void', 'undo', T0 + 60000)];
+  const events = [before, undone, undonePractice, kept, ...voids];
+  const s = summary(events, [], { today: '2026-01-05', now: T0, params });
+  assert.deepEqual([s.reviewedToday, s.practicedToday, s.studyMsToday, s.studyMsTotal], [1, 0, 2000, 5000]);
+  assert.equal(effectiveRetrievals(events).length, 2);
+  const act = dailyActivity(events).get('2026-01-05');
+  assert.deepEqual([act.reviews, act.practice, act.retrievals, act.studyMs], [1, 0, 1, 2000]);
+  assert.equal(eventualSuccess(events).n, 2, 'undone answers are not session attempts');
+
+  // Incremental cache: the review was counted before its undo arrived.
+  const onlyToday = ev({ unitId: 've', activeMs: 4000 });
+  const days = dailyActivity([before, onlyToday]);
+  assert.equal(currentStreak(days, '2026-01-05'), 2);
+  dailyActivity([corrOf('x3', onlyToday.id, 'void', 'undo', T0 + 90000)], days);
+  retractActivity(days, [onlyToday]);
+  assert.deepEqual([days.get('2026-01-05').retrievals, days.get('2026-01-05').studyMs], [0, 0]);
+  assert.equal(currentStreak(days, '2026-01-05'), 1, 'a day whose only review was undone was not studied');
+  assert.equal(longestStreak(days), 1);
+  assert.equal(currentStreak(dailyActivity([before, ev({ type: 'copy', studyDay: '2026-01-05' })]), '2026-01-06'), 0, 'copying a correction is not studying');
+});
+
+test('retrieval latency: average and median, and per week over time', () => {
+  const lat = (ms, studyDay, adjusted = ms / 2) => ev({ studyDay, grading: { measurements: { raw: { latencyMs: ms }, adjusted: { latencyMs: adjusted } } } });
+  const events = [lat(1000, '2026-01-05'), lat(2000, '2026-01-06'), lat(6000, '2026-01-07'), lat(4000, '2026-01-12'), lat(9000, '2026-01-12')];
+  events.push(corrOf('v9', events[4].id, 'void', 'undo', T0 + DAY));
+  const s = summary(events, [], { today: '2026-01-12', now: T0, params });
+  assert.equal(s.meanLatencyMs, 3250);
+  assert.equal(s.medianLatencyMs, 3000);
+  assert.equal(s.meanAdjustedLatencyMs, 1625);
+  const weeks = latencySeries(events);
+  assert.deepEqual(weeks.map((w) => [w.key, w.n, w.meanMs, w.medianMs]), [['2026-01-05', 3, 3000, 2000], ['2026-01-12', 1, 4000, 4000]]);
+});
+
+test('confidence self-ratings are compared with correctness and the automatic grade; the last rating counts', () => {
+  const rated = (correct, grade, confidence) => ev({ unitId: `sr${n}`, response: { correct }, grading: { grade, confidence } });
+  const a = rated(true, 4, 0.9);
+  const b = rated(true, 3, 0.7);
+  const c = rated(false, 1, 0.8);
+  const d = rated(false, 1, 0.8);
+  const rating = (targetId, value, ts) => ({ id: `r${n++}`, type: 'self-rating', targetId, value, ts, deviceId: 'dev', seq: n });
+  const events = [a, b, c, d, rating(a.id, 3, T0 + 10), rating(a.id, 5, T0 + 20), rating(b.id, 4, T0 + 10), rating(c.id, 2, T0 + 10), rating(d.id, 5, T0 + 10), rating('missing', 4, T0), rating(b.id, 9, T0 + 30),
+    corrOf('cd', c.id, 'override', 'correct', T0 + 40), corrOf('vd', d.id, 'void', 'undo', T0 + 40)];
+  const r = selfRatingAnalysis(events);
+  assert.equal(r.n, 3, 'unknown targets, invalid values and undone answers are left out');
+  const five = r.levels.find((l) => l.value === 5);
+  assert.deepEqual([five.n, five.correct, five.meanGrade, five.meanConfidence], [1, 1, 4, 0.9], 'a later rating replaces an earlier one');
+  const two = r.levels.find((l) => l.value === 2);
+  assert.deepEqual([two.n, two.correct, two.meanGrade], [1, 1, 3], 'a rescued answer counts as correct, with its re-grade');
+  assert.ok(two.accuracy.low < 1);
+  assert.deepEqual(r.byGrade.map((g) => [g.grade, g.n, g.meanRating]), [[1, 0, null], [2, 0, null], [3, 2, 3], [4, 1, 5]]);
+  assert.equal(r.meanRatingCorrect, 11 / 3);
+  assert.equal(r.meanRatingIncorrect, null);
+});
+
+test('de-identified export includes self-ratings and corrections linked to their answer by hashed id', () => {
+  const answer = ev({ type: 'practice', mode: 'cram', id: 'secret-answer' });
+  const rows = deidentifiedRows([answer, { id: 'sr-secret', type: 'self-rating', targetId: answer.id, value: 4, unitId: 'u1', cardId: 'c1', deckId: 'd1', studyDay: '2026-01-05', ts: T0 }, corrOf('k-secret', answer.id, 'override', 'alias', T0)], { salt: 'fixed' });
+  assert.equal(rows.length, 3);
+  const [a, sr, k] = rows;
+  assert.deepEqual([sr.type, sr.selfRating, sr.targetType, sr.target], ['self-rating', 4, 'practice', a.event]);
+  assert.deepEqual([k.correctionReason, k.targetType, k.target, k.selfRating], ['alias', 'practice', a.event, null]);
+  assert.equal(a.target, null);
+  assert.equal(toCsv(rows).includes('secret'), false);
+});
+
+
+
+
+
+
+test('deck trends cover exactly the last calendar weeks', () => {
+  assert.deepEqual(recentWeeks('2026-01-07', 3), ['2025-12-22', '2025-12-29', '2026-01-05']);
+  const events = [ev({ studyDay: '2025-12-21' }), ev({ studyDay: '2025-12-22' }), ev({ studyDay: '2026-01-07', response: { correct: false } })];
+  const rows = deckTrends(events, { today: '2026-01-07', weeks: 3 }).get('d1');
+  assert.deepEqual(rows.map((r) => [r.week, r.n, r.correct]), [['2025-12-22', 1, 1], ['2026-01-05', 1, 0]]);
+});
+
+test('predicted recall is flagged as incomplete for units practised since their last scheduled review', () => {
+  const state = { state: State.Review, due: T0 + 5 * DAY, stability: 20, difficulty: 5, lapses: 0, reps: 3, last_review: T0 - DAY, elapsed_days: 1, scheduled_days: 6, learning_steps: 0 };
+  const units = [{ id: 'p1', active: true, state, practiceSinceLast: true }, { id: 'p2', active: true, state }, { id: 'p3', active: true, state: null, practiceSinceLast: true }];
+  const s = summary([ev({ type: 'practice', mode: 'cram' })], units, { today: '2026-01-05', now: T0, params });
+  assert.deepEqual([s.predictedRecallUnits, s.practicedUnits, s.practiceSinceModel], [2, 1, true]);
+  assert.equal(summary([ev({ type: 'practice', mode: 'cram' })], [units[1]], { today: '2026-01-05', now: T0, params }).practiceSinceModel, false, 'old practice already followed by a scheduled review does not count');
 });
 
 function fakeClock() {
