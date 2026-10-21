@@ -12,8 +12,49 @@ import { registerServiceWorker } from './ui/pwa.js';
 import { applyAppearance } from './ui/appearance.js';
 import { routes, notFound } from './ui/routes.js';
 import { renderFatal } from './ui/views/recovery.js';
-import { toast } from './ui/components.js';
+import { toast, errorToast, sheet } from './ui/components.js';
+import { h } from './ui/dom.js';
 import { setAllowRemoteImages } from './ui/render.js';
+
+/**
+ * The bundled scheduler differs from the one that produced the stored
+ * schedules. Nothing was recomputed; the user decides (Spec: never
+ * silently change scheduling behaviour when migrating algorithms).
+ */
+function schedulerNotice(change) {
+  toast('Axon’s scheduling engine was updated. Your existing schedules were not changed.', { timeout: 0, action: { label: 'Options', run: () => schedulerOptions(change) } });
+}
+
+async function schedulerOptions(change) {
+  const choice = await sheet({
+    title: 'Scheduling engine updated',
+    content: h('div', { class: 'stack' },
+      h('p', {}, `New reviews are scheduled with ${change.to}. Your existing schedules come from ${change.from} and have not been changed: past reviews keep the intervals they were given.`),
+      h('p', { class: 'muted' }, 'You can instead rebuild every schedule by replaying your whole review history through the new engine, which may move due dates. A snapshot is taken first, so you can undo it (also later, from Settings → Data & backup → Local snapshots).')),
+    footer: (close) => [
+      h('button', { class: 'btn', onclick: () => close(null) }, 'Decide later'),
+      h('button', { class: 'btn', onclick: () => close('keep') }, 'Keep current schedules'),
+      h('button', { class: 'btn primary', onclick: () => close('rebuild') }, 'Rebuild schedules'),
+    ],
+  }).done;
+  try {
+    if (choice === 'keep') {
+      await store.keepSchedules();
+      toast('Your current schedules are kept');
+    } else if (choice === 'rebuild') {
+      const { count, snapshotId } = await store.rebuildForScheduler();
+      await app.cache.load();
+      toast(`Rebuilt ${count} schedule${count === 1 ? '' : 's'} with the new engine`, { timeout: 15000, action: { label: 'Undo', run: async () => {
+        await store.restoreSnapshot(snapshotId);
+        await store.checkScheduler();
+        await app.cache.load();
+        toast('Schedules restored as they were');
+      } } });
+    }
+  } catch (err) {
+    errorToast(err);
+  }
+}
 
 async function boot() {
   const root = document.getElementById('app');
@@ -69,6 +110,7 @@ async function boot() {
   app.router.start();
   shell.refreshCounts();
   startViewport();
+  if (store.schedulerChange) schedulerNotice(store.schedulerChange);
 
   await app.sync.loadCredentials();
   const autoSync = () => {

@@ -1,12 +1,12 @@
 // Spec 17.15–17.17: concurrent same-card reviews from offline devices,
 // deterministic reconstruction from merged history, clock-skew ordering,
-// suspicious clocks kept for reconciliation and
+// suspicious clocks kept for reconciliation, scheduler-version changes,
 // cross-device practice exposure.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeDeck, makeCard, makeUnits, review, T0, DAY, MIN } from './helpers.js';
-import { replayUnit, orderEvents, detectConcurrent, effectiveHistory, statesEqual, timestampIssues, resolveCorrections, clockConflicts, exposureSince, siblingExposureTimes } from '../../js/core/history.js';
-import { schedulerParams } from '../../js/core/scheduler.js';
+import { replayUnit, orderEvents, detectConcurrent, effectiveHistory, statesEqual, timestampIssues, resolveCorrections, setReplayPolicy, clockConflicts, exposureSince, siblingExposureTimes } from '../../js/core/history.js';
+import { schedulerParams, applyRating } from '../../js/core/scheduler.js';
 
 function chain() {
   const deck = makeDeck();
@@ -142,6 +142,35 @@ test('corrections: last override wins, void/restore toggles', () => {
   const h = effectiveHistory([{ id: 't', type: 'review', rating: 1, ts: 0, deviceId: 'a', seq: 0, params: schedulerParams() }, { id: '1', type: 'correction', kind: 'override', targetId: 't', newRating: 4, ts: 1, deviceId: 'a', seq: 1 }]);
   assert.equal(h.applied[0].rating, 4);
   assert.ok(h.applied[0].overridden);
+});
+
+test('reviews from another scheduler version keep their recorded results unless a rebuild was chosen', () => {
+  const { deck, card, a, b } = chain();
+  const c = review({ unit: b.unit, card, deck, text: 'SO4^2-', at: T0 + 3 * DAY, eventId: 'c' });
+  // Pretend a and b were scheduled by an older engine that gave b a 40-day interval.
+  const old = (e, nextState) => ({ ...e, params: { ...e.params, version: 'ts-fsrs@4 (FSRS-5) + axon-fuzz@0' }, nextState });
+  const bNext = { ...b.event.nextState, due: b.event.ts + 40 * DAY, scheduled_days: 40 };
+  const oldA = old(a.event, a.event.nextState);
+  const oldB = old(b.event, bNext);
+  const kept = replayUnit([oldA, oldB]);
+  assert.deepEqual(kept.state, bNext, 'not silently recomputed with the bundled engine');
+  assert.deepEqual(kept.recomputed, []);
+  assert.ok(kept.steps.every((s) => s.recorded));
+  // A newer review from the bundled engine replays on top of the recorded state.
+  const newer = { ...c.event, prevState: bNext };
+  assert.ok(statesEqual(replayUnit([oldA, oldB, newer]).state, applyRating(bNext, c.event.rating, c.event.ts, c.event.params, 'c').state));
+  // A correction changes b's input, so b must be recomputed (and is reported).
+  const fix = { id: 'fx', type: 'correction', kind: 'override', targetId: 'b', newRating: 2, ts: T0 + DAY, deviceId: 'dev-A', seq: 9, unitId: b.event.unitId };
+  const corrected = replayUnit([oldA, oldB, fix]);
+  assert.deepEqual(corrected.recomputed, ['b']);
+  // After an explicit rebuild everything is recomputed with the bundled engine.
+  setReplayPolicy({ recompute: true });
+  try {
+    const rebuilt = replayUnit([oldA, oldB]);
+    assert.ok(statesEqual(rebuilt.state, b.unit.state));
+  } finally {
+    setReplayPolicy({ recompute: false });
+  }
 });
 
 test('reset events restart a unit as new without deleting history', () => {

@@ -8,14 +8,14 @@
  * undone, and leave tombstones so they propagate through sync.
  */
 
-import { DB_VERSION, APP_VERSION } from '../config.js';
+import { DB_VERSION, APP_VERSION, SCHEDULER_VERSION } from '../config.js';
 import { openWithSafety, transaction, StorageError, dumpDatabase, writeSnapshot, listSnapshots, readSnapshot, deleteSnapshot, STORES } from './db.js';
 import { DEFAULT_GLOBAL_SETTINGS, DEFAULT_DEVICE_SETTINGS, mergeSettings } from './settings.js';
 import { uuid, sha256Hex, bytesToBase64, base64ToBytes } from '../core/util.js';
 import { createDeck, createCard, unitKeys, unitId, DEFAULT_DECK_SETTINGS } from '../core/model.js';
 import { stamp, revisionFor } from '../core/sync/versioning.js';
 import { mergeDatasets, emptyDataset } from '../core/sync/merge.js';
-import { replayUnit, statesEqual, lastScheduledFrom, lastReviewTs, siblingExposureTimes, exposureSince, clockConflicts } from '../core/history.js';
+import { replayUnit, statesEqual, setReplayPolicy, lastScheduledFrom, lastReviewTs, siblingExposureTimes, exposureSince, clockConflicts } from '../core/history.js';
 import { createBaseline, addSample, removeSample, mergeBaselines } from '../core/fluency.js';
 import { studyDay, systemTimeZone } from '../core/time.js';
 import { schedulerParams } from '../core/scheduler.js';
@@ -45,6 +45,7 @@ export class AxonStore {
     this.listeners = new Set();
     this.channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('axon-data') : null;
     this.upgradeInfo = null;
+    this.schedulerChange = null;
     if (this.channel) {
       this.channel.onmessage = (e) => {
         if (e.data?.origin !== this.instanceId) this.emit(e.data.type, { ...e.data.detail, remote: true }, false);
@@ -74,8 +75,48 @@ export class AxonStore {
       await t.put('meta', { key: 'lastOpenedApp', value: APP_VERSION, at: Date.now() });
     });
     await this.loadSettings();
+    await this.checkScheduler().catch((err) => console.warn('Scheduler version check failed', err));
     this.cleanTrash().catch(() => {});
     return this;
+  }
+
+  /**
+   * Compare the scheduler that produced this device's stored schedules
+   * (recorded in device settings; on first run, the newest review's own
+   * version) with the bundled one. A change is never applied to past
+   * reviews automatically: `schedulerChange` is set so the app can explain
+   * it and let the user keep the schedules or rebuild them (reversibly).
+   */
+  async checkScheduler() {
+    let version = this.device.scheduler?.version || null;
+    if (!version) {
+      const [last] = await this.tx(['events'], 'readonly', (t) => t.lastFromIndex('events', 'ts', 1, (e) => e.type === 'review' && !!e.params?.version));
+      version = last?.params.version || SCHEDULER_VERSION;
+      if (version === SCHEDULER_VERSION) await this.setDevice({ scheduler: { version, at: Date.now() } });
+    }
+    this.schedulerChange = version === SCHEDULER_VERSION ? null : { from: version, to: SCHEDULER_VERSION };
+    return this.schedulerChange;
+  }
+
+  /** Keep the stored schedules: past reviews keep their recorded results. */
+  async keepSchedules() {
+    await this.setDevice({ scheduler: { version: SCHEDULER_VERSION, at: Date.now(), keptFrom: this.schedulerChange?.from || null } });
+    this.schedulerChange = null;
+  }
+
+  /**
+   * Rebuild every schedule by replaying the whole review history through
+   * the bundled scheduler, after a snapshot (restoring it undoes this,
+   * including the choice itself, which lives in device settings).
+   */
+  async rebuildForScheduler() {
+    const from = this.schedulerChange?.from || this.device.scheduler?.version || null;
+    const snapshotId = await this.snapshot(`before rebuilding schedules with ${SCHEDULER_VERSION}`);
+    if (!snapshotId) throw new StorageError('A snapshot could not be taken first, so nothing was changed.', 'snapshot');
+    await this.setDevice({ scheduler: { version: SCHEDULER_VERSION, at: Date.now(), recompute: true, rebuiltFrom: from, snapshotId } });
+    const count = await this.rebuildSchedules();
+    this.schedulerChange = null;
+    return { count, snapshotId };
   }
 
   on(fn) {
@@ -112,6 +153,9 @@ export class AxonStore {
     this.globalMeta = { values: g?.values || {}, updatedAt: g?.updatedAt || {} };
     this.global = mergeSettings(DEFAULT_GLOBAL_SETTINGS, this.globalMeta.values);
     this.device = mergeSettings(DEFAULT_DEVICE_SETTINGS, d?.values || {});
+    // Reviews from other scheduler versions are recomputed only after an
+    // explicit rebuild with the bundled engine (see rebuildForScheduler).
+    setReplayPolicy({ recompute: !!this.device.scheduler?.recompute && this.device.scheduler.version === SCHEDULER_VERSION });
   }
 
   async setGlobal(patch) {

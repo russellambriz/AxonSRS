@@ -19,13 +19,34 @@
  * delayed recall from the shared parent — and flag the group so the user
  * can keep both, keep only the earliest, or keep only the latest. Never
  * "latest timestamp wins" and never "largest interval wins".
+ *
+ * Scheduler versions: a review recorded by another scheduler version (a
+ * different FSRS library release or fuzz rule) cannot be reproduced by
+ * the bundled engine, and recomputing it would silently move due dates.
+ * Replay therefore reuses such a review's recorded result while its input
+ * (rating and previous state) is unchanged, and recomputes it with the
+ * bundled engine only when its input changed (a correction or a review
+ * inserted before it) or after the user explicitly chose to rebuild every
+ * schedule with the bundled engine (`setReplayPolicy`).
  */
 
 import { applyRating } from './scheduler.js';
+import { SCHEDULER_VERSION } from '../config.js';
 
 /** Events that change FSRS state when replayed. 'reset' returns a unit to New. */
 export const SCHEDULING_TYPES = new Set(['review', 'reset']);
 export const CLOCK_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
+
+let recomputeOtherVersions = false;
+
+/**
+ * recompute: true once the user chose to rebuild every schedule with the
+ * bundled engine, so reviews from other scheduler versions are replayed
+ * through it too. Set by the data layer from this device's settings.
+ */
+export function setReplayPolicy({ recompute = false } = {}) {
+  recomputeOtherVersions = !!recompute;
+}
 
 export function compareOrder(a, b) {
   const ta = a._orderTs ?? a.ts;
@@ -124,17 +145,28 @@ export function detectConcurrent(reviews) {
  * Rebuild a unit's FSRS state from its events.
  * Each event's own recorded parameters are used, so historical
  * transitions are reproduced even after settings or defaults change.
+ * `recomputed` lists reviews from another scheduler version that had to
+ * be recomputed with the bundled engine because their input changed.
  */
-export function replayUnit(events) {
+export function replayUnit(events, { recompute = recomputeOtherVersions } = {}) {
   const { applied, voided, concurrent } = effectiveHistory(events);
   let state = null;
   const steps = [];
+  const recomputed = [];
   for (const item of applied) {
     const e = item.event;
     if (e.type === 'reset') {
       steps.push({ eventId: e.id, rating: null, prev: state, next: null, transition: { reset: true } });
       state = null;
       continue;
+    }
+    if (!recompute && e.params?.version && e.params.version !== SCHEDULER_VERSION) {
+      if (e.nextState && item.rating === e.rating && statesEqual(state, e.prevState ?? null)) {
+        steps.push({ eventId: e.id, rating: item.rating, prev: state, next: e.nextState, transition: e.transition || null, recorded: true });
+        state = e.nextState;
+        continue;
+      }
+      recomputed.push(e.id);
     }
     const { state: next, transition } = applyRating(state, item.rating, e.ts, e.params, e.id);
     steps.push({ eventId: e.id, rating: item.rating, prev: state, next, transition });
@@ -147,6 +179,7 @@ export function replayUnit(events) {
     applied,
     voided,
     concurrent,
+    recomputed,
   };
 }
 

@@ -240,4 +240,62 @@ export const tests = [
       await ctx.close();
     },
   },
+  {
+    name: 'a scheduler version change is announced, never applied silently, and an explicit rebuild can be undone',
+    async run({ browser, url }) {
+      const OLD = 'ts-fsrs@4.0.0 (FSRS-5) + axon-fuzz@0';
+      const ctx = await newContext(browser);
+      const page = await openApp(ctx, url);
+      await seedDeck(page, { name: 'Engine', cards: [['Capital of France?', 'Paris']] });
+      await startReview(page);
+      await answer(page, 'Paris');
+      await advance(page);
+      // The review was scheduled by an older engine that gave it 30 days.
+      const recorded = await inApp(page, async ({ store }, old) => {
+        const [unit] = await store.listUnits();
+        const ev = (await store.eventsForUnit(unit.id)).find((e) => e.type === 'review');
+        const nextState = { ...ev.nextState, due: ev.ts + 30 * 86400000, scheduled_days: 30, state: 2 };
+        await store.tx(['events', 'units'], 'readwrite', async (t) => {
+          await t.put('events', { ...ev, params: { ...ev.params, version: old }, nextState });
+          await t.put('units', { ...unit, state: nextState });
+        });
+        await store.setDevice({ scheduler: { version: old } });
+        return { unitId: unit.id, due: nextState.due };
+      }, OLD);
+      const dueNow = (rebuild = false) => inApp(page, async ({ store }, a) => {
+        if (a.rebuild) await store.rebuildSchedules();
+        return { due: (await store.get('units', a.id)).state.due, version: store.device.scheduler?.version };
+      }, { id: recorded.unitId, rebuild });
+      await page.reload();
+      await waitReady(page);
+      const notice = page.locator('.toast', { hasText: 'scheduling engine was updated' });
+      await notice.waitFor();
+      // Not recomputed automatically, even by a full replay (as after a restore).
+      assert.equal((await dueNow(true)).due, recorded.due);
+      await notice.getByRole('button', { name: 'Options' }).click();
+      await page.locator('dialog[open]').getByRole('button', { name: 'Rebuild schedules' }).click();
+      const done = page.locator('.toast', { hasText: 'Rebuilt 1 schedule with the new engine' });
+      await done.waitFor();
+      assert.notEqual((await dueNow()).due, recorded.due, 'rebuilt with the bundled engine');
+      assert.ok((await inApp(page, ({ store }) => store.listSnapshots())).some((s) => s.reason.startsWith('before rebuilding schedules')));
+      await done.getByRole('button', { name: 'Undo' }).click();
+      await page.locator('.toast', { hasText: 'Schedules restored as they were' }).waitFor();
+      assert.deepEqual(await dueNow(), { due: recorded.due, version: OLD });
+      // Next start: the notice is back; keeping the schedules records the choice.
+      await page.reload();
+      await waitReady(page);
+      await notice.getByRole('button', { name: 'Options' }).click();
+      await page.locator('dialog[open]').getByRole('button', { name: 'Keep current schedules' }).click();
+      await page.locator('.toast', { hasText: 'Your current schedules are kept' }).waitFor();
+      const kept = await dueNow(true);
+      assert.equal(kept.due, recorded.due, 'past reviews keep their recorded results');
+      assert.notEqual(kept.version, OLD);
+      await page.reload();
+      await waitReady(page);
+      await page.waitForTimeout(300);
+      assert.equal(await notice.count(), 0, 'no notice once decided');
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
 ];
