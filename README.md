@@ -148,13 +148,20 @@ Q: What is the formula for sulfate?  C: labelled Q/A (blank lines optional)
 A: SO4^2-
 Front: What is the derivative of sin(x)?   D: multiline blocks
 Back: cos(x)
+{{c1::Paris}} is the capital of France.     E: cloze lines (one card per line)
 ```
 
 CSV/TSV support quoted fields, embedded separators, quotes and newlines,
-semicolon CSV and a UTF-8 BOM. A header row is used for mapping. Anki
-"Notes in Plain Text" exports (with `#separator`, `#html`, `#tags column`
-headers) work, including Anki clozes; HTML is converted to text and scripts
-are removed.
+semicolon CSV and a UTF-8 BOM. A recognised header row is used for mapping,
+and **First row is a header** can be switched on or off when the names are
+not recognised. Lines starting with `#` in CSV/TSV are listed as not
+imported rather than dropped. JSON arrays of objects work too: every key
+becomes a mappable column (unknown keys default to *ignore*). Anki
+"Notes in Plain Text" exports (with `#separator`, `#html`, `#tags column`,
+GUID, note type and deck columns) work, including Anki clozes; front and
+back map to the remaining columns, HTML is converted to Markdown and scripts
+are removed. The preview shows and edits the deck, hint, explanation and
+task type of every draft as well as front and back.
 
 **Structured notes**: headings with bullet lists (`- Term :: definition`,
 also `:`, `—`, `–`, `-`, `=`, `→`), definition lists (a term followed by a
@@ -163,8 +170,10 @@ tags, or deck names if you choose.
 
 **Duplicates** are detected within the paste and against your collection. For
 each you choose **skip** (keep the existing card and its history), **update**
-(change the existing card, keeping its history) or **import as new**. Updates
-take a local snapshot first.
+(change the existing card, keeping its history) or **import as new**; your
+choice is kept when you edit a draft or go back. Duplicates inside the paste
+can be imported too. An update keeps the fields the import leaves blank and
+the card's other accepted answers, and takes a local snapshot first.
 
 **Nothing is silently discarded**: rows with problems are listed with line
 numbers, unrecognised lines are kept in their own panel, and both can be
@@ -284,7 +293,7 @@ and ended; completed reviews are already saved.
 
 ## How grading works
 
-Axon Retrieval Fluency, `axon-fluency@1.0.0` (Layer B), turns each answer into
+Axon Retrieval Fluency, `axon-fluency@1.1.0` (Layer B), turns each answer into
 an FSRS rating.
 
 **1. Accuracy decides first.** Incorrect, revealed, or answered after
@@ -300,13 +309,14 @@ autofill, IME), hidden or editor time (excluded), clock anomalies and the
 input modality.
 
 **3. Adjustments** (stored separately as *adjusted* values, versioned as
-`axon-reading@1`, can be turned off in Settings → Grading):
+`axon-reading@2`, can be turned off in Settings → Grading):
 
 - **Reading-time floor**, a heuristic estimate of the time needed to read
   the prompt, subtracted from latency: 250 ms + 160 ms/word + 120 ms per maths
-  token + 700 ms per image, capped at 4 s. Adjusted latency is clamped at 0.
-  For prompts over 60 words or with more than one image the estimate is
-  marked unreliable and grading falls back to Good.
+  token + 700 ms per image. Adjusted latency is clamped at 0. When the
+  estimate exceeds 10 s, or the prompt has over 60 words or more than one
+  image, the estimate is marked unreliable and grading falls back to Good
+  (a long prompt is never capped and then graded as hesitant).
 - **Warm-up**: 1.5 s of leniency (capped at 3 s) on the first card after
   starting or resuming a session.
 
@@ -354,9 +364,14 @@ explanation, the rule version and the configuration used, and which
 measurements were excluded and why. The confidence value is a heuristic,
 **not a calibrated probability**, and is labelled as such.
 
-**Manual mode** (Settings → Grading) shows Again/Hard/Good/Easy buttons and
-stores Axon's automatic grade alongside as a shadow, for accessibility or
-comparison.
+**Manual mode** (Settings → Grading) shows Again/Hard/Good/Easy buttons
+after a correct answer and stores Axon's automatic grade alongside as a
+shadow, for accessibility or comparison. A wrong answer is always **Again**,
+in manual mode too. The time spent choosing a self-grade is recorded
+separately from answer time.
+
+**Voice** answers are detected from speech-recognition input even when the
+modality has been overridden, so they never calibrate typing baselines.
 
 **Limitations of automatic grading.** Latency mixes reading, recall,
 planning and motor time; the reading floor is a population heuristic.
@@ -451,8 +466,11 @@ Settings → Research starts a study period that assigns each card
 random, or puts all cards in one arm. Assignment, start date, scheduler
 settings and grading version are recorded. The report compares **later
 independent delayed recall** (≥ 1 day after the previous review, excluding
-tests affected by practice or sibling exposure) and **total study time**,
-with sample counts, median elapsed intervals and 95% intervals. It says
+tests affected by practice or sibling exposure) and **total study time**
+(answer time plus the time spent self-grading), with sample counts, median
+elapsed intervals, 95% intervals, seconds per review, mean predicted recall
+next to observed recall (calibration per arm), and how often self-grades
+agreed with Axon's automatic grade. Undone reviews are excluded. It says
 plainly when there are too few delayed tests (aim for 100+ per arm), and that
 one learner's results do not establish superiority. Shadow grades are stored
 separately and never touch live scheduling. A de-identified CSV export
@@ -619,7 +637,10 @@ limits and network failures are explained in plain language.
   and auto-advance help users who cannot type quickly. Their samples are kept
   out of typing calibration.
 - Touch targets are at least 44 px (40 px for compact buttons) on touch
-  screens.
+  screens, including row checkboxes, toolbar symbols and confidence buttons.
+- Text and control borders meet WCAG AA contrast in both themes.
+- The study screen is a full-screen focus view at every window size: the
+  sidebar and navigation are hidden while you study.
 
 ## Keyboard shortcuts
 
@@ -721,11 +742,11 @@ recognition and system TTS voices are **untested**.
 
 | Component | Version | Notes |
 | --- | --- | --- |
-| App | 1.0.2 | cache `axon-v3` |
+| App | 1.0.3 | cache `axon-v4` |
 | Scheduler | ts-fsrs 5.4.2 (FSRS-6, default parameters) + `axon-fuzz@1` | reference-checked against py-fsrs 6.3.2 |
-| Grading rules | `axon-fluency@1.0.0` | thresholds above; recorded on every review |
-| Reading/warm-up heuristic | `axon-reading@1` | can be disabled |
-| Answer matcher | `axon-match@1.0.0` | text, maths, chemistry |
+| Grading rules | `axon-fluency@1.1.0` | thresholds above; recorded on every review |
+| Reading/warm-up heuristic | `axon-reading@2` | can be disabled |
+| Answer matcher | `axon-match@1.1.0` | text, maths, chemistry |
 | Database | IndexedDB `axon`, schema v1, record shape v1 | migrations snapshot first |
 | Backup / sync formats | `axon-backup` v1 / `axon-sync` v1 | versioned envelopes |
 | Libraries (`vendor/`, licences included) | KaTeX 0.18.9 (+ mhchem), marked 18.0.14, DOMPurify 3.4.16, fflate 0.8.3, OpenDyslexic (@fontsource 5.3.0) | SHA-256 in `vendor/README.md` |
