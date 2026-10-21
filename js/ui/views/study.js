@@ -1012,7 +1012,7 @@ class StudyScreen {
         cardUpdate = this.cardWithAlias(app.cache.cards.get(cur.card.id), cur, alias);
       }
       const baseline = await store.getBaseline(baselineKey(target.modality?.kind || 'unknown', target.taskType || 'recall'));
-      const plan = planOverride({ eventId: uuid(), now: Date.now(), deviceId: store.deviceId, seq: null, target, kind, unit, unitEvents, alias, studyDay: store.today(), gradingConfig: this.gradingConfig, baseline });
+      const plan = planOverride({ eventId: uuid(), now: Date.now(), deviceId: store.deviceId, seq: null, target, kind, unit, unitEvents, alias, studyDay: store.today(), gradingConfig: this.gradingConfig, baseline, deck: cur.deck });
       // Remove the failure requeue; the rescued answer counts once.
       let session = this.session;
       if (kind === 'alias' || kind === 'correct') {

@@ -14,7 +14,7 @@ import { applyRating, retrievability, State } from './scheduler.js';
 import { gradeReview, overrideGrade, calibrationSample, DEFAULT_GRADING_CONFIG } from './fluency.js';
 import { matchAnswer, matchOrderedAnswers } from './match/index.js';
 import { unitContent, effectiveCardSettings } from './model.js';
-import { replayUnit } from './history.js';
+import { replayUnit, lastScheduledFrom, RESCUE_REASONS } from './history.js';
 import { isLeech } from './stats.js';
 
 export const PERF_WINDOW = 8;
@@ -175,17 +175,26 @@ export function planReview(ctx) {
  * kind: 'knew' | 'guessed' | 'alias' | 'correct' | 'manual'
  * Recomputes the unit by replaying its full effective history, so the
  * failed review's scheduling effect is replaced exactly once even if
- * later reviews exist.
+ * later reviews exist. The other effects of the corrected review follow
+ * the corrected grade too: its recent-performance entry (a rescued answer
+ * counts as a success), the summary the next review's Easy check reads,
+ * and the leech flag and leech auto-suspension it caused. A manual
+ * suspension is never changed.
  */
-export function planOverride({ eventId, now, deviceId, seq, target, kind, manualRating = null, unit, unitEvents, alias = null, studyDay, gradingConfig = DEFAULT_GRADING_CONFIG, baseline = null }) {
+export function planOverride({ eventId, now, deviceId, seq, target, kind, manualRating = null, unit, unitEvents, alias = null, studyDay, gradingConfig = DEFAULT_GRADING_CONFIG, baseline = null, deck = null }) {
   const original = target.grading?.grade ?? target.rating;
   let og = kind === 'manual' ? { grade: manualRating, reasons: ['MANUAL_GRADE'] } : overrideGrade(kind, original, gradingConfig);
-  if (kind === 'alias' || kind === 'correct') {
+  const rescued = RESCUE_REASONS.has(kind);
+  let hesitation = null;
+  if (rescued) {
     // Grade the rescued answer as a correct one from the measurements taken
     // when it was typed (never the time spent on the feedback screen), so
     // hesitation, hints and calibration rules still apply.
     const regraded = regradeAsCorrect(target, baseline, gradingConfig);
-    if (regraded) og = { grade: regraded.grade, reasons: [og.reasons[0], ...regraded.reasons], explanation: regraded.explanation };
+    if (regraded) {
+      og = { grade: regraded.grade, reasons: [og.reasons[0], ...regraded.reasons], explanation: regraded.explanation };
+      hesitation = regraded.scores?.hesitation ?? null;
+    }
   }
   const correction = {
     id: eventId,
@@ -205,14 +214,56 @@ export function planOverride({ eventId, now, deviceId, seq, target, kind, manual
     previousRating: target.rating,
     reasons: og.reasons,
     explanation: og.explanation || null,
+    // Hesitation of the re-graded answer (rescues only), so the corrected
+    // review's summary can be rebuilt from history.
+    hesitation,
     alias,
     // The rescue uses the original pre-feedback measurements; the time
     // spent on the feedback screen is never treated as retrieval.
     measurementsFrom: target.id,
   };
-  if (target.type !== 'review') return { event: correction, unit };
+  const perf = rescued ? rescuePerf(unit.perf, target, hesitation) : unit.perf;
+  if (target.type !== 'review') return { event: correction, unit: perf === unit.perf ? unit : { ...unit, perf } };
   const replay = replayUnit([...unitEvents, correction]);
-  return { event: correction, unit: { ...unit, state: replay.state, headEventId: replay.headEventId }, replay };
+  const next = { ...unit, state: replay.state, headEventId: replay.headEventId, perf };
+  // Only the latest review's own effects are re-evaluated; a later review
+  // has already set them for itself.
+  if (replay.headEventId === target.id) {
+    next.lastScheduled = lastScheduledFrom(replay);
+    Object.assign(next, reassessLeech(unit, target, replay.state, deck, now));
+  }
+  return { event: correction, unit: next, replay };
+}
+
+/** The corrected answer's recent-performance entry now counts as a success. */
+function rescuePerf(perf, target, hesitation) {
+  const recent = perf?.recent || [];
+  if (!recent.some((r) => r.t === target.ts)) return perf;
+  return { ...(perf || {}), recent: recent.map((r) => (r.t === target.ts ? { ...r, c: true, h: hesitation ?? r.h ?? null } : r)) };
+}
+
+/**
+ * Leech status after correcting the latest review, as that review would
+ * have set it with the corrected grade. A flag the review (or an earlier
+ * correction of it) raised is withdrawn when the corrected state is no
+ * longer a leech, together with the leech auto-suspension raised at the
+ * same moment; a suspension made at any other time (by hand) stays.
+ */
+function reassessLeech(unit, target, state, deck, now) {
+  const threshold = deck?.settings?.leechThreshold ?? 4;
+  const leech = isLeech({ state }, { threshold });
+  const meta = target.prevUnitMeta || {};
+  if (unit.leech && !leech && unit.leechSince != null && unit.leechSince >= target.ts) {
+    const out = { leech: false, leechSince: null };
+    if (unit.suspended && !meta.suspended && unit.suspendedAt === unit.leechSince) Object.assign(out, { suspended: false, suspendedAt: now });
+    return out;
+  }
+  if (!unit.leech && leech) {
+    const out = { leech: true, leechSince: now };
+    if (deck?.settings?.leechAction === 'suspend' && !unit.suspended) Object.assign(out, { suspended: true, suspendedAt: now });
+    return out;
+  }
+  return {};
 }
 
 /**
@@ -273,7 +324,10 @@ export function planUndo({ eventId, now, deviceId, seq, target, unit, unitEvents
       introducedDay: meta.introducedDay ?? null,
       lastReviewAt: meta.lastReviewAt ?? null,
     });
-    if (unit.suspended && !meta.suspended && unit.suspendedAt === target.ts) {
+    // Lift only the leech auto-suspension this review (or a correction of
+    // it) raised, never a manual one.
+    const autoSuspendedAt = unit.leechSince != null && unit.leechSince >= target.ts ? unit.leechSince : target.ts;
+    if (unit.suspended && !meta.suspended && unit.suspendedAt === autoSuspendedAt) {
       restored.suspended = false;
       restored.suspendedAt = now;
     }

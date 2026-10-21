@@ -150,6 +150,30 @@ export function replayUnit(events) {
   };
 }
 
+/** Corrections that turn a wrong answer into an accepted one. */
+export const RESCUE_REASONS = new Set(['alias', 'correct']);
+
+/**
+ * The unit's `lastScheduled` summary (read by the next review's Easy check)
+ * for the last applied scheduled review, with its corrections applied: a
+ * rescued answer counts as correct, at its corrected grade. Null when the
+ * history ends with a reset or has no review.
+ */
+export function lastScheduledFrom(replay) {
+  const last = replay.applied[replay.applied.length - 1];
+  if (!last || last.event.type !== 'review') return null;
+  const e = last.event;
+  const rescue = last.corrections.filter((c) => RESCUE_REASONS.has(c.reason)).pop();
+  const a = e.assistance || {};
+  return {
+    correct: !!(e.response?.correct || rescue),
+    assisted: !!(a.hintShown || a.revealed || a.solutionViewed),
+    grade: last.rating,
+    typoTolerated: rescue ? false : !!e.response?.typoTolerated,
+    hesitation: rescue ? rescue.hesitation ?? null : e.grading?.scores?.hesitation ?? null,
+  };
+}
+
 /** Compare a stored unit state with the replayed state. */
 export function statesEqual(a, b) {
   if (!a && !b) return true;
