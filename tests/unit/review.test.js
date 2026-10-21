@@ -1,9 +1,11 @@
 // Spec 12.8, 12.10, 12.11, 17.11, 17.12, 17.21: wrong answers and event
 // recording, independent forward/reverse scheduling, cram without
-// scheduled reviews, alias rescue applied exactly once, undo.
+// scheduled reviews, alias rescue applied exactly once, undo, formatting
+// versus substantive edits.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeDeck, makeCard, makeUnits, review, T0, DAY, MIN } from './helpers.js';
+import { classifyEdit, createCard, createDeck } from '../../js/core/model.js';
 import { planOverride, planUndo, evaluateAnswer, exposureEvent } from '../../js/core/review.js';
 import { replayUnit, statesEqual } from '../../js/core/history.js';
 import { addAlias } from '../../js/core/aliases.js';
@@ -315,4 +317,28 @@ test('alias rescue re-grades from the original measurements (hint ceiling still 
   const rescue = planOverride({ eventId: 'o9', now: T0 + 4000, deviceId: 'dev-A', seq: 3, target: failed.event, kind: 'alias', unit: failed.unit, unitEvents: [failed.event], alias: 'Iuppiter', studyDay: '2026-01-05', gradingConfig: { ...DEFAULT_GRADING_CONFIG, hintCeiling: 'hard' } });
   assert.equal(rescue.event.newRating, 2, 'a hinted rescue respects the Hard ceiling');
   assert.ok(rescue.event.reasons.includes('ALIAS_RESCUE') && rescue.event.reasons.includes('HINT_CEILING'));
+});
+
+test('edit classification: letter case and matching rules count when they change what is tested', () => {
+  const textDeck = createDeck({ id: 'd-text', name: 'Text' });
+  const chemDeck = createDeck({ id: 'd-chem', name: 'Chem', settings: { answerMode: 'chem' } });
+  const co = createCard({ id: 'c-co', deckId: chemDeck.id, front: 'Carbon monoxide', back: 'CO' });
+  assert.equal(classifyEdit(co, { ...co, back: ['Co'] }, chemDeck).fwd, 'substantive', 'CO (carbon monoxide) is not Co (cobalt)');
+  assert.equal(classifyEdit(co, { ...co, back: ['**CO**'] }, chemDeck).fwd, 'formatting');
+  const paris = createCard({ id: 'c-p', deckId: textDeck.id, front: 'Capital of France', back: 'Paris' });
+  assert.equal(classifyEdit(paris, { ...paris, back: ['paris'] }, textDeck).fwd, 'formatting', 'case is ignored by the matcher here');
+  assert.equal(classifyEdit(paris, { ...paris, back: ['Paris', 'Lutetia'] }, textDeck).fwd, 'aliases');
+  assert.equal(classifyEdit(paris, { ...paris, front: ['capital of france'] }, textDeck).fwd, 'formatting');
+  const strictParis = { ...paris, match: { caseSensitive: true } };
+  assert.equal(classifyEdit(strictParis, { ...strictParis, back: ['paris'] }, textDeck).fwd, 'substantive', 'case-sensitive card');
+  // Matching rules that change which answers are accepted
+  assert.equal(classifyEdit(paris, strictParis, textDeck).fwd, 'substantive');
+  assert.equal(classifyEdit(paris, { ...paris, match: { strictSpelling: true } }, textDeck).fwd, 'substantive');
+  assert.equal(classifyEdit(paris, { ...paris, match: { caseSensitive: false } }, textDeck).fwd, 'none', 'same as the deck default');
+  assert.equal(classifyEdit(paris, { ...paris, answerMode: 'text' }, textDeck).fwd, 'none', 'explicitly the deck’s own mode');
+  assert.equal(classifyEdit(paris, { ...paris, match: { mathEquivalence: 'algebraic' } }, textDeck).fwd, 'none', 'maths rules do not apply to text answers');
+  assert.equal(classifyEdit(paris, { ...paris, answerMode: 'chem' }, textDeck).fwd, 'substantive');
+  const cube = createCard({ id: 'c-m', deckId: textDeck.id, front: 'd/dx x^3', back: '3x^2', answerMode: 'math' });
+  assert.equal(classifyEdit(cube, { ...cube, match: { numericTolerance: '1%' } }, textDeck).fwd, 'substantive');
+  assert.equal(classifyEdit(cube, { ...cube, back: ['3X^2'] }, textDeck).fwd, 'substantive', 'case matters in maths');
 });

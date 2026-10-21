@@ -252,21 +252,38 @@ export function contentHash(card) {
   return hashHex(stableStringify(contentFields(card)));
 }
 
-function semanticForm(text) {
-  return collapseWhitespace(plainText(String(text || ''))).toLowerCase();
+function semanticForm(text, caseMatters = false) {
+  const s = collapseWhitespace(plainText(String(text || '')));
+  return caseMatters ? s : s.toLowerCase();
 }
+
+/** Effective matching settings that change which answers count, per answer mode. */
+const MATCH_SETTINGS = Object.freeze({
+  text: ['caseSensitive', 'typoTolerance', 'accentPolicy'],
+  math: ['caseSensitive', 'mathEquivalence', 'numericTolerance'],
+  chem: [],
+});
 
 /**
  * Classify an edit for each affected unit:
  *  - 'none'        nothing relevant changed
- *  - 'formatting'  only presentation (Markdown emphasis, whitespace, case of prompt)
+ *  - 'formatting'  only presentation (Markdown emphasis, whitespace, and
+ *                  letter case when answers are matched without it)
  *  - 'aliases'     accepted alternatives added/removed, primary answer unchanged
- *  - 'substantive' the prompt or the primary answer changed → offer schedule reset
+ *  - 'substantive' the prompt or the primary answer changed, or the way the
+ *                  card's answers are matched did → offer schedule reset.
+ *                  Letter case counts wherever matching uses it: always for
+ *                  chemistry and maths (CO is not Co), and on case-sensitive
+ *                  cards.
  * Returns a map unitKey → classification.
  */
 export function classifyEdit(before, after, deck) {
   const result = {};
   const keys = new Set([...unitKeys(before, deck), ...unitKeys(after, deck)]);
+  const sa = effectiveCardSettings(before, deck);
+  const sb = effectiveCardSettings(after, deck);
+  const caseMatters = [sa, sb].some((s) => s.answerMode !== 'text' || s.caseSensitive);
+  const matchingChanged = sa.answerMode !== sb.answerMode || (MATCH_SETTINGS[sb.answerMode] || []).some((k) => (sa[k] ?? null) !== (sb[k] ?? null));
   for (const key of keys) {
     const a = unitContent(before, key);
     const b = unitContent(after, key);
@@ -275,15 +292,14 @@ export function classifyEdit(before, after, deck) {
     // around the blanks instead.
     const clozeKey = unitKind(key) === 'cloze';
     const skeleton = (card) => String(card.front[0] || '').replace(/\{\{[\s\S]*?\}\}/g, '{{}}');
-    const promptA = semanticForm(clozeKey ? skeleton(before) : a.prompt);
-    const promptB = semanticForm(clozeKey ? skeleton(after) : b.prompt);
-    const primaryA = (a.answerGroups || []).map((g) => semanticForm(g[0])).join(';');
-    const primaryB = (b.answerGroups || []).map((g) => semanticForm(g[0])).join(';');
-    const altsA = JSON.stringify(a.answerGroups);
-    const altsB = JSON.stringify(b.answerGroups);
-    if (promptA !== promptB || primaryA !== primaryB || before.answerMode !== after.answerMode) result[key] = 'substantive';
-    else if (altsA !== altsB) result[key] = 'aliases';
-    else if (a.prompt !== b.prompt || a.answerDisplay !== b.answerDisplay || a.hint !== b.hint || a.explanation !== b.explanation) result[key] = 'formatting';
+    const promptA = semanticForm(clozeKey ? skeleton(before) : a.prompt, caseMatters);
+    const promptB = semanticForm(clozeKey ? skeleton(after) : b.prompt, caseMatters);
+    const primaryA = (a.answerGroups || []).map((g) => semanticForm(g[0], caseMatters)).join(';');
+    const primaryB = (b.answerGroups || []).map((g) => semanticForm(g[0], caseMatters)).join(';');
+    const alts = (c) => JSON.stringify((c.answerGroups || []).map((g) => g.map((x) => semanticForm(x, caseMatters))));
+    if (matchingChanged || promptA !== promptB || primaryA !== primaryB) result[key] = 'substantive';
+    else if (alts(a) !== alts(b)) result[key] = 'aliases';
+    else if (a.prompt !== b.prompt || JSON.stringify(a.answerGroups) !== JSON.stringify(b.answerGroups) || a.hint !== b.hint || a.explanation !== b.explanation) result[key] = 'formatting';
     else result[key] = 'none';
   }
   return result;

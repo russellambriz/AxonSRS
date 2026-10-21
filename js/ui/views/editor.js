@@ -372,7 +372,7 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
         if (units.length) {
           const choice = await sheet({
             title: 'This edit changes what the card tests',
-            content: h('div', { class: 'stack' }, h('p', { class: 'muted' }, `The prompt or main answer changed for ${units.length} study unit${units.length > 1 ? 's' : ''} with review history. Keep the current schedule (the history stays attached), or start this card over as new? Either way the old answers remain in the history.`)),
+            content: h('div', { class: 'stack' }, h('p', { class: 'muted' }, `The prompt, the main answer or the way answers are matched changed for ${units.length} study unit${units.length > 1 ? 's' : ''} with review history. Keep the current schedule (the history stays attached), or start this card over as new? Either way the old answers remain in the history.`)),
             footer: (close) => [h('button', { class: 'btn', onclick: () => close('cancel') }, 'Back to editing'), h('button', { class: 'btn', onclick: () => close('keep') }, 'Keep schedule'), h('button', { class: 'btn primary', onclick: () => close('reset') }, 'Start over')],
           }).done;
           if (!choice || choice === 'cancel') return;
