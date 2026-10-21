@@ -41,6 +41,20 @@ test('events merge by id: idempotent, retry-safe, no duplicates', () => {
   assert.equal(tampered.dataset.events.find((e) => e.id === 'e1').rating, 3);
 });
 
+test('incoming events with an implausible clock are merged (never dropped) and flagged for reconciliation', () => {
+  const { ds } = baseWorld();
+  const now = 1_000_000_000;
+  const local = { ...ds, events: [ev('e1', 'c:fwd', now - 5000)] };
+  const remote = { ...ds, events: [ev('e1', 'c:fwd', now - 5000), ev('ahead', 'c:fwd', now + 7 * 86400000, { deviceId: 'B', parentId: 'e1' })] };
+  const r = mergeDatasets(local, remote, { now });
+  assert.ok(r.dataset.events.some((e) => e.id === 'ahead'), 'the suspicious event is kept');
+  assert.ok(r.report.unitsToReplay.has('c:fwd'));
+  const clock = r.report.conflicts.filter((c) => c.kind === 'clock');
+  assert.deepEqual(clock.map((c) => [c.issue, c.events.map((e) => e.id)]), [['future-timestamp', ['ahead']]]);
+  // Merging the same data again raises nothing new: only new events are checked.
+  assert.equal(mergeDatasets(r.dataset, remote, { now }).report.conflicts.length, 0);
+});
+
 test('a descendant edit wins over its ancestor on either side', () => {
   const { ds, card } = baseWorld();
   const e1 = edit(card.record, { back: ['A2'] }, 'B', 5);

@@ -174,6 +174,42 @@ export function lastScheduledFrom(replay) {
   };
 }
 
+/** Time of the last applied scheduled review (resets are not reviews). */
+export function lastReviewTs(replay) {
+  for (let i = replay.applied.length - 1; i >= 0; i--) if (replay.applied[i].event.type === 'review') return replay.applied[i].event.ts;
+  return null;
+}
+
+/** Latest sibling-answer exposure per exposed unit id. */
+export function siblingExposureTimes(events) {
+  const out = new Map();
+  for (const e of events) {
+    if (e.type !== 'sibling-exposure') continue;
+    for (const id of e.siblingUnitIds || []) if (!(out.get(id) >= e.ts)) out.set(id, e.ts);
+  }
+  return out;
+}
+
+/**
+ * Exposure that affects a unit's next delayed test, from its events on
+ * every device: practice since the last scheduled review (voided practice
+ * does not count) and the latest sibling-answer exposure. A review marks
+ * itself with these (flags.practiceSinceLast / siblingExposure).
+ */
+export function exposureSince(unitEvents, { lastReviewAt = null, siblingExposedAt = null } = {}) {
+  const corrections = resolveCorrections(unitEvents.filter((e) => e.type === 'correction'));
+  let lastPracticeAt = null;
+  for (const e of unitEvents) {
+    if (e.type !== 'practice' || corrections.get(e.id)?.voided) continue;
+    if (lastPracticeAt == null || e.ts > lastPracticeAt) lastPracticeAt = e.ts;
+  }
+  return {
+    practiceSinceLast: lastPracticeAt != null && (lastReviewAt == null || lastPracticeAt > lastReviewAt),
+    lastPracticeAt,
+    siblingExposedAt,
+  };
+}
+
 /** Compare a stored unit state with the replayed state. */
 export function statesEqual(a, b) {
   if (!a && !b) return true;
@@ -194,4 +230,60 @@ export function timestampIssues(event, { now = Date.now(), parent = null, previo
   if (previousFromDevice && event.seq > previousFromDevice.seq && event.ts < previousFromDevice.ts - CLOCK_FUTURE_TOLERANCE_MS) issues.push('device-clock-went-backwards');
   if (event.flags?.clockAnomaly) issues.push('in-session-clock-jump');
   return issues;
+}
+
+/**
+ * Reconciliation entries for incoming events (sync pull, backup merge or
+ * restore) with implausible timestamps: dated in the future, before the
+ * review they were based on, earlier than an event their device recorded
+ * before them, or with a clock jump during the answer. The events are never
+ * dropped: they are kept and replayed as usual (with causal repair), and the
+ * entry lets the user keep them or stop counting the suspicious reviews.
+ * One entry per issue and device.
+ * @param {object[]} incoming events new to this device
+ * @param {{ known?: object[], now?: number }} opts events already here; this device's clock
+ */
+export function clockConflicts(incoming, { known = [], now = Date.now() } = {}) {
+  if (!incoming.length) return [];
+  const byId = new Map(known.map((e) => [e.id, e]));
+  for (const e of incoming) byId.set(e.id, e);
+  // For each event, the latest-dated earlier event (by sequence) of its device.
+  const devices = new Set(incoming.map((e) => e.deviceId));
+  const lists = new Map();
+  for (const e of byId.values()) {
+    if (!devices.has(e.deviceId) || !Number.isFinite(e.seq)) continue;
+    if (!lists.has(e.deviceId)) lists.set(e.deviceId, []);
+    lists.get(e.deviceId).push(e);
+  }
+  const previous = new Map();
+  for (const list of lists.values()) {
+    list.sort((a, b) => a.seq - b.seq);
+    let latest = null;
+    for (const e of list) {
+      if (latest) previous.set(e.id, latest);
+      if (!latest || e.ts > latest.ts) latest = e;
+    }
+  }
+  const groups = new Map();
+  for (const e of incoming) {
+    const issues = timestampIssues(e, { now, parent: e.parentId ? byId.get(e.parentId) || null : null, previousFromDevice: previous.get(e.id) || null });
+    for (const issue of issues) {
+      const key = `${issue}\u0000${e.deviceId}`;
+      if (!groups.has(key)) groups.set(key, { issue, deviceId: e.deviceId, events: [] });
+      groups.get(key).events.push(e);
+    }
+  }
+  return [...groups.values()].map(({ issue, deviceId, events }) => {
+    events.sort(compareOrder);
+    return {
+      id: `clock:${issue}:${deviceId}:${events[0].id}`,
+      kind: 'clock',
+      issue,
+      recordType: 'events',
+      recordId: events[0].id,
+      deviceId,
+      detectedAt: now,
+      events: events.map((e) => ({ id: e.id, type: e.type, ts: e.ts, unitId: e.unitId || null, cardId: e.cardId || null, rating: e.rating ?? null, correct: e.response?.correct ?? null })),
+    };
+  });
 }

@@ -2,6 +2,8 @@
  * Dataset merge used by Gist sync and backup restore.
  *
  *  - Review events: union by immutable event id (idempotent, retry-safe).
+ *    Incoming events with implausible timestamps are kept and reported
+ *    as 'clock' conflicts for the user to reconcile.
  *  - Versioned records (decks, cards, links, plans): descendant wins;
  *    divergent edits get a field-level three-way merge, otherwise an
  *    explicit conflict is recorded and the local version is kept. The
@@ -18,6 +20,7 @@
  */
 
 import { VERSIONED_TYPES, contentOf, revisionIndex, isAncestor, commonAncestor, threeWay, stamp } from './versioning.js';
+import { clockConflicts } from '../history.js';
 
 function byId(list) {
   const m = new Map();
@@ -117,8 +120,9 @@ function sameEventFacts(a, b) {
 /**
  * @param {object} local dataset
  * @param {object} remote dataset (already validated)
+ * @param {{ now?: number }} opts this device's clock (timestamp checks)
  */
-export function mergeDatasets(local, remote) {
+export function mergeDatasets(local, remote, { now = Date.now() } = {}) {
   const L = { ...emptyDataset(), ...local };
   const R = { ...emptyDataset(), ...remote };
   const report = { added: {}, updated: {}, removed: {}, conflicts: [], autoMerged: 0, newEvents: 0, unitsToReplay: new Set(), integrity: [], revokedTombstones: 0 };
@@ -165,10 +169,12 @@ export function mergeDatasets(local, remote) {
 
   // Events: union by id
   const events = byId(L.events);
+  const incoming = [];
   for (const e of R.events) {
     const existing = events.get(e.id);
     if (!existing) {
       events.set(e.id, e);
+      incoming.push(e);
       report.newEvents++;
       if (e.unitId) report.unitsToReplay.add(e.unitId);
       if (e.type === 'correction' && e.unitId) report.unitsToReplay.add(e.unitId);
@@ -176,6 +182,8 @@ export function mergeDatasets(local, remote) {
       report.integrity.push({ id: e.id, message: 'Two different events share one id; the local copy was kept' });
     }
   }
+  // Implausible timestamps are kept but flagged for reconciliation.
+  report.conflicts.push(...clockConflicts(incoming, { known: L.events, now }));
   const localEventIds = new Set(L.events.map((e) => e.id));
 
   // Units: union; overlays and suspension are LWW by their timestamps

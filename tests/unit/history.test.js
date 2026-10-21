@@ -1,9 +1,11 @@
 // Spec 17.15–17.17: concurrent same-card reviews from offline devices,
-// deterministic reconstruction from merged history, clock-skew ordering.
+// deterministic reconstruction from merged history, clock-skew ordering,
+// suspicious clocks kept for reconciliation and
+// cross-device practice exposure.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeDeck, makeCard, makeUnits, review, T0, DAY, MIN } from './helpers.js';
-import { replayUnit, orderEvents, detectConcurrent, effectiveHistory, statesEqual, timestampIssues, resolveCorrections } from '../../js/core/history.js';
+import { replayUnit, orderEvents, detectConcurrent, effectiveHistory, statesEqual, timestampIssues, resolveCorrections, clockConflicts, exposureSince, siblingExposureTimes } from '../../js/core/history.js';
 import { schedulerParams } from '../../js/core/scheduler.js';
 
 function chain() {
@@ -75,6 +77,53 @@ test('clock skew: a child event never replays before its parent', () => {
   assert.ok(ordered[2].clockRepaired);
   assert.ok(timestampIssues(skewed.event, { parent: b.event }).includes('before-parent'));
   assert.ok(timestampIssues({ ts: Date.now() + 3600000 }, {}).includes('future-timestamp'));
+});
+
+test('incoming events with implausible timestamps are flagged for reconciliation, grouped per device and issue', () => {
+  const now = T0 + 10 * DAY;
+  const known = [
+    { id: 'p', type: 'review', ts: T0 + 5 * DAY, deviceId: 'dev-A', seq: 1, unitId: 'u1' },
+    { id: 'b1', type: 'review', ts: T0 + 6 * DAY, deviceId: 'dev-B', seq: 10, unitId: 'u2' },
+  ];
+  const incoming = [
+    { id: 'f1', type: 'review', ts: now + 3 * DAY, deviceId: 'dev-C', seq: 1, unitId: 'u3', rating: 3 },
+    { id: 'f2', type: 'hint', ts: now + 3 * DAY + MIN, deviceId: 'dev-C', seq: 2, unitId: 'u3' },
+    { id: 'child', type: 'review', ts: T0 + 4 * DAY, deviceId: 'dev-D', seq: 1, unitId: 'u1', parentId: 'p', rating: 3 },
+    // dev-B's clock fell a day behind after b1: every later event is suspicious.
+    { id: 'b2', type: 'review', ts: T0 + 5 * DAY, deviceId: 'dev-B', seq: 11, unitId: 'u2', rating: 3 },
+    { id: 'b3', type: 'practice', ts: T0 + 5 * DAY + MIN, deviceId: 'dev-B', seq: 12, unitId: 'u2' },
+    { id: 'b4', type: 'review', ts: T0 + 7 * DAY, deviceId: 'dev-B', seq: 13, unitId: 'u2', rating: 3 },
+    { id: 'jump', type: 'review', ts: T0 + 8 * DAY, deviceId: 'dev-E', seq: 1, unitId: 'u4', rating: 3, flags: { clockAnomaly: true } },
+    { id: 'fine', type: 'review', ts: T0 + 8 * DAY, deviceId: 'dev-F', seq: 1, unitId: 'u5', rating: 3 },
+  ];
+  const found = clockConflicts(incoming, { known, now });
+  const by = Object.fromEntries(found.map((c) => [`${c.issue}|${c.deviceId}`, c.events.map((e) => e.id)]));
+  assert.deepEqual(by, {
+    'future-timestamp|dev-C': ['f1', 'f2'],
+    'before-parent|dev-D': ['child'],
+    'device-clock-went-backwards|dev-B': ['b2', 'b3'],
+    'in-session-clock-jump|dev-E': ['jump'],
+  });
+  const future = found.find((c) => c.issue === 'future-timestamp');
+  assert.equal(future.kind, 'clock');
+  assert.equal(future.id, 'clock:future-timestamp:dev-C:f1', 'stable id, so a repeated merge does not duplicate it');
+  assert.deepEqual(clockConflicts([], { known, now }), []);
+  assert.deepEqual(clockConflicts(known, { now }), [], 'plausible history raises nothing');
+});
+
+test('exposure since the last review is derived from every device’s events', () => {
+  const practice = (id, ts) => ({ id, type: 'practice', ts, unitId: 'u1', deviceId: 'dev-B', seq: 1 });
+  const events = [practice('p1', T0 + DAY), practice('p2', T0 + 3 * DAY)];
+  assert.deepEqual(exposureSince(events, { lastReviewAt: T0 + 2 * DAY }), { practiceSinceLast: true, lastPracticeAt: T0 + 3 * DAY, siblingExposedAt: null });
+  assert.equal(exposureSince(events, { lastReviewAt: T0 + 4 * DAY }).practiceSinceLast, false, 'a later review used it up');
+  const voided = [...events, { id: 'v', type: 'correction', kind: 'void', targetId: 'p2', ts: T0 + 3 * DAY + MIN, deviceId: 'dev-B', seq: 2, unitId: 'u1' }];
+  assert.equal(exposureSince(voided, { lastReviewAt: T0 + 2 * DAY }).practiceSinceLast, false, 'undone practice does not count');
+  const siblings = siblingExposureTimes([
+    { id: 's1', type: 'sibling-exposure', ts: T0, siblingUnitIds: ['u1', 'u2'] },
+    { id: 's2', type: 'sibling-exposure', ts: T0 + DAY, siblingUnitIds: ['u2'] },
+    { id: 'x', type: 'hint', ts: T0 + 2 * DAY, siblingUnitIds: ['u1'] },
+  ]);
+  assert.deepEqual([...siblings.entries()].sort(), [['u1', T0], ['u2', T0 + DAY]]);
 });
 
 test('ties are broken by device id, sequence and event id', () => {
