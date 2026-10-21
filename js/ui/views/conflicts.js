@@ -12,10 +12,10 @@ import { RATING_LABELS } from '../../core/scheduler.js';
 
 /** Implausible-timestamp entries (history.js clockConflicts). */
 const CLOCK_ISSUES = {
-  'future-timestamp': ['Dated in the future', 'They carry times later than this device’s clock, so the recording device’s clock was probably ahead. A review dated in the future can push its card’s next due date too far out.'],
-  'before-parent': ['Dated before the review they followed', 'Each was based on a review that carries a later time, so one device’s clock was behind. They are replayed after that review.'],
-  'device-clock-went-backwards': ['Device clock went backwards', 'They are dated earlier than events the same device recorded before them.'],
-  'in-session-clock-jump': ['Clock changed during an answer', 'The device clock jumped while these answers were being typed; their timing was already left out of grading.'],
+  'future-timestamp': ['Dated in the future', (one) => `${one ? 'It is' : 'They are'} dated later than this device’s clock, so the recording device’s clock was probably ahead. A review dated in the future can push its card’s next due date too far out.`],
+  'before-parent': ['Dated before the review they followed', (one) => `${one ? 'It is' : 'They are'} dated before the review ${one ? 'it was' : 'they were'} based on, so a device clock was behind. Axon replays ${one ? 'it' : 'them'} after that review.`],
+  'device-clock-went-backwards': ['Device clock went backwards', (one) => `${one ? 'It is' : 'They are'} dated earlier than events the same device recorded before.`],
+  'in-session-clock-jump': ['Clock changed during an answer', (one) => `The device clock jumped while ${one ? 'this answer was' : 'these answers were'} being typed; ${one ? 'its' : 'their'} timing was already left out of grading.`],
 };
 
 function valueText(v) {
@@ -55,18 +55,18 @@ export async function view(outlet) {
           h('div', { class: 'row' }, button('Keep both', { kind: 'primary', onclick: () => resolveConcurrent(c, 'both') }), button('Keep earliest only', { onclick: () => resolveConcurrent(c, 'earliest') }), button('Keep latest only', { onclick: () => resolveConcurrent(c, 'latest') })));
       }
       if (c.kind === 'clock') {
-        const [title, text] = CLOCK_ISSUES[c.issue] || ['Implausible timestamps', ''];
+        const [title, text] = CLOCK_ISSUES[c.issue] || ['Implausible timestamps', () => ''];
         const reviews = c.events.filter((e) => e.type === 'review');
         const n = c.events.length;
         return h('section', { class: 'panel stack' }, h('h3', {}, title),
-          h('p', { class: 'muted small' }, `${n} event${n === 1 ? '' : 's'} from ${c.deviceId === store.deviceId ? 'this device' : 'another device'}. ${text}`),
-          callout('info', 'They are kept in your history and counted in time order; a review is never replayed before the review it was based on. Keep them as they are, or stop counting the suspicious reviews in scheduling (their records stay in the history).'),
+          h('p', { class: 'muted small' }, `${n} event${n === 1 ? '' : 's'} from ${c.deviceId === store.deviceId ? 'this device' : 'another device'}. ${text(n === 1)}`),
+          callout('info', 'Suspicious events are kept in your history and counted in time order; a review is never replayed before the review it was based on. Keep them as they are, or stop counting the suspicious reviews in scheduling (their records stay in the history).'),
           h('div', { class: 'table-wrap' }, h('table', { class: 'table' }, h('tbody', {}, c.events.slice(0, 10).map((e) => {
             const card = app.cache.cards.get(e.cardId);
             return h('tr', {}, h('td', {}, formatDate(e.ts, { dateStyle: 'medium', timeStyle: 'short' })), h('td', { class: 'small' }, card ? valueText(card.front[0]) : '—'), h('td', {}, e.type), h('td', {}, RATING_LABELS[e.rating] || ''));
           })))),
           n > 10 ? h('p', { class: 'faint small' }, `and ${n - 10} more`) : null,
-          h('div', { class: 'row' }, button('Keep them', { kind: 'primary', onclick: () => resolveClock(c, false) }),
+          h('div', { class: 'row' }, button(n === 1 ? 'Keep it' : 'Keep them', { kind: 'primary', onclick: () => resolveClock(c, false) }),
             reviews.length ? button(`Don’t count ${reviews.length === 1 ? 'this review' : `these ${reviews.length} reviews`}`, { onclick: () => resolveClock(c, true) }) : null));
       }
       return null;
