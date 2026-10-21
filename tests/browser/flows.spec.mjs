@@ -69,6 +69,9 @@ export const tests = [
       assert.equal(correction.targetId, review.id);
       let unit = (await idbAll(page, 'units')).find((u) => u.id === review.unitId);
       assert.equal(unit.state.lapses, 0);
+      assert.equal(unit.lastScheduled.correct, true, 'the next review’s Easy check sees a correct answer');
+      assert.equal(unit.lastScheduled.grade, correction.newRating);
+      assert.deepEqual(unit.perf.recent.map((r) => r.c), [true], 'recent performance counts the rescue as a success');
       const session = (await idbAll(page, 'sessions'))[0];
       assert.equal(session.queue.filter((id) => id === review.unitId).length, 1, 'obsolete failure requeue removed');
       // Undo the (rescued) review.
