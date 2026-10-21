@@ -121,6 +121,8 @@ export function planReview(ctx) {
     predictedR,
     elapsedDays,
     activeMs: Math.round(trial.raw?.activeMs ?? trial.raw?.totalMs ?? 0),
+    // Time spent choosing a self-grade (standard FSRS arm); not answer time.
+    gradingMs: usesManual ? Math.round(trial.gradingMs || 0) : 0,
     flags,
     research,
     // Enough unit context to reverse this transition exactly (undo).

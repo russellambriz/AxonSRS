@@ -33,25 +33,34 @@ export function createStudy({ id, startDay, design = 'randomized', schedulerVers
  */
 export function comparisonReport(events, study, { minElapsedDays = 1 } = {}) {
   const corr = correctionIndex(events);
-  const arms = Object.fromEntries(ARMS.map((a) => [a, { n: 0, recalled: 0, elapsed: [], studyMs: 0, retrievals: 0, cards: new Set(), affected: 0 }]));
+  const arms = Object.fromEntries(ARMS.map((a) => [a, { n: 0, recalled: 0, elapsed: [], studyMs: 0, retrievals: 0, cards: new Set(), affected: 0, perReview: [], predicted: [], selfRated: 0, agree: 0 }]));
   for (const e of events) {
     if (!e.research || e.research.studyId !== study.id) continue;
     const arm = arms[e.research.arm];
     if (!arm) continue;
+    if (answerClass(e, corr) === 'voided') continue;
     if (e.type === 'review' || e.type === 'practice') {
-      arm.studyMs += e.activeMs || 0;
+      // Total study time includes the time spent self-grading, which is the
+      // extra cost of the standard arm.
+      const ms = (e.activeMs || 0) + (e.gradingMs || 0);
+      arm.studyMs += ms;
+      arm.perReview.push(ms);
       arm.retrievals++;
       arm.cards.add(e.cardId);
+      if (e.grading?.mode === 'manual' && e.grading.shadowGrade != null) {
+        arm.selfRated++;
+        if (e.grading.shadowGrade === e.rating) arm.agree++;
+      }
     }
     if (e.type !== 'review' || !e.firstAttempt || (e.elapsedDays ?? 0) < minElapsedDays) continue;
     const cls = answerClass(e, corr);
-    if (cls === 'voided') continue;
     if (e.flags?.practiceSinceLast || e.flags?.siblingExposure) {
       arm.affected++;
       continue;
     }
     arm.n++;
     arm.elapsed.push(e.elapsedDays);
+    if (Number.isFinite(e.predictedR)) arm.predicted.push(e.predictedR);
     if (cls === 'independent-correct') arm.recalled++;
   }
   const out = {};
@@ -62,6 +71,12 @@ export function comparisonReport(events, study, { minElapsedDays = 1 } = {}) {
       medianElapsedDays: median(a.elapsed),
       studyMinutes: a.studyMs / 60000,
       minutesPerCard: a.cards.size ? a.studyMs / 60000 / a.cards.size : null,
+      medianSecondsPerReview: a.perReview.length ? median(a.perReview) / 1000 : null,
+      // Calibration: mean predicted recall at the delayed tests vs. observed.
+      meanPredictedRecall: a.predicted.length ? a.predicted.reduce((x, y) => x + y, 0) / a.predicted.length : null,
+      calibrationGap: a.predicted.length && a.n ? a.predicted.reduce((x, y) => x + y, 0) / a.predicted.length - a.recalled / a.n : null,
+      selfRatings: a.selfRated,
+      selfRatingAgreement: a.selfRated ? a.agree / a.selfRated : null,
       cards: a.cards.size,
       retrievals: a.retrievals,
       excludedAffectedByExposure: a.affected,
@@ -99,6 +114,9 @@ export function deidentifiedRows(events, { salt = String(Math.random()) } = {}) 
       revealed: e.assistance?.revealed ?? null,
       grade: e.grading?.grade ?? null,
       rating: e.rating ?? e.newRating ?? null,
+      gradingMode: e.grading?.mode ?? null,
+      automaticGrade: e.grading?.shadowGrade ?? e.grading?.grade ?? null,
+      gradingMs: e.gradingMs ?? null,
       confidence: e.grading?.confidence ?? null,
       reasons: (e.grading?.reasons || []).join(' '),
       latencyMs: e.grading?.measurements?.raw?.latencyMs ?? null,

@@ -480,7 +480,7 @@ class StudyScreen {
     const done = (this.session.activeMs || 0) >= f.minutes * 60000;
     if (!done || this.session.focusAcknowledgedAt === this.session.index) return false;
     this.showOverlay('Focus session complete', `You studied for ${f.minutes} minutes. Take a ${f.breakMinutes || 5}-minute break — your place is saved.`, [
-      { label: 'Keep going', primary: true, run: async () => { this.session = { ...this.session, focusAcknowledgedAt: this.session.index, activeMs: 0 }; await store.saveSession(this.session); this.next(); } },
+      { label: 'Keep going', primary: true, run: async () => { this.session = { ...this.session, focusAcknowledgedAt: this.session.index, activeMs: 0, warmupPending: true }; await store.saveSession(this.session); this.next(); } },
       { label: 'End session', run: () => this.endSession() },
     ]);
     return true;
@@ -605,6 +605,7 @@ class StudyScreen {
     if (cur.grade.mode === 'manual' && match.correct) {
       this.renderFeedback({ pending: true });
       this.setPhase('grading');
+      this.gradingStartedAt = performance.now();
       return;
     }
     await this.commit();
@@ -613,6 +614,8 @@ class StudyScreen {
   async manualGrade(rating) {
     if (this.phase !== 'grading') return;
     this.setPhase('submitting');
+    // Capped so a card left open while away does not inflate study time.
+    this.current.trial.gradingMs = Math.min(120000, performance.now() - (this.gradingStartedAt || performance.now()));
     await this.commit(rating);
   }
 
@@ -1278,7 +1281,15 @@ class StudyScreen {
   }
 
   showOverlay(title, text, actions) {
-    this.overlay = sheet({ title, content: h('p', { class: 'muted' }, text), footer: (close) => actions.map((a) => h('button', { class: ['btn', a.primary && 'primary'], onclick: () => { close(); a.run(); } }, a.label)) });
+    // Dismissing the sheet (X, Escape, backdrop) takes the primary action,
+    // so the session never sits behind a closed overlay with no way on.
+    let chosen = false;
+    this.overlay = sheet({
+      title,
+      content: h('p', { class: 'muted' }, text),
+      footer: (close) => actions.map((a) => h('button', { class: ['btn', a.primary && 'primary'], onclick: () => { chosen = true; close(); a.run(); } }, a.label)),
+      onClose: () => { if (!chosen) actions.find((a) => a.primary)?.run(); },
+    });
   }
 
   async endSession() {
