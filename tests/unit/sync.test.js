@@ -227,6 +227,67 @@ test('Gist client explains authentication, permission, rate-limit and network er
   assert.throws(() => new GistClient({}));
 });
 
+test('sync pull never keeps media that fail validation, says why, and leaves them in the Gist', async () => {
+  const { SyncService } = await import('../../js/data/sync.js');
+  const { SYNC_FORMAT } = await import('../../js/config.js');
+  const { sha256Hex } = await import('../../js/core/util.js');
+  const { MANIFEST_FILE } = await import('../../js/core/sync/chunks.js');
+  // A Gist written by another device: one valid image, one SVG, one oversized asset that claims to be tiny.
+  const files = new Map();
+  const history = ['v1'];
+  const put = async (name, value) => {
+    files.set(name, JSON.stringify(await seal(value, { format: SYNC_FORMAT, deviceId: 'B' })));
+    return sha256Hex(JSON.stringify(value));
+  };
+  const good = { id: 'sha256-good', type: 'image/png', size: 3, data: 'AAAA' };
+  const svg = { id: 'sha256-svg', type: 'image/svg+xml', size: 10, data: 'PHN2Zz4=' };
+  const huge = { id: 'sha256-huge', type: 'image/png', size: 12, data: 'A'.repeat(28 * 1024 * 1024) };
+  const hashes = { 'axon-records.json': await put('axon-records.json', { kind: 'records', decks: [], cards: [], units: [], links: [], plans: [], tombstones: [], settings: { values: {}, updatedAt: {} } }) };
+  for (const m of [good, svg, huge]) hashes[`axon-media-${m.id}.json`] = await put(`axon-media-${m.id}.json`, { kind: 'media', media: m });
+  files.set(MANIFEST_FILE, JSON.stringify(await seal(buildManifest({ hashes, counts: {}, deviceId: 'B', encrypted: false }), { format: SYNC_FORMAT, deviceId: 'B' })));
+  const batches = [];
+  const client = {
+    getGist: async () => ({ id: 'g', history: history.map((version) => ({ version })) }),
+    fileContent: async (gist, name) => files.get(name) ?? null,
+    updateGist: async (id, batch) => {
+      batches.push(batch);
+      for (const [n, f] of Object.entries(batch)) (f ? files.set(n, f.content) : files.delete(n));
+      history.unshift(`v${history.length + 1}`);
+    },
+  };
+  const merged = [];
+  const store = {
+    deviceId: 'A',
+    device: { sync: { gistId: 'g' } },
+    async mergeIn(ds) {
+      merged.push(ds);
+      return { report: { newEvents: 0, conflicts: [], autoMerged: 0 } };
+    },
+    // This device has one review of its own to upload.
+    exportDataset: async () => ({ ...emptyDataset(), events: [ev('mine', 'c:fwd', Date.UTC(2026, 2, 1))], media: merged.at(-1)?.media || [] }),
+    async setDevice(patch) {
+      this.device = { ...this.device, ...patch };
+    },
+  };
+  const svc = new SyncService(store);
+  svc.token = 'not-a-real-token';
+  svc.client = () => client;
+  const result = await svc.sync({ reason: 'manual' });
+  assert.deepEqual(merged[0].media.map((m) => m.id), ['sha256-good'], 'refused media are not merged');
+  assert.deepEqual(result.pulled.rejectedMedia.map((r) => r.id).sort(), ['sha256-huge', 'sha256-svg']);
+  assert.equal(result.pulled.newlyRejected.length, 2);
+  assert.match(svc.status.message, /2 image or audio files in the Gist were not imported \(.*unsupported media type image\/svg\+xml.*too large/);
+  // The upload neither deletes nor unlists them.
+  assert.ok(batches.length, 'this device uploaded its review');
+  assert.ok(batches.every((b) => !Object.keys(b).some((n) => n.includes('sha256-svg') || n.includes('sha256-huge'))));
+  const manifest = await open(JSON.parse(files.get(MANIFEST_FILE)));
+  assert.ok(manifest.files['axon-media-sha256-svg.json'] && manifest.files['axon-media-sha256-huge.json']);
+  // Reported once as new; later syncs still say so in the status.
+  const again = await svc.sync({ reason: 'manual' });
+  assert.equal(again.pulled.newlyRejected.length, 0);
+  assert.match(svc.status.message, /not imported/);
+});
+
 test('chunking splits by kind and month, round-trips, and only changed chunks differ', async () => {
   const { ds } = baseWorld();
   const data = { ...ds, events: [ev('a', 'c:fwd', Date.UTC(2026, 0, 3)), ev('b', 'c:fwd', Date.UTC(2026, 1, 3))], units: [{ id: 'c:fwd', cardId: 'c', deckId: 'd', key: 'fwd', state: { due: 1 }, active: true }], media: [{ id: 'sha256-x', type: 'image/png', size: 3, data: 'AAA=' }] };

@@ -1,7 +1,7 @@
 // Spec 17.25, 17.28: invalid backup recovery, migrations, round trips.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildBackup, readBackup, validateDataset, migrateData } from '../../js/core/backup.js';
+import { buildBackup, readBackup, validateDataset, migrateData, base64ByteLength, MAX_MEDIA_BYTES } from '../../js/core/backup.js';
 import { seal, open } from '../../js/core/sync/envelope.js';
 import { createCard, createDeck } from '../../js/core/model.js';
 import { schedulerParams } from '../../js/core/scheduler.js';
@@ -70,6 +70,32 @@ test('partially invalid data: bad records are reported and skipped, good ones ke
   assert.equal(ds.units.length, 1);
   const messages = errors.map((e) => `${e.collection}:${e.message}`).join('\n');
   for (const needle of ['front/back', 'valid rating', 'unknown event type', 'duplicate id', 'unsupported media', 'missing deck', 'without a card']) assert.match(messages, new RegExp(needle));
+});
+
+test('media are bounded by their decoded data, whatever their size field claims', () => {
+  assert.equal(base64ByteLength('AAAA'), 3);
+  assert.equal(base64ByteLength('AAA='), 2);
+  assert.equal(base64ByteLength('AA=='), 1);
+  assert.equal(base64ByteLength('AAAAAA'), 4, 'unpadded, as atob accepts');
+  assert.equal(base64ByteLength('AAAA\nAAAA'), 6, 'line breaks are ignored');
+  assert.equal(base64ByteLength('AAAAA'), -1);
+  assert.equal(base64ByteLength('AA*A'), -1);
+  const big = 'A'.repeat(Math.ceil((MAX_MEDIA_BYTES + 3) / 3) * 4);
+  const data = dataset();
+  data.media = [
+    { id: 'sha256-small', type: 'image/png', data: 'AAAA' },
+    { id: 'sha256-lies', type: 'image/png', size: 10, data: big },
+    { id: 'sha256-nosize', type: 'image/png', data: big },
+    { id: 'sha256-garbled', type: 'image/png', size: 3, data: 'AA*A' },
+    { id: 'sha256-meta-only', type: 'image/png', size: 2048 },
+  ];
+  const { dataset: ds, errors } = validateDataset(data);
+  assert.deepEqual(ds.media.map((m) => m.id), ['sha256-small', 'sha256-meta-only']);
+  assert.equal(ds.media[0].size, 3, 'the real size is stored');
+  const messages = errors.filter((e) => e.collection === 'media').map((e) => `${e.id}: ${e.message}`);
+  assert.equal(messages.length, 3);
+  assert.match(messages[0], /sha256-lies: media asset too large \(20\.0 MB; the limit is 20\.0 MB\)/);
+  assert.match(messages[2], /not valid base64/);
 });
 
 test('older or foreign data is migrated (task type defaults to Recall)', () => {

@@ -112,6 +112,10 @@ async function boot() {
   startViewport();
   if (store.schedulerChange) schedulerNotice(store.schedulerChange);
 
+  // Media refused on a sync pull are reported, not silently skipped.
+  app.sync.on((st) => {
+    if (st.state === 'ok' && st.result?.pulled?.newlyRejected?.length) toast(st.message, { timeout: 15000 });
+  });
   await app.sync.loadCredentials();
   const autoSync = () => {
     if (app.sync.isConfigured() && store.device.sync?.autoSync && !app.sync.needsToken() && !app.sync.needsPassphrase()) app.sync.sync({ reason: 'auto' }).catch(() => {});
