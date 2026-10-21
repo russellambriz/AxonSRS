@@ -7,7 +7,7 @@ import { store } from '../../data/store.js';
 import { page, button, kpi } from './common.js';
 import { toast, promptDialog, callout, barChart, chartWithTable, dataTable, errorToast } from '../components.js';
 import { startDaily, todayContext, createSession } from '../../study/session.js';
-import { currentStreak, heatmapLevels, forecast } from '../../core/stats.js';
+import { currentStreak, heatmapLevels, forecast, effectiveRetrievals, isScheduled } from '../../core/stats.js';
 import { durationModel, estimateSessionMinutes, catchUpPlan } from '../../core/planner.js';
 import { addDays } from '../../core/time.js';
 import { createSampleDeck } from './sample.js';
@@ -29,7 +29,7 @@ export async function view(outlet) {
     header.hidden = false;
     const [tctx, recent, activity, sessions, conflicts, imports] = await Promise.all([
       todayContext(),
-      store.recentRetrievals(300),
+      store.recentRetrievals(600),
       store.activitySummary(),
       store.activeSessions(),
       store.listConflicts(),
@@ -47,7 +47,7 @@ export async function view(outlet) {
     const model = durationModel(recent);
     const est = estimateSessionMinutes({ reviews, news: newToday, learning: counts.learning }, model);
     const streak = currentStreak(activity, tctx.today);
-    const reviewedToday = tctx.events.filter((e) => e.type === 'review').length;
+    const reviewedToday = effectiveRetrievals(tctx.events).filter(isScheduled).length;
     const fc = forecast([...app.cache.units.values()], app.cache.cards, { today: tctx.today, days: 8, timeZone: tctx.timeZone, rolloverHour: tctx.rolloverHour });
 
     const blocks = [];

@@ -6,12 +6,16 @@ import { app } from '../../app.js';
 import { store } from '../../data/store.js';
 import { page, button, kpi, plainFront, leechActions } from './common.js';
 import { lineChart, barChart, calibrationChart, chartWithTable, dataTable, menu, toast, callout, errorToast } from '../components.js';
-import { summary, accuracySeries, dailyActivity, currentStreak, longestStreak, heatmapLevels, retentionCalibration, forecast, strongestWeakest, deckTrends, exposureBreakdown, correctionIndex, answerClass, isLeech } from '../../core/stats.js';
+import { summary, accuracySeries, dailyActivity, currentStreak, longestStreak, heatmapLevels, retentionCalibration, forecast, strongestWeakest, deckTrends, recentWeeks, exposureBreakdown, correctionIndex, answerClass, isLeech, latencySeries, selfRatingAnalysis } from '../../core/stats.js';
 import { comparisonReport, deidentifiedRows, toCsv } from '../../core/research.js';
 import { baselineStats, calibrationLevel, MODALITY_LABELS } from '../../core/fluency.js';
-import { formatDuration, formatInterval } from '../../core/util.js';
+import { formatDuration, formatInterval, pluralize } from '../../core/util.js';
 import { addDays } from '../../core/time.js';
 import { TASK_TYPE_LABELS } from '../../core/model.js';
+import { RATING_LABELS } from '../../core/scheduler.js';
+
+/** "5 Jan" for a week key (YYYY-MM-DD). */
+const weekLabel = (day) => new Date(`${day}T12:00:00`).toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
 
 export async function view(outlet) {
   await app.cache.ensure();
@@ -24,7 +28,7 @@ export async function view(outlet) {
   const corr = correctionIndex(events);
   const params = store.paramsFor(null);
   const sum = summary(events, units, { today: tctx.today, now: tctx.now, params, corr });
-  const activity = dailyActivity(events);
+  const activity = dailyActivity(events, new Map(), corr);
   const fc = forecast(units, app.cache.cards, { today: tctx.today, days: 30, timeZone: tctx.timeZone, rolloverHour: tctx.rolloverHour });
   const blocks = [];
 
@@ -43,16 +47,17 @@ export async function view(outlet) {
   blocks.push(h('div', { class: 'grid-2' },
     h('section', { class: 'panel stack' }, h('h3', {}, 'Observed recall'),
       h('div', { class: 'stat' }, h('div', { class: 'value' }, Number.isFinite(sum.firstAttemptAccuracy.p) ? percent(sum.firstAttemptAccuracy.p) : '—'), h('div', { class: 'label' }, 'First-attempt accuracy on scheduled reviews, independent answers only'), Number.isFinite(sum.firstAttemptAccuracy.p) ? h('div', { class: 'note' }, `95% interval ${percent(sum.firstAttemptAccuracy.low)}–${percent(sum.firstAttemptAccuracy.high)} · n = ${sum.firstAttemptAccuracy.n}`) : null),
-      h('div', { class: 'faint small' }, `Within sessions: ${percent(sum.eventualSuccess.firstAttempt)} correct on the first try, ${percent(sum.eventualSuccess.eventual)} eventually (after retries).`)),
+      h('div', { class: 'faint small' }, `Within sessions: ${percent(sum.eventualSuccess.firstAttempt)} correct on the first try, ${percent(sum.eventualSuccess.eventual)} eventually (after retries).`),
+      h('div', { class: 'faint tiny' }, 'Answers you rescued (accepted alias or Mark correct) count as correct everywhere; undone reviews count nowhere.')),
     h('section', { class: 'panel stack' }, h('h3', {}, 'Predicted recall'),
       h('div', { class: 'stat' }, h('div', { class: 'value' }, sum.predictedRecall != null ? percent(sum.predictedRecall) : '—'), h('div', { class: 'label' }, `FSRS estimate of retrievability right now, averaged over ${sum.predictedRecallUnits} learned units`), h('div', { class: 'note' }, 'A model estimate, not an observation.')),
-      sum.practiceSinceModel ? h('div', { class: 'faint small' }, 'Optional practice is not fed into the memory model by default, so these estimates may under-count recent exposure.') : null)));
+      sum.practicedUnits ? h('div', { class: 'faint small' }, `${sum.practicedUnits} of these units had optional practice since their last scheduled review. Practice is not fed into the memory model by default, so the estimate may be incomplete for them (it may under-count recent exposure).`) : null)));
 
   // Accuracy over time
   const weekly = accuracySeries(events, { bucket: 'week', corr }).slice(-16);
   if (weekly.length) {
     const pts = weekly.map((w) => ({ x: w.key, y: w.ci.p, lo: w.ci.low, hi: w.ci.high, n: w.n }));
-    blocks.push(h('section', { class: 'panel' }, chartWithTable(lineChart(pts, { label: 'Weekly first-attempt accuracy with 95% intervals' }), dataTable(['Week of', 'Reviews', 'Independent correct', 'Hinted', 'Revealed', 'Overridden', '95% interval'], weekly.map((w) => [w.key, String(w.n), percent(w.ci.p), String(w.hinted), String(w.revealed), String(w.overridden), `${percent(w.ci.low)}–${percent(w.ci.high)}`])), { title: 'Accuracy over time' }), h('p', { class: 'faint tiny' }, 'Shaded band: 95% Wilson interval. Hinted, revealed and overridden answers are not counted as independent recall.')));
+    blocks.push(h('section', { class: 'panel' }, chartWithTable(lineChart(pts, { label: 'Weekly first-attempt accuracy with 95% intervals' }), dataTable(['Week of', 'Reviews', 'Independent correct', 'Hinted', 'Revealed', 'Overridden', 'Rescued', '95% interval'], weekly.map((w) => [w.key, String(w.n), percent(w.ci.p), String(w.hinted), String(w.revealed), String(w.overridden), String(w.rescued), `${percent(w.ci.low)}–${percent(w.ci.high)}`])), { title: 'Accuracy over time' }), h('p', { class: 'faint tiny' }, 'Shaded band: 95% Wilson interval. Hinted and revealed answers, and answers you marked as a guess, are not counted as independent recall. Overridden answers are the ones you corrected; those rescued with an accepted alias or Mark correct count as correct (Rescued column).')));
   }
 
   // Answer breakdown (last 30 days)
@@ -67,10 +72,22 @@ export async function view(outlet) {
   blocks.push(h('div', { class: 'grid-2' },
     h('section', { class: 'panel' }, h('h3', {}, 'Answers, last 30 days'), dataTable(['Kind', 'Count'], [['Independent & correct', String(breakdown['independent-correct'])], ['Incorrect', String(breakdown.incorrect)], ['Correct with hint', String(breakdown.hinted)], ['Answer revealed', String(breakdown.revealed)], ['Overridden by you', String(breakdown.overridden)], ['Correction copies (not recall)', String(exposures.copy)]])),
     h('section', { class: 'panel' }, h('h3', {}, 'Retrieval speed'), dataTable(['Measure', 'Value'], [
+      ['Average (mean) first-keystroke latency', formatDuration(sum.meanLatencyMs)],
       ['Median first-keystroke latency', formatDuration(sum.medianLatencyMs)],
+      ['Average after reading-time estimate', formatDuration(sum.meanAdjustedLatencyMs)],
       ['Median after reading-time estimate', formatDuration(sum.medianAdjustedLatencyMs)],
       ['Median normalised hesitation', Number.isFinite(sum.medianHesitation) ? `${sum.medianHesitation.toFixed(2)} (0 = your typical)` : '—'],
-    ]), h('p', { class: 'faint tiny' }, 'First-keystroke latency is a proxy for retrieval latency, not a direct measure of memory strength.'))));
+    ]), h('p', { class: 'faint tiny' }, 'First-keystroke latency is a proxy for retrieval latency, not a direct measure of memory strength. The average is pulled up by occasional long pauses; the median is the typical answer.'))));
+
+  // Latency over time
+  const latWeeks = latencySeries(events, { bucket: 'week', corr }).slice(-16);
+  if (latWeeks.length) {
+    const secs = (ms) => (Number.isFinite(ms) ? ms / 1000 : NaN);
+    const top = Math.max(1, ...latWeeks.map((w) => secs(w.meanMs)).filter(Number.isFinite));
+    const yMax = top <= 2 ? 2 : top <= 5 ? 5 : Math.ceil(top / 5) * 5;
+    const pts = latWeeks.map((w) => ({ x: w.key, y: secs(w.meanMs), n: w.n }));
+    blocks.push(h('section', { class: 'panel' }, chartWithTable(lineChart(pts, { label: 'Weekly average first-keystroke latency in seconds', yMax, format: (v) => `${v.toFixed(1)} s` }), dataTable(['Week of', 'Answers', 'Average latency', 'Median latency', 'Average after reading time', 'Median after reading time'], latWeeks.map((w) => [w.key, String(w.n), formatDuration(w.meanMs), formatDuration(w.medianMs), formatDuration(w.meanAdjustedMs), formatDuration(w.medianAdjustedMs)])), { title: 'Retrieval latency over time' }), h('p', { class: 'faint tiny' }, 'Weekly average time to the first keystroke over all reviews and practice answers (undone ones excluded). Easier or more familiar cards in a week lower it, so read it as a trend, not a measure of memory.')));
+  }
 
   // Calibration baselines
   blocks.push(h('section', { class: 'panel' }, h('h3', {}, 'Timing calibration'), baselines.length ? dataTable(['Input method', 'Task type', 'Samples', 'Status', 'Typical first key', 'Typing pace'], baselines.map((b) => {
@@ -111,7 +128,8 @@ export async function view(outlet) {
   };
   blocks.push(h('div', { class: 'grid-2' },
     h('section', { class: 'panel flush' }, h('div', { style: { padding: '16px 16px 4px' } }, h('h3', {}, 'Strongest')), h('div', { class: 'list' }, sw.strongest.map((x) => unitRow(x, (y) => `stability ${formatInterval(y.stability)}`)))),
-    h('section', { class: 'panel flush' }, h('div', { style: { padding: '16px 16px 4px' } }, h('h3', {}, 'Weakest')), h('div', { class: 'list' }, sw.weakest.map((x) => unitRow(x, (y) => `${y.lapses} lapses · R ${percent(y.r)}`))))));
+    h('section', { class: 'panel flush' }, h('div', { style: { padding: '16px 16px 4px' } }, h('h3', {}, 'Weakest')), h('div', { class: 'list' }, sw.weakest.map((x) => unitRow(x, (y) => `${y.lapses} lapses · R ${percent(y.r)}${y.unit.practiceSinceLast ? '*' : ''}`))),
+      sw.weakest.some((x) => x.unit.practiceSinceLast) ? h('p', { class: 'faint tiny', style: { padding: '0 16px 12px' } }, '* Practised since the last scheduled review; the predicted recall (R) does not include that practice.') : null)));
 
   // Leeches
   const leeches = units.filter((u) => u.active && (u.leech || isLeech(u, { threshold: app.cache.decks.get(u.deckId)?.settings?.leechThreshold ?? 4, minDifficulty: store.global.leechMinDifficulty ?? 7 })));
@@ -123,15 +141,35 @@ export async function view(outlet) {
       return h('div', { class: 'list-row' }, h('span', { class: 'chip danger' }, `${u.state?.lapses ?? 0} lapses`), h('a', { class: 'grow truncate', href: `#/card/${card.id}` }, plainFront(card)), actions);
     })) : h('p', { class: 'faint', style: { padding: '0 16px 16px' } }, 'No leeches. 🎉')));
 
-  // Deck trends
+  // Deck trends: week-by-week first-attempt accuracy per deck
   const trends = deckTrends(events, { today: tctx.today, weeks: 8, corr });
   if (trends.size) {
-    blocks.push(h('section', { class: 'panel' }, h('h3', {}, 'Per-deck trends (8 weeks)'), dataTable(['Deck', 'Reviews', 'Independent correct', 'Recent week'], [...trends.entries()].map(([deckId, rows]) => {
-      const n = rows.reduce((s, r) => s + r.n, 0);
-      const c = rows.reduce((s, r) => s + r.correct, 0);
-      const lastRow = rows[rows.length - 1];
-      return [app.cache.decks.get(deckId)?.name || '(deleted deck)', String(n), percent(c / n), lastRow ? `${percent(lastRow.correct / lastRow.n)} (n=${lastRow.n})` : '—'];
-    }))));
+    const weeks = recentWeeks(tctx.today, 8);
+    const cell = (r) => (r ? h('span', { title: `${r.correct} of ${r.n} independent correct` }, percent(r.correct / r.n), h('span', { class: 'faint tiny' }, ` n=${r.n}`)) : h('span', { class: 'faint', 'aria-label': 'no reviews' }, '—'));
+    const rows = [...trends.entries()].map(([deckId, list]) => {
+      const byWeek = new Map(list.map((r) => [r.week, r]));
+      const n = list.reduce((s, r) => s + r.n, 0);
+      const c = list.reduce((s, r) => s + r.correct, 0);
+      return h('tr', {}, h('th', { scope: 'row', style: { textTransform: 'none', letterSpacing: 'normal', fontSize: 'inherit', color: 'var(--text)' } }, app.cache.decks.get(deckId)?.name || '(deleted deck)'), h('td', { class: 'num' }, percent(c / n), h('span', { class: 'faint tiny' }, ` n=${n}`)), weeks.map((w) => h('td', { class: 'num nowrap' }, cell(byWeek.get(w)))));
+    });
+    blocks.push(h('section', { class: 'panel' }, h('h3', {}, 'Per-deck trends (8 weeks)'),
+      h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
+        h('caption', { class: 'visually-hidden' }, 'Independent first-attempt accuracy of scheduled reviews per deck and week'),
+        h('thead', {}, h('tr', {}, h('th', { scope: 'col' }, 'Deck'), h('th', { scope: 'col' }, '8 weeks'), weeks.map((w) => h('th', { scope: 'col', class: 'nowrap', title: `Week of ${w}` }, weekLabel(w))))),
+        h('tbody', {}, rows))),
+      h('p', { class: 'faint tiny' }, 'Independent first-attempt accuracy of scheduled reviews, by week (columns start on Monday); n = reviews. Weeks with few reviews are noisy.')));
+  }
+
+  // Confidence self-ratings
+  const sr = selfRatingAnalysis(events, { corr });
+  if (sr.n) {
+    const avg = (v, digits = 1) => (v != null ? v.toFixed(digits) : '—');
+    blocks.push(h('section', { class: 'panel stack' }, h('h3', {}, 'Confidence self-ratings'),
+      h('p', { class: 'faint small' }, [`${pluralize(sr.n, 'answer')} rated.`, sr.meanRatingCorrect != null ? `Mean rating ${avg(sr.meanRatingCorrect)} when the answer was correct.` : null, sr.meanRatingIncorrect != null ? `Mean rating ${avg(sr.meanRatingIncorrect)} when it was not.` : null].filter(Boolean).join(' ')),
+      h('div', { class: 'stack' },
+        dataTable(['Your rating', 'Answers', 'Correct', '95% interval', 'Mean automatic grade', 'Mean heuristic grading confidence'], sr.levels.filter((l) => l.n).map((l) => [`${l.value} of 5`, String(l.n), percent(l.accuracy.p), `${percent(l.accuracy.low)}–${percent(l.accuracy.high)}`, l.meanGrade != null ? `${avg(l.meanGrade)} (${RATING_LABELS[Math.round(l.meanGrade)]})` : '—', l.meanConfidence != null ? percent(l.meanConfidence) : '—']), { caption: 'Correctness and automatic grade by confidence self-rating' }),
+        dataTable(['Automatic grade', 'Rated answers', 'Mean self-rating'], sr.byGrade.filter((g) => g.n).map((g) => [RATING_LABELS[g.grade], String(g.n), avg(g.meanRating)]), { caption: 'Mean confidence self-rating by automatic grade' })),
+      h('p', { class: 'faint tiny' }, 'Self-ratings are your own judgement, kept separately from the automatic grade; they are not a validated probability and never change grading. Ratings that rise with the automatic grade suggest the grading thresholds match how fluent the answers felt to you.')));
   }
 
   // Exposure log

@@ -445,7 +445,7 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
           h('span', {}, 'Difficulty ', h('b', {}, u.state.difficulty.toFixed(2))),
           h('span', {}, 'Reviews ', h('b', {}, String(u.state.reps))),
           h('span', {}, 'Lapses ', h('b', {}, String(u.state.lapses))),
-          r != null ? h('span', { title: 'Model estimate, not an observation' }, 'Predicted recall now ', h('b', {}, percent(r))) : null) : h('p', { class: 'faint small' }, 'Not studied yet.'),
+          r != null ? h('span', { title: 'Model estimate, not an observation' }, 'Predicted recall now ', h('b', {}, percent(r)), u.practiceSinceLast ? ' (may be incomplete: practice since the last review is not in the model)' : '') : null) : h('p', { class: 'faint small' }, 'Not studied yet.'),
         u.overlays?.postponedUntil ? callout('info', `Postponed until ${u.overlays.postponedUntil} (its real due date is unchanged).`) : null,
         rows.length ? h('div', { class: 'table-wrap' }, h('table', { class: 'table' },
           h('thead', {}, h('tr', {}, ['When', 'Type', 'Answer', 'Result', 'Grade', 'First key', 'Total', 'Interval'].map((t) => h('th', {}, t)))),

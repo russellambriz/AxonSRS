@@ -10,7 +10,7 @@ import { cardBrowser } from './browser.js';
 import { deckMenuItems } from './decks.js';
 import { startDaily, createSession } from '../../study/session.js';
 import { DEFAULT_DECK_SETTINGS, ANSWER_MODE_LABELS, TASK_TYPE_LABELS } from '../../core/model.js';
-import { deckTrends, isLeech } from '../../core/stats.js';
+import { deckTrends, isLeech, correctionIndex, outcome } from '../../core/stats.js';
 import { percent } from '../dom.js';
 
 export async function view(outlet, { id }, query) {
@@ -69,23 +69,26 @@ export async function view(outlet, { id }, query) {
 async function overviewPanel(deck) {
   const c = app.counts({ deckId: deck.id });
   const events = (await store.eventsSince(Date.now() - 120 * 86400000)).filter((e) => e.deckId === deck.id);
-  const trends = deckTrends(events, { today: store.today(), weeks: 8 }).get(deck.id) || [];
+  const corr = correctionIndex(events);
+  const trends = deckTrends(events, { today: store.today(), weeks: 8, corr }).get(deck.id) || [];
   const units = [...app.cache.units.values()].filter((u) => u.deckId === deck.id && u.active);
   const leeches = units.filter((u) => u.leech || isLeech(u, { threshold: deck.settings.leechThreshold }));
   let rSum = 0;
   let rN = 0;
+  let practiced = 0;
   for (const u of units) {
     const r = app.retrievability(u);
-    if (r != null) { rSum += r; rN++; }
+    if (r != null) { rSum += r; rN++; if (u.practiceSinceLast) practiced++; }
   }
-  const first = events.filter((e) => e.type === 'review' && e.firstAttempt);
-  const independent = first.filter((e) => e.response?.correct && !e.assistance?.hintShown && !e.assistance?.revealed).length;
+  // Same rule as Statistics: undone reviews left out, rescued answers correct.
+  const first = events.filter((e) => e.type === 'review' && e.firstAttempt).map((e) => outcome(e, corr)).filter(Boolean);
+  const independent = first.filter((o) => o.independent).length;
   return h('div', { class: 'stack loose' },
     h('div', { class: 'kpis' },
       kpi('Due now', String(c.due + c.learning)),
       kpi('New available', String(c.newAvailable)),
       kpi('Observed recall (120 d)', first.length ? percent(independent / first.length) : '—', `${first.length} first attempts, independent only`),
-      kpi('Predicted recall now', rN ? percent(rSum / rN) : '—', 'FSRS estimate, not an observation')),
+      kpi('Predicted recall now', rN ? percent(rSum / rN) : '—', practiced ? `FSRS estimate, not an observation · may be incomplete: ${practiced} practised since their last review` : 'FSRS estimate, not an observation')),
     h('section', { class: 'panel' }, h('h3', {}, 'Weekly first-attempt accuracy'),
       trends.length ? h('table', { class: 'table' }, h('thead', {}, h('tr', {}, h('th', {}, 'Week of'), h('th', {}, 'Reviews'), h('th', {}, 'Independent correct'))), h('tbody', {}, trends.map((t) => h('tr', {}, h('td', {}, t.week), h('td', { class: 'num' }, String(t.n)), h('td', { class: 'num' }, percent(t.correct / t.n)))))) : h('p', { class: 'faint' }, 'No reviews in the last 8 weeks.')),
     h('section', { class: 'panel' }, h('h3', {}, `Leeches (${leeches.length})`),
