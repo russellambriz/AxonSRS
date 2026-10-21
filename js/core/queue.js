@@ -65,18 +65,50 @@ export function siblingGroups(units, links = [], { includeLinks = true } = {}) {
 
 /**
  * Reorder so that units of the same group are at least `gap` positions
- * apart where possible. Deterministic; order is otherwise preserved.
+ * apart where possible. `gap` is a number or a function of the unit (its
+ * deck's setting). Deterministic; order is otherwise preserved, also
+ * within each group.
  */
 export function spreadSiblings(list, groupOf, gap) {
-  if (gap <= 0) return list.slice();
+  const gapOf = typeof gap === 'function' ? gap : () => gap;
+  if (typeof gap !== 'function' && gap <= 0) return list.slice();
   const pending = list.slice();
   const out = [];
+  const clashes = (u) => {
+    const g = groupOf(u);
+    for (let k = out.length - 1; k >= Math.max(0, out.length - gapOf(u)); k--) if (groupOf(out[k]) === g) return true;
+    return false;
+  };
+  // Siblings bunched at the end of the list cannot all be spaced if they
+  // wait their turn. Within the last `tail` places (enough for the largest
+  // group), a group that needs every remaining slot goes first when allowed.
+  const sizes = new Map();
+  let tail = 0;
+  for (const u of list) {
+    const g = groupOf(u);
+    sizes.set(g, (sizes.get(g) || 0) + 1);
+    tail = Math.max(tail, (sizes.get(g) - 1) * (gapOf(u) + 1) + 1);
+  }
   while (pending.length) {
-    let idx = pending.findIndex((u) => {
-      const g = groupOf(u);
-      for (let k = out.length - 1; k >= Math.max(0, out.length - gap); k--) if (groupOf(out[k]) === g) return false;
-      return true;
-    });
+    let idx = -1;
+    if (pending.length <= tail) {
+      const count = new Map();
+      const first = new Map();
+      pending.forEach((u, i) => {
+        const g = groupOf(u);
+        count.set(g, (count.get(g) || 0) + 1);
+        if (!first.has(g)) first.set(g, i);
+      });
+      let most = 1;
+      for (const [g, r] of count) {
+        const u = pending[first.get(g)];
+        if (r > most && (r - 1) * (gapOf(u) + 1) + 1 >= pending.length && !clashes(u)) {
+          most = r;
+          idx = first.get(g);
+        }
+      }
+    }
+    if (idx < 0) idx = pending.findIndex((u) => !clashes(u));
     if (idx < 0) idx = 0; // only siblings left; nothing better available
     out.push(pending.splice(idx, 1)[0]);
   }
@@ -171,7 +203,7 @@ export function buildDailyQueue(ctx) {
 
   const firstDeck = decksById.get(ctx.deckIds?.[0]) || decksById.values().next().value;
   const newOrder = firstDeck?.settings?.newOrder || 'mixed';
-  let queue = [...learning, ...interleaveNew(chosenReviews, news, newOrder)];
+  let queue = orderOcclusionMasks([...learning, ...interleaveNew(chosenReviews, news, newOrder)], cardsById, ctx.seed ?? String(now));
   const spaced = applySiblingSpacing(queue, ctx);
   queue = spaced.queue;
   return {
@@ -184,36 +216,85 @@ export function buildDailyQueue(ctx) {
 }
 
 /**
- * Sibling spacing. Setting comes from the first unit's deck.
+ * Sibling spacing, by each unit's deck setting (or `override` for all):
  *  'spread'  — keep siblings ≥ gap apart in the queue
  *  'nextDay' — at most one unit per sibling group per study day; the
  *              others are listed as deferred (their due dates unchanged)
  *  'off'     — no spacing
+ * `gap` replaces the decks' sibling gap. With `deferral: false` (practice
+ * sessions, which never hold cards back to another day) 'nextDay' spreads.
  */
-export function applySiblingSpacing(queue, ctx, { override = null } = {}) {
+export function applySiblingSpacing(queue, ctx, { override = null, gap = null, deferral = true } = {}) {
   if (!queue.length) return { queue, deferred: [] };
   const groups = siblingGroups(ctx.units, ctx.links || [], { includeLinks: ctx.relatedSpacing !== false });
   const groupOf = (u) => groups.get(u.id) || u.cardId;
-  const deck = ctx.decksById.get(queue[0].deckId);
-  const mode = override || deck?.settings?.siblingSpacing || 'spread';
-  const gap = deck?.settings?.siblingGap ?? 4;
-  if (mode === 'off') return { queue, deferred: [] };
-  if (mode === 'nextDay') {
-    const seen = new Set(ctx.reviewedGroupsToday || []);
-    const kept = [];
-    const deferred = [];
-    for (const u of queue) {
-      const g = groupOf(u);
-      const isLearning = u.state && (u.state.state === State.Learning || u.state.state === State.Relearning);
-      if (seen.has(g) && !isLearning) deferred.push({ unitId: u.id, reason: 'sibling-next-day', group: g });
-      else {
-        seen.add(g);
-        kept.push(u);
-      }
+  const settingsOf = (u) => ctx.decksById.get(u.deckId)?.settings || {};
+  const modeOf = (u) => override || settingsOf(u).siblingSpacing || 'spread';
+  const gapOf = (u) => (modeOf(u) === 'off' ? 0 : gap ?? settingsOf(u).siblingGap ?? 4);
+  const seen = new Set(ctx.reviewedGroupsToday || []);
+  const kept = [];
+  const deferred = [];
+  for (const u of queue) {
+    const g = groupOf(u);
+    const isLearning = u.state && (u.state.state === State.Learning || u.state.state === State.Relearning);
+    if (deferral && modeOf(u) === 'nextDay' && seen.has(g) && !isLearning) deferred.push({ unitId: u.id, reason: 'sibling-next-day', group: g });
+    else {
+      seen.add(g);
+      kept.push(u);
     }
-    return { queue: spreadSiblings(kept, groupOf, gap), deferred };
   }
-  return { queue: spreadSiblings(queue, groupOf, gap), deferred: [] };
+  return { queue: spreadSiblings(kept, groupOf, gapOf), deferred };
+}
+
+/**
+ * Presentation order of image-occlusion masks within one card: the
+ * positions a card's mask units hold in the queue are kept, and the units
+ * are put in mask order (order 'fixed') or in a seeded random order
+ * ('random', the default). One session's order is stable; the next
+ * session's differs, so positions cannot stand in for the labels.
+ */
+export function orderOcclusionMasks(list, cardsById, seed = '') {
+  const slots = new Map();
+  list.forEach((u, i) => {
+    if (!String(u.key || '').startsWith('o-') || cardsById.get(u.cardId)?.kind !== 'occlusion') return;
+    if (!slots.has(u.cardId)) slots.set(u.cardId, []);
+    slots.get(u.cardId).push(i);
+  });
+  const out = list.slice();
+  for (const [cardId, idx] of slots) {
+    if (idx.length < 2) continue;
+    const occ = cardsById.get(cardId).occlusion || {};
+    const units = idx.map((i) => list[i]);
+    let ordered;
+    if (occ.order === 'fixed') {
+      const rank = new Map((occ.masks || []).map((m, i) => [`o-${m.id}`, i]));
+      ordered = units.slice().sort((a, b) => (rank.get(a.key) ?? Infinity) - (rank.get(b.key) ?? Infinity));
+    } else ordered = shuffle(units, `${seed}|${cardId}`);
+    idx.forEach((pos, k) => { out[pos] = ordered[k]; });
+  }
+  return out;
+}
+
+/**
+ * Where to put a unit coming back later in a session (failed-card
+ * requeue, learning step, skip) so it does not land within `gap` places
+ * of a sibling — or of itself — and at least never directly next to one.
+ * Tries `at`, then later slots up to `max`, then earlier ones down to
+ * `min`; keeps `at` when no slot is better. Cards before `from` (the
+ * current card) are done and do not count.
+ */
+export function siblingSafeIndex(queue, at, unitId, groupOf, { from = 0, min = from + 1, max = queue.length, gap = 1 } = {}) {
+  const g = groupOf(unitId);
+  const clear = (p, d) => {
+    for (let i = Math.max(from, p - d); i < Math.min(queue.length, p + d); i++) if (groupOf(queue[i]) === g) return false;
+    return true;
+  };
+  const hi = Math.min(queue.length, Math.max(at, max));
+  for (const d of [...new Set([Math.max(1, gap), 1])]) {
+    for (let p = at; p <= hi; p++) if (clear(p, d)) return p;
+    for (let p = at - 1; p >= Math.max(0, min); p--) if (clear(p, d)) return p;
+  }
+  return at;
 }
 
 function inScope(u, card, { deckIds, tags }) {
@@ -235,12 +316,13 @@ function activeUnits(ctx, scope) {
 }
 
 /** Cram: any cards in scope regardless of due dates. */
-export function buildCramQueue(ctx, { deckIds, tags, order = 'shuffled', includeNew = true, keepSiblingsTogether = false, limit = null, seed = String(ctx.now) }) {
+export function buildCramQueue(ctx, { deckIds, tags, order = 'shuffled', includeNew = true, keepSiblingsTogether = false, limit = null, seed = ctx.seed ?? String(ctx.now) }) {
   let list = activeUnits(ctx, { deckIds, tags });
   if (!includeNew) list = list.filter((u) => u.state && u.state.state !== State.New);
   if (order === 'shuffled') list = shuffle(list, seed);
   else list.sort((a, b) => (ctx.cardsById.get(a.cardId).createdAt - ctx.cardsById.get(b.cardId).createdAt) || (a.id < b.id ? -1 : 1));
   if (limit) list = list.slice(0, limit);
+  list = orderOcclusionMasks(list, ctx.cardsById, seed);
   const spaced = keepSiblingsTogether ? { queue: list } : applySiblingSpacing(list, ctx, { override: 'spread' });
   return { queue: spaced.queue.map((u) => u.id), deferred: [] };
 }
@@ -273,23 +355,26 @@ export function buildDrillQueue(ctx, { deckIds, tags, limit = 20, retrievability
   const list = activeUnits(ctx, { deckIds, tags }).filter((u) => u.state && u.state.state !== State.New);
   const scored = list.map((u) => ({ u, ...weaknessScore(u, { retrievability: retrievabilityOf ? retrievabilityOf(u) : null }) }));
   scored.sort((a, b) => b.score - a.score || (a.u.id < b.u.id ? -1 : 1));
-  const top = scored.slice(0, limit).map((s) => s.u);
+  const top = orderOcclusionMasks(scored.slice(0, limit).map((s) => s.u), ctx.cardsById, ctx.seed ?? String(ctx.now));
   const spaced = applySiblingSpacing(top, ctx, { override: 'spread' });
   return { queue: spaced.queue.map((u) => u.id), deferred: [], scores: new Map(scored.map((s) => [s.u.id, s])) };
 }
 
 /** Speed Practice: already-learned cards, shuffled. */
-export function buildSpeedQueue(ctx, { deckIds, tags, limit = 20, seed = String(ctx.now) }) {
+export function buildSpeedQueue(ctx, { deckIds, tags, limit = 20, seed = ctx.seed ?? String(ctx.now) }) {
   const list = activeUnits(ctx, { deckIds, tags }).filter((u) => u.state && u.state.state === State.Review && u.state.reps >= 2);
-  const spaced = applySiblingSpacing(shuffle(list, seed).slice(0, limit), ctx, { override: 'spread' });
+  const spaced = applySiblingSpacing(orderOcclusionMasks(shuffle(list, seed).slice(0, limit), ctx.cardsById, seed), ctx, { override: 'spread' });
   return { queue: spaced.queue.map((u) => u.id), deferred: [] };
 }
 
 /**
  * Interleaving: round-robin across the selected decks and/or tags so
- * consecutive cards come from different topics, with sibling spacing.
+ * consecutive cards come from different topics, then sibling spacing as
+ * each deck configures it (related-card links, gap, or off). `gap`
+ * replaces the decks' gap. A practice session never defers cards to
+ * another day, so 'next day' spacing spreads siblings instead.
  */
-export function buildInterleaveQueue(ctx, { deckIds = [], tags = [], limit = 30, gap = null, seed = String(ctx.now), includeNew = false }) {
+export function buildInterleaveQueue(ctx, { deckIds = [], tags = [], limit = 30, gap = null, seed = ctx.seed ?? String(ctx.now), includeNew = false }) {
   const buckets = new Map();
   const dimension = tags.length ? 'tag' : 'deck';
   for (const u of activeUnits(ctx, { deckIds, tags })) {
@@ -307,10 +392,8 @@ export function buildInterleaveQueue(ctx, { deckIds = [], tags = [], limit = 30,
     if (l.length) out.push(l.shift());
     idx++;
   }
-  const groups = siblingGroups(ctx.units, ctx.links || []);
-  const deck = ctx.decksById.get(out[0]?.deckId);
-  const spacing = gap ?? deck?.settings?.siblingGap ?? 4;
-  return { queue: spreadSiblings(out, (u) => groups.get(u.id), spacing).map((u) => u.id), deferred: [], buckets: lists.length };
+  const spaced = applySiblingSpacing(orderOcclusionMasks(out, ctx.cardsById, seed), ctx, { gap, deferral: false });
+  return { queue: spaced.queue.map((u) => u.id), deferred: [], buckets: lists.length };
 }
 
 /**
