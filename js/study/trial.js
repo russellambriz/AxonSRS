@@ -33,7 +33,7 @@ export class TrialRecorder {
     this.corrections = 0;
     this.inDeleteBurst = false;
     this.inputEvents = 0;
-    this.origins = { typed: 0, paste: 0, toolbar: 0, dictation: 0, voice: 0, autofill: 0, composition: 0, drop: 0, other: 0 };
+    this.origins = { typed: 0, paste: 0, toolbar: 0, dictation: 0, voice: 0, handwriting: 0, autofill: 0, composition: 0, drop: 0, other: 0 };
     this.firstOrigin = null;
     this.pausedAt = null;
     this.pauseReason = null;
@@ -41,9 +41,10 @@ export class TrialRecorder {
     this.editorMs = 0;
     this.maxHiddenSpan = 0;
     this.lastKeydown = null;
-    this.signals = { textInputs: 0, keydownWithCode: 0, keydownUnidentified: 0, inputsWithoutKeydown: 0, viewportShrunk: false, lastPointerType: null, coarsePointer: false, finePointer: false, voiceInputs: 0, dictationInputs: 0 };
+    this.signals = { textInputs: 0, keydownWithCode: 0, keydownUnidentified: 0, inputsWithoutKeydown: 0, viewportShrunk: false, lastPointerType: null, coarsePointer: false, finePointer: false, voiceInputs: 0, dictationInputs: 0, handwritingInputs: 0 };
     this.composing = false;
     this.voiceStartAt = null;
+    this.penStartAt = null;
     this.assistance = { hintShown: false, revealed: false, solutionViewed: false };
     this.editorOpened = false;
   }
@@ -98,8 +99,11 @@ export class TrialRecorder {
     return this.now() - this.excludedMs();
   }
 
-  onPointer(e) {
+  /** `inField`: the pointer went down on the answer field itself. */
+  onPointer(e, { inField = false } = {}) {
     this.signals.lastPointerType = e.pointerType || this.signals.lastPointerType;
+    // A pen on the field marks when handwriting (if that is what follows) began.
+    if (e.pointerType === 'pen' && inField && this.running && this.penStartAt == null) this.penStartAt = this.activeNow();
   }
 
   onKeydown(e) {
@@ -138,6 +142,11 @@ export class TrialRecorder {
       else if (type.startsWith('delete')) o = 'delete';
       else o = 'other';
     }
+    const kd = this.lastKeydown;
+    const withoutKey = !kd || this.now() - kd.at > 80;
+    // Text with no key press while a pen was the last pointer is most
+    // likely handwriting recognition (Scribble, stylus handwriting), not typing.
+    if (o === 'typed' && !origin && withoutKey && this.signals.lastPointerType === 'pen') o = 'handwriting';
     if (o === 'delete') {
       this.deletions++;
       if (type === 'deleteContentBackward') this.backspaces++;
@@ -154,10 +163,13 @@ export class TrialRecorder {
     else this.origins.other++;
     if (o === 'voice') this.signals.voiceInputs++;
     if (o === 'dictation') this.signals.dictationInputs++;
-    const kd = this.lastKeydown;
-    if (o === 'typed' && (!kd || this.now() - kd.at > 80)) this.signals.inputsWithoutKeydown++;
+    if (o === 'handwriting') this.signals.handwritingInputs++;
+    if (o === 'typed' && withoutKey) this.signals.inputsWithoutKeydown++;
     if (this.firstInputAt == null) {
-      this.firstInputAt = o === 'voice' && this.voiceStartAt != null ? this.voiceStartAt : t;
+      // Speech and handwriting are recognised only after they begin.
+      if (o === 'voice' && this.voiceStartAt != null) this.firstInputAt = this.voiceStartAt;
+      else if (o === 'handwriting' && this.penStartAt != null) this.firstInputAt = this.penStartAt;
+      else this.firstInputAt = t;
       this.firstOrigin = o;
       this.lastInputAt = t;
       return;
@@ -216,6 +228,50 @@ export class TrialRecorder {
       wallEnd,
       clockAnomaly: jump ? jump.kind : null,
     };
+  }
+}
+
+/**
+ * On-screen study time for the focus timer: runs while a card is shown
+ * (question, feedback, retype) and stops while anything holds it — the
+ * page is hidden, the session is paused, a break is offered. Separate
+ * from TrialRecorder, so it never changes response-time measurements.
+ */
+export class ScreenClock {
+  constructor({ now = () => performance.now() } = {}) {
+    this.now = now;
+    this.holds = new Set();
+    this.startedAt = null;
+    this.heldAt = null;
+    this.heldMs = 0;
+  }
+
+  /** Start a new lap (e.g. for the next card); holds stay in force. */
+  start() {
+    this.startedAt = this.now();
+    this.heldMs = 0;
+    this.heldAt = this.holds.size ? this.startedAt : null;
+  }
+
+  hold(reason) {
+    if (!this.holds.size) this.heldAt = this.now();
+    this.holds.add(reason);
+  }
+
+  release(reason) {
+    if (!this.holds.delete(reason) || this.holds.size) return;
+    if (this.heldAt != null) this.heldMs += this.now() - this.heldAt;
+    this.heldAt = null;
+  }
+
+  get held() {
+    return this.holds.size > 0;
+  }
+
+  /** Unheld time since start(). */
+  elapsed(at = this.now()) {
+    if (this.startedAt == null) return 0;
+    return Math.max(0, at - this.startedAt - this.heldMs - (this.heldAt != null ? at - this.heldAt : 0));
   }
 }
 

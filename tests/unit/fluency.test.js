@@ -245,6 +245,21 @@ test('voice answers stay voice even when a keyboard type is chosen in Settings',
   assert.equal(classifyModality({ textInputs: 6, keydownWithCode: 6 }, 'touch').kind, 'touch');
 });
 
+test('handwriting is its own, uncertain modality and never enters a keyboard baseline', () => {
+  const pen = classifyModality({ textInputs: 2, handwritingInputs: 2, lastPointerType: 'pen' });
+  assert.equal(pen.kind, 'handwriting');
+  assert.ok(pen.confidence < 0.9, 'an inference, not a certainty');
+  assert.equal(classifyModality({ textInputs: 2, handwritingInputs: 2 }, 'physical').kind, 'handwriting', 'not overridden to a keyboard');
+  assert.equal(classifyModality({ textInputs: 8, handwritingInputs: 2, keydownWithCode: 6 }).kind, 'unknown', 'mixed with typing');
+  assert.equal(baselineKey(pen.kind, 'recall'), 'handwriting|recall');
+  const adj = adjustMeasurements(trial({ modality: 'handwriting', conf: 0.7, origins: { handwriting: 2 } }));
+  assert.ok(adj.excluded.some((x) => x.metric === 'typing' && x.reason === 'HANDWRITING'));
+  assert.ok(Number.isNaN(adj.adjusted.msPerEffort), 'no typing speed from handwriting');
+  const sample = calibrationSample(trial({ modality: 'handwriting', conf: 0.7, origins: { handwriting: 2 } }), gradeReview(trial({ modality: 'handwriting', conf: 0.7, origins: { handwriting: 2 } }), null), { eventId: 'h', mode: 'daily' });
+  assert.equal(sample.key, 'handwriting|recall');
+  assert.equal(sample.sample.lnMsPerEffort, null);
+});
+
 test('a prompt too long for the reading estimate makes timing unreliable instead of Hard', () => {
   const long = readingFloor({ words: 50, mathTokens: 0, images: 0 });
   assert.equal(long.reliable, true, '50 words fit within the cap');

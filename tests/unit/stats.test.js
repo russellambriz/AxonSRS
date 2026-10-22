@@ -521,6 +521,63 @@ test('paste, dictation, toolbar and composition origins are recorded; inputs whi
   assert.equal(m.inputEvents, 4);
 });
 
+test('text arriving without key presses after a pen touched the field counts as handwriting', () => {
+  const c = fakeClock();
+  const r = new TrialRecorder({ now: c.now, wall: c.wall });
+  r.start({ lastPointerType: 'mouse' });
+  c.advance(900);
+  r.onPointer({ pointerType: 'pen' }, { inField: true }); // pen starts writing
+  c.advance(1500); // recognised after the word is written
+  r.onInput({ inputType: 'insertText' }, { value: 'Paris' });
+  c.advance(300);
+  const m = r.finish('Paris');
+  assert.equal(m.firstOrigin, 'handwriting');
+  assert.equal(m.origins.handwriting, 1);
+  assert.equal(m.latencyMs, 900, 'latency runs to the first pen stroke, not to recognition');
+  assert.equal(r.signals.handwritingInputs, 1);
+  assert.equal(r.signals.inputsWithoutKeydown, 0, 'not counted as on-screen keyboard evidence');
+  // With a key press the same input is typing, even after a pen tap.
+  const k = new TrialRecorder({ now: c.now, wall: c.wall });
+  k.start({ lastPointerType: 'pen' });
+  c.advance(800);
+  k.onKeydown({ key: 'P', code: 'KeyP' });
+  k.onInput({ inputType: 'insertText' }, { value: 'P' });
+  assert.equal(k.finish('P').firstOrigin, 'typed');
+  // Explicit origins (toolbar, voice) are never re-labelled.
+  const t = new TrialRecorder({ now: c.now, wall: c.wall });
+  t.start({ lastPointerType: 'pen' });
+  t.onInput(null, { origin: 'toolbar', value: '²' });
+  assert.equal(t.finish('²').firstOrigin, 'toolbar');
+});
+
+test('the focus-timer screen clock counts only unheld time, whatever overlaps', async () => {
+  const { ScreenClock } = await import('../../js/study/trial.js');
+  const c = fakeClock();
+  const s = new ScreenClock({ now: c.now });
+  assert.equal(s.elapsed(), 0, 'not started');
+  s.start();
+  c.advance(1000);
+  s.hold('paused');
+  c.advance(5000);
+  s.hold('hidden'); // overlapping holds
+  c.advance(5000);
+  s.release('paused');
+  c.advance(5000); // still hidden
+  assert.equal(s.elapsed(), 1000);
+  s.release('hidden');
+  c.advance(2000);
+  assert.equal(s.elapsed(), 3000);
+  s.release('hidden'); // releasing twice changes nothing
+  assert.equal(s.elapsed(), 3000);
+  s.hold('hidden');
+  s.start(); // a new lap while hidden starts held
+  c.advance(4000);
+  assert.equal(s.elapsed(), 0);
+  s.release('hidden');
+  c.advance(500);
+  assert.equal(s.elapsed(), 500);
+});
+
 test('a wall-clock jump during a presentation is flagged without affecting durations', () => {
   const c = fakeClock();
   const r = new TrialRecorder({ now: c.now, wall: c.wall });
