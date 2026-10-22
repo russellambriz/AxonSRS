@@ -9,7 +9,7 @@
  */
 
 import { hash53, wilson, median, hashHex } from './util.js';
-import { correctionIndex, answerClass } from './stats.js';
+import { correctionIndex, answerClass, outcome } from './stats.js';
 
 export const ARMS = Object.freeze(['axon', 'standard']);
 
@@ -53,7 +53,7 @@ export function comparisonReport(events, study, { minElapsedDays = 1 } = {}) {
       }
     }
     if (e.type !== 'review' || !e.firstAttempt || (e.elapsedDays ?? 0) < minElapsedDays) continue;
-    const cls = answerClass(e, corr);
+    const recalled = outcome(e, corr).independent;
     if (e.flags?.practiceSinceLast || e.flags?.siblingExposure) {
       arm.affected++;
       continue;
@@ -61,7 +61,7 @@ export function comparisonReport(events, study, { minElapsedDays = 1 } = {}) {
     arm.n++;
     arm.elapsed.push(e.elapsedDays);
     if (Number.isFinite(e.predictedR)) arm.predicted.push(e.predictedR);
-    if (cls === 'independent-correct') arm.recalled++;
+    if (recalled) arm.recalled++;
   }
   const out = {};
   for (const [name, a] of Object.entries(arms)) {
@@ -94,12 +94,15 @@ export function comparisonReport(events, study, { minElapsedDays = 1 } = {}) {
 
 /**
  * De-identified evaluation export: ids hashed with a per-export salt,
- * no card content, no answers, no tokens, no device names.
+ * no card content, no answers, no tokens, no device names. Corrections
+ * and optional confidence self-ratings (1-5) link to the answer they
+ * concern through the hashed `target` and its `targetType`.
  */
 export function deidentifiedRows(events, { salt = String(Math.random()) } = {}) {
   const h = (x) => (x ? hashHex(`${salt}|${x}`) : null);
+  const types = new Map(events.map((e) => [e.id, e.type]));
   return events
-    .filter((e) => e.type === 'review' || e.type === 'practice' || e.type === 'correction')
+    .filter((e) => e.type === 'review' || e.type === 'practice' || e.type === 'correction' || e.type === 'self-rating')
     .map((e) => ({
       event: h(e.id),
       type: e.type,
@@ -131,6 +134,10 @@ export function deidentifiedRows(events, { salt = String(Math.random()) } = {}) 
       practiceSinceLast: e.flags?.practiceSinceLast ?? null,
       siblingExposure: e.flags?.siblingExposure ?? null,
       correctionKind: e.kind ?? null,
+      correctionReason: e.type === 'correction' ? e.reason ?? null : null,
+      target: h(e.targetId),
+      targetType: e.targetId ? types.get(e.targetId) ?? null : null,
+      selfRating: e.type === 'self-rating' && Number.isFinite(e.value) ? e.value : null,
       gradingVersion: e.grading?.ruleVersion ?? null,
       schedulerVersion: e.params?.version ?? null,
     }));

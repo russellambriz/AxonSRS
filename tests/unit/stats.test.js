@@ -5,11 +5,16 @@ import assert from 'node:assert/strict';
 import {
   answerClass, correctionIndex, dailyActivity, currentStreak, longestStreak, accuracySeries,
   summary, eventualSuccess, retentionCalibration, forecast, exposureBreakdown, unitHistory, heatmapLevels, isLeech,
+  outcome, effectiveRetrievals, retractActivity, latencySeries, selfRatingAnalysis, recentWeeks, deckTrends,
 } from '../../js/core/stats.js';
-import { durationModel, estimateSessionMinutes, catchUpPlan, analyzeExamPlan, PROVISIONAL_SECONDS, MIN_SAMPLES_FOR_ESTIMATE } from '../../js/core/planner.js';
+import {
+  durationModel, estimateSessionMinutes, catchUpPlan, analyzeExamPlan, PROVISIONAL_SECONDS, MIN_SAMPLES_FOR_ESTIMATE,
+  cardCosts, reviewSessionsBetween, topicBreakdown, SCHEDULING_MODES, MAX_FEEDBACK_MS,
+} from '../../js/core/planner.js';
 import { assignArm, createStudy, comparisonReport, deidentifiedRows, toCsv } from '../../js/core/research.js';
 import { TrialRecorder } from '../../js/study/trial.js';
 import { schedulerParams, State } from '../../js/core/scheduler.js';
+import { studyDayStart } from '../../js/core/time.js';
 import { T0, DAY } from './helpers.js';
 
 const params = schedulerParams();
@@ -212,6 +217,227 @@ test('de-identified export contains no content, answers or raw ids', () => {
   assert.match(csv, /latencyMs/);
   assert.equal(deidentifiedRows([e], { salt: 'fixed' })[0].event, rows[0].event, 'stable within one export salt');
   assert.notEqual(deidentifiedRows([e], { salt: 'other' })[0].event, rows[0].event);
+});
+
+const corrOf = (id, targetId, kind, reason, at) => ({ id, type: 'correction', kind, reason, targetId, newRating: kind === 'override' ? 3 : undefined, ts: at, deviceId: 'dev', seq: 1000 + n++ });
+
+test('a rescued answer counts as correct in every accuracy figure; a guess, a hint or a reveal is not independent recall', () => {
+  const rescued = ev({ unitId: 'ra', response: { correct: false } });
+  const guessed = ev({ unitId: 'rb' });
+  const revealed = ev({ unitId: 'rc', response: { correct: false }, assistance: { revealed: true } });
+  const hinted = ev({ unitId: 'rd', response: { correct: false }, assistance: { hintShown: true } });
+  const plain = ev({ unitId: 're' });
+  const events = [rescued, guessed, revealed, hinted, plain,
+    corrOf('c1', rescued.id, 'override', 'alias', T0 + DAY), corrOf('c2', guessed.id, 'override', 'guessed', T0 + DAY),
+    corrOf('c3', revealed.id, 'override', 'correct', T0 + DAY), corrOf('c4', hinted.id, 'override', 'alias', T0 + DAY)];
+  const corr = correctionIndex(events);
+  assert.deepEqual(outcome(rescued, corr), { cls: 'overridden', correct: true, independent: true, rescued: true });
+  assert.equal(outcome(guessed, corr).independent, false, '“I guessed” is not recall');
+  assert.equal(outcome(revealed, corr).correct, false, 'a revealed answer marked correct is still not recalled');
+  assert.deepEqual([outcome(hinted, corr).correct, outcome(hinted, corr).independent], [true, false]);
+  const [day] = accuracySeries(events);
+  assert.deepEqual([day.n, day.independentCorrect, day.rescued, day.overridden, day.revealed], [5, 2, 1, 3, 1]);
+  assert.equal(summary(events, [], { today: '2026-01-05', now: T0, params }).firstAttemptAccuracy.p, 2 / 5);
+  assert.equal(eventualSuccess(events).firstAttempt, 4 / 5, 'within sessions the rescue is a first-try success');
+  const cardsById = new Map(events.filter((e) => e.type === 'review').map((e) => [e.cardId, { id: e.cardId, tags: [], suspended: false }]));
+  const units = ['ra', 'rb', 'rc', 'rd', 're'].map((id) => ({ id, cardId: 'c1', deckId: 'd1', active: true, state: null }));
+  const plan = analyzeExamPlan({ examDate: '2026-01-20', deckIds: [], tags: [], dailyMinutes: 30, targetCoverage: 1 }, { units, cardsById, events, today: '2026-01-05', now: T0, params });
+  assert.deepEqual(plan.observedRecall, { n: 5, accuracy: 2 / 5 }, 'exam observed recall uses the same rule');
+});
+
+test('undone reviews and practice count nowhere: today, study time, activity, streaks, eventual success and observed recall', () => {
+  const before = ev({ unitId: 'va', studyDay: '2026-01-04', activeMs: 3000 });
+  const undone = ev({ unitId: 'vb', activeMs: 5000 });
+  const undonePractice = ev({ unitId: 'vc', type: 'practice', mode: 'cram', activeMs: 7000 });
+  const kept = ev({ unitId: 'vd', activeMs: 2000 });
+  const voids = [corrOf('x1', undone.id, 'void', 'undo', T0 + 60000), corrOf('x2', undonePractice.id, 'void', 'undo', T0 + 60000)];
+  const events = [before, undone, undonePractice, kept, ...voids];
+  const s = summary(events, [], { today: '2026-01-05', now: T0, params });
+  assert.deepEqual([s.reviewedToday, s.practicedToday, s.studyMsToday, s.studyMsTotal], [1, 0, 2000, 5000]);
+  assert.equal(effectiveRetrievals(events).length, 2);
+  const act = dailyActivity(events).get('2026-01-05');
+  assert.deepEqual([act.reviews, act.practice, act.retrievals, act.studyMs], [1, 0, 1, 2000]);
+  assert.equal(eventualSuccess(events).n, 2, 'undone answers are not session attempts');
+  const cardsById = new Map([['c1', { id: 'c1', tags: [], suspended: false }]]);
+  const units = ['va', 'vb', 'vc', 'vd'].map((id) => ({ id, cardId: 'c1', deckId: 'd1', active: true, state: null }));
+  assert.equal(analyzeExamPlan({ examDate: '2026-01-20', dailyMinutes: 30 }, { units, cardsById, events, today: '2026-01-05', now: T0, params }).observedRecall.n, 2);
+
+  // Incremental cache: the review was counted before its undo arrived.
+  const onlyToday = ev({ unitId: 've', activeMs: 4000 });
+  const days = dailyActivity([before, onlyToday]);
+  assert.equal(currentStreak(days, '2026-01-05'), 2);
+  dailyActivity([corrOf('x3', onlyToday.id, 'void', 'undo', T0 + 90000)], days);
+  retractActivity(days, [onlyToday]);
+  assert.deepEqual([days.get('2026-01-05').retrievals, days.get('2026-01-05').studyMs], [0, 0]);
+  assert.equal(currentStreak(days, '2026-01-05'), 1, 'a day whose only review was undone was not studied');
+  assert.equal(longestStreak(days), 1);
+  assert.equal(currentStreak(dailyActivity([before, ev({ type: 'copy', studyDay: '2026-01-05' })]), '2026-01-06'), 0, 'copying a correction is not studying');
+});
+
+test('retrieval latency: average and median, and per week over time', () => {
+  const lat = (ms, studyDay, adjusted = ms / 2) => ev({ studyDay, grading: { measurements: { raw: { latencyMs: ms }, adjusted: { latencyMs: adjusted } } } });
+  const events = [lat(1000, '2026-01-05'), lat(2000, '2026-01-06'), lat(6000, '2026-01-07'), lat(4000, '2026-01-12'), lat(9000, '2026-01-12')];
+  events.push(corrOf('v9', events[4].id, 'void', 'undo', T0 + DAY));
+  const s = summary(events, [], { today: '2026-01-12', now: T0, params });
+  assert.equal(s.meanLatencyMs, 3250);
+  assert.equal(s.medianLatencyMs, 3000);
+  assert.equal(s.meanAdjustedLatencyMs, 1625);
+  const weeks = latencySeries(events);
+  assert.deepEqual(weeks.map((w) => [w.key, w.n, w.meanMs, w.medianMs]), [['2026-01-05', 3, 3000, 2000], ['2026-01-12', 1, 4000, 4000]]);
+});
+
+test('confidence self-ratings are compared with correctness and the automatic grade; the last rating counts', () => {
+  const rated = (correct, grade, confidence) => ev({ unitId: `sr${n}`, response: { correct }, grading: { grade, confidence } });
+  const a = rated(true, 4, 0.9);
+  const b = rated(true, 3, 0.7);
+  const c = rated(false, 1, 0.8);
+  const d = rated(false, 1, 0.8);
+  const rating = (targetId, value, ts) => ({ id: `r${n++}`, type: 'self-rating', targetId, value, ts, deviceId: 'dev', seq: n });
+  const events = [a, b, c, d, rating(a.id, 3, T0 + 10), rating(a.id, 5, T0 + 20), rating(b.id, 4, T0 + 10), rating(c.id, 2, T0 + 10), rating(d.id, 5, T0 + 10), rating('missing', 4, T0), rating(b.id, 9, T0 + 30),
+    corrOf('cd', c.id, 'override', 'correct', T0 + 40), corrOf('vd', d.id, 'void', 'undo', T0 + 40)];
+  const r = selfRatingAnalysis(events);
+  assert.equal(r.n, 3, 'unknown targets, invalid values and undone answers are left out');
+  const five = r.levels.find((l) => l.value === 5);
+  assert.deepEqual([five.n, five.correct, five.meanGrade, five.meanConfidence], [1, 1, 4, 0.9], 'a later rating replaces an earlier one');
+  const two = r.levels.find((l) => l.value === 2);
+  assert.deepEqual([two.n, two.correct, two.meanGrade], [1, 1, 3], 'a rescued answer counts as correct, with its re-grade');
+  assert.ok(two.accuracy.low < 1);
+  assert.deepEqual(r.byGrade.map((g) => [g.grade, g.n, g.meanRating]), [[1, 0, null], [2, 0, null], [3, 2, 3], [4, 1, 5]]);
+  assert.equal(r.meanRatingCorrect, 11 / 3);
+  assert.equal(r.meanRatingIncorrect, null);
+});
+
+test('de-identified export includes self-ratings and corrections linked to their answer by hashed id', () => {
+  const answer = ev({ type: 'practice', mode: 'cram', id: 'secret-answer' });
+  const rows = deidentifiedRows([answer, { id: 'sr-secret', type: 'self-rating', targetId: answer.id, value: 4, unitId: 'u1', cardId: 'c1', deckId: 'd1', studyDay: '2026-01-05', ts: T0 }, corrOf('k-secret', answer.id, 'override', 'alias', T0)], { salt: 'fixed' });
+  assert.equal(rows.length, 3);
+  const [a, sr, k] = rows;
+  assert.deepEqual([sr.type, sr.selfRating, sr.targetType, sr.target], ['self-rating', 4, 'practice', a.event]);
+  assert.deepEqual([k.correctionReason, k.targetType, k.target, k.selfRating], ['alias', 'practice', a.event, null]);
+  assert.equal(a.target, null);
+  assert.equal(toCsv(rows).includes('secret'), false);
+});
+
+/** One session of `cards` cards; each answer takes `answerMs`, then `feedbackMs` until the next prompt. */
+function session(id, { cards, answerMs, feedbackMs, mode = 'daily', deckId = 'd1', wasNew = false, start = T0, reask = () => false }) {
+  const out = [];
+  let t = start;
+  const present = (unit, firstAttempt) => {
+    t += answerMs;
+    out.push({ id: `${id}-${out.length}`, type: mode === 'daily' ? 'review' : 'practice', mode, sessionId: id, unitId: unit, cardId: unit, deckId, ts: t, activeMs: answerMs, firstAttempt, wasNew, response: { correct: firstAttempt }, assistance: {} });
+    t += feedbackMs;
+  };
+  for (let i = 0; i < cards; i++) {
+    present(`${id}-u${i}`, true);
+    if (reask(i)) present(`${id}-u${i}`, false);
+  }
+  return out;
+}
+
+test('session-time estimates use relevant scheduling history, include feedback and re-asks, and fall back when sparse', () => {
+  const daily = session('day1', { cards: 30, answerMs: 4000, feedbackMs: 3000, reask: (i) => i % 10 === 0 });
+  const costs = cardCosts(daily);
+  assert.equal(costs.length, 30, 'a re-ask belongs to the same card');
+  assert.equal(costs[0].presentations, 2);
+  assert.equal(costs[1].ms, 7000, 'answer plus feedback until the next prompt');
+  const m = durationModel(daily);
+  assert.equal(m.review.basis, 'scheduled');
+  assert.ok(Math.abs(m.review.seconds - (7 + 7 * 3 / 30)) < 1e-9, `re-asks add to the average (${m.review.seconds})`);
+  assert.equal(m.review.provisional, false);
+  assert.equal(m.new.provisional, true);
+  assert.equal(m.new.seconds, PROVISIONAL_SECONDS.new);
+
+  const speed = session('speed1', { cards: 60, answerMs: 1000, feedbackMs: 500, mode: 'speed', start: T0 + DAY });
+  assert.equal(durationModel([...daily, ...speed]).review.seconds, m.review.seconds, 'Speed practice does not shrink the review estimate');
+  assert.equal(durationModel(speed).review.basis, 'all', 'practice is the last fallback');
+  assert.equal(durationModel(speed).review.seconds, 1.5);
+
+  const other = session('day2', { cards: 25, answerMs: 9000, feedbackMs: 1000, deckId: 'd2', start: T0 + 2 * DAY });
+  const both = [...daily, ...other];
+  assert.equal(durationModel(both, { scope: (e) => e.deckId === 'd2' }).review.basis, 'scope');
+  assert.equal(durationModel(both, { scope: (e) => e.deckId === 'd2' }).review.seconds, 10);
+  const sparse = durationModel(both, { scope: (e) => e.deckId === 'd3' });
+  assert.equal(sparse.review.basis, 'scheduled', 'too few cards in scope: all scheduling history');
+
+  const breaks = session('day3', { cards: 21, answerMs: 4000, feedbackMs: 30 * 60000 });
+  assert.equal(durationModel(breaks).review.seconds, (4000 + MAX_FEEDBACK_MS) / 1000, 'a long gap is a break, capped');
+  assert.ok(SCHEDULING_MODES.has('catchup') && !SCHEDULING_MODES.has('cram'));
+});
+
+test('exam plans count from the start of the exam study day, whatever the time of day or DST', () => {
+  const NY = { timeZone: 'America/New_York', rolloverHour: 4 };
+  const cardsById = new Map([['c', { id: 'c', tags: [], suspended: false }]]);
+  const examStart = studyDayStart('2026-03-10', NY);
+  const unit = (id, due) => ({ id, cardId: 'c', deckId: 'd1', active: true, state: { state: State.Review, due, stability: 30, difficulty: 5, lapses: 0, reps: 3, last_review: due - 30 * DAY, elapsed_days: 0, scheduled_days: 30, learning_steps: 0 } });
+  const units = [unit('before', examStart - 60000), unit('after', examStart + 60000)];
+  const plan = { examDate: '2026-03-10', deckIds: [], tags: [], dailyMinutes: 20, targetCoverage: 1 };
+  const morning = Date.UTC(2026, 2, 2, 14);
+  const results = [morning, morning + 8 * 3600000].map((now) => analyzeExamPlan(plan, { units, cardsById, events: [], today: '2026-03-02', now, params, ...NY }));
+  for (const r of results) {
+    assert.equal(r.examInstant, examStart);
+    assert.equal(r.dueBeforeExam, 1, 'due one minute before the exam day starts');
+    assert.equal(r.daysLeft, 8);
+  }
+  assert.equal(examStart, Date.UTC(2026, 2, 10, 8), '04:00 EDT, after the DST change, not now + 8 × 24 h');
+  assert.equal(results[0].predictedRecallAtExamWithoutStudy, results[1].predictedRecallAtExamWithoutStudy);
+  const today = analyzeExamPlan({ ...plan, examDate: '2026-03-02' }, { units, cardsById, events: [], today: '2026-03-02', now: morning, params, ...NY });
+  assert.equal(today.examInstant, morning, 'an exam today starts now');
+});
+
+test('exam workload includes the follow-up reviews the schedule asks for before the exam', () => {
+  assert.equal(reviewSessionsBetween(null, T0, T0 + 30 * 60000, params), 1, 'learning steps on the introduction day are one session');
+  const followed = reviewSessionsBetween(null, T0, T0 + 60 * DAY, params);
+  assert.ok(followed >= 4, `a new card is reviewed again several times in 60 days (${followed})`);
+  const young = { state: State.Review, due: T0 + DAY, stability: 2, difficulty: 5, lapses: 0, reps: 2, last_review: T0 - DAY, elapsed_days: 1, scheduled_days: 2, learning_steps: 0 };
+  assert.ok(reviewSessionsBetween(young, T0, T0 + 60 * DAY, params) >= 3, 'a young card comes back more than once');
+  assert.equal(reviewSessionsBetween(young, T0, T0 + DAY, params), 0, 'not due before the exam');
+
+  const cardsById = new Map([['c1', { id: 'c1', tags: [], suspended: false }], ['c2', { id: 'c2', tags: [], suspended: false }]]);
+  const units = [{ id: 'u1', cardId: 'c1', deckId: 'd1', active: true, state: young }, { id: 'u2', cardId: 'c2', deckId: 'd1', active: true, state: null }];
+  const r = analyzeExamPlan({ examDate: '2026-03-06', deckIds: [], tags: [], dailyMinutes: 1, targetCoverage: 1 }, { units, cardsById, events: [], today: '2026-01-05', now: T0, params });
+  assert.equal(r.dueBeforeExam, 1);
+  assert.equal(r.toIntroduce, 1);
+  assert.ok(r.expectedReviews > r.dueBeforeExam + 3, `repeat reviews and follow-ups of the new card count (${r.expectedReviews})`);
+  const once = r.toIntroduce * PROVISIONAL_SECONDS.new + r.dueBeforeExam * PROVISIONAL_SECONDS.review + r.weak * PROVISIONAL_SECONDS.review;
+  assert.ok(r.estimatedMinutes * 60 > once + 3 * PROVISIONAL_SECONDS.review, 'more than counting each due card once');
+  assert.equal(r.timing.review.basis, 'default');
+});
+
+test('weak topics aggregate weak cards by tag, or by deck for untagged cards, ignoring a tag every card shares', () => {
+  const cardsById = new Map();
+  const units = [];
+  const learned = { state: State.Review, due: T0 + 5 * DAY, stability: 20, difficulty: 5, lapses: 0, reps: 3, last_review: T0 - DAY, elapsed_days: 1, scheduled_days: 6, learning_steps: 0 };
+  const add = (id, deckId, tags, missed, state = learned) => {
+    cardsById.set(id, { id, tags, suspended: false });
+    units.push({ id: `${id}:fwd`, cardId: id, deckId, active: true, state, perf: { recent: [{ c: !missed }] } });
+  };
+  for (let i = 0; i < 4; i++) add(`cell${i}`, 'd1', ['bio', 'cell'], false);
+  for (let i = 0; i < 4; i++) add(`gen${i}`, 'd1', ['bio', 'genetics'], i < 3);
+  add('gen-new', 'd1', ['bio', 'genetics'], false, null);
+  for (let i = 0; i < 5; i++) add(`plain${i}`, 'd2', [], i === 0);
+  const ctx = { units, cardsById, events: [], today: '2026-01-05', now: T0, params };
+  const bio = analyzeExamPlan({ examDate: '2026-02-01', tags: ['bio'], dailyMinutes: 30 }, ctx);
+  assert.equal(bio.weak, 3);
+  assert.deepEqual(bio.weakTopics, [{ kind: 'tag', id: 'genetics', units: 5, studied: 4, weak: 3 }], 'the plan’s own tag is not a topic');
+  const all = analyzeExamPlan({ examDate: '2026-02-01', dailyMinutes: 30 }, ctx);
+  assert.deepEqual(all.weakTopics.map((t) => [t.kind, t.id, t.weak]), [['tag', 'genetics', 3], ['tag', 'bio', 3], ['deck', 'd2', 1]], 'weakest share first; untagged cards are grouped by deck; 1 of 5 is a fifth');
+  const topics = topicBreakdown(units, cardsById, new Set());
+  assert.ok(topics.some((t) => t.id === 'cell' && t.weak === 0));
+});
+
+test('deck trends cover exactly the last calendar weeks', () => {
+  assert.deepEqual(recentWeeks('2026-01-07', 3), ['2025-12-22', '2025-12-29', '2026-01-05']);
+  const events = [ev({ studyDay: '2025-12-21' }), ev({ studyDay: '2025-12-22' }), ev({ studyDay: '2026-01-07', response: { correct: false } })];
+  const rows = deckTrends(events, { today: '2026-01-07', weeks: 3 }).get('d1');
+  assert.deepEqual(rows.map((r) => [r.week, r.n, r.correct]), [['2025-12-22', 1, 1], ['2026-01-05', 1, 0]]);
+});
+
+test('predicted recall is flagged as incomplete for units practised since their last scheduled review', () => {
+  const state = { state: State.Review, due: T0 + 5 * DAY, stability: 20, difficulty: 5, lapses: 0, reps: 3, last_review: T0 - DAY, elapsed_days: 1, scheduled_days: 6, learning_steps: 0 };
+  const units = [{ id: 'p1', active: true, state, practiceSinceLast: true }, { id: 'p2', active: true, state }, { id: 'p3', active: true, state: null, practiceSinceLast: true }];
+  const s = summary([ev({ type: 'practice', mode: 'cram' })], units, { today: '2026-01-05', now: T0, params });
+  assert.deepEqual([s.predictedRecallUnits, s.practicedUnits, s.practiceSinceModel], [2, 1, true]);
+  assert.equal(summary([ev({ type: 'practice', mode: 'cram' })], [units[1]], { today: '2026-01-05', now: T0, params }).practiceSinceModel, false, 'old practice already followed by a scheduled review does not count');
 });
 
 function fakeClock() {

@@ -6,6 +6,9 @@
  *    predicted retrievability (what the model estimates).
  *  - First-attempt accuracy is separate from eventual success after retries.
  *  - Hinted, revealed, overridden and independent answers are separated.
+ *  - Undone (voided) answers count nowhere. An answer rescued by an
+ *    accepted alias or "Mark correct" counts as correct everywhere, and is
+ *    still reported as overridden (see `outcome`).
  *  - Optional practice and sibling-answer exposure are flagged, and
  *    delayed tests affected by them are marked.
  *  - Correction copying is never counted as recall.
@@ -40,28 +43,78 @@ export function answerClass(e, corr) {
   return e.response?.correct ? 'independent-correct' : 'incorrect';
 }
 
-export function dailyActivity(events, days = new Map()) {
+/** Override reasons that turn a failed answer into an accepted one. */
+export const RESCUE_REASONS = new Set(['alias', 'correct']);
+
+/**
+ * Correction-aware outcome of one retrieval, shared by every accuracy
+ * figure so they agree with the schedule and the session summary.
+ * `correct`: the answer counts as right once the learner's corrections are
+ * applied — an answer rescued by an accepted alias or "Mark correct" is
+ * correct, a revealed answer never is. `independent`: correct without a
+ * hint and not marked "I guessed" (first-attempt accuracy, observed
+ * recall). `cls` keeps the separate reporting class, so a rescue is still
+ * shown as overridden. Voided (undone) retrievals return null.
+ */
+export function outcome(e, corr) {
+  const c = corr?.get(e.id);
+  if (c?.voided) return null;
+  const a = e.assistance || {};
+  const reason = c?.overrides?.length ? c.overrides[c.overrides.length - 1].reason : null;
+  const rescued = RESCUE_REASONS.has(reason);
+  const correct = !(a.revealed || a.solutionViewed) && (rescued || !!e.response?.correct);
+  return { cls: answerClass(e, corr), correct, independent: correct && !a.hintShown && reason !== 'guessed', rescued };
+}
+
+/** Reviews and practice answers that still count (undone ones removed). */
+export function effectiveRetrievals(events, corr = correctionIndex(events)) {
+  return events.filter((e) => isRetrieval(e) && !corr.get(e.id)?.voided);
+}
+
+// `correct` is the matcher's raw verdict (corrections are not applied), so
+// cached rows stay valid when an override arrives later.
+function addActivity(days, e, sign) {
+  const d = e.studyDay;
+  if (!days.has(d)) days.set(d, { day: d, reviews: 0, practice: 0, correct: 0, retrievals: 0, studyMs: 0 });
+  const row = days.get(d);
+  if (e.type === 'review') row.reviews += sign;
+  if (e.type === 'practice') row.practice += sign;
+  if (isRetrieval(e)) {
+    row.retrievals += sign;
+    if (e.response?.correct) row.correct += sign;
+  }
+  row.studyMs += sign * (e.activeMs || 0);
+}
+
+/**
+ * Per-study-day activity (heatmap, streaks, study time). Undone (voided)
+ * reviews and practice answers are left out, as is their time.
+ */
+export function dailyActivity(events, days = new Map(), corr = correctionIndex(events)) {
   for (const e of events) {
     if (!isRetrieval(e) && e.type !== 'copy') continue;
-    const d = e.studyDay;
-    if (!days.has(d)) days.set(d, { day: d, reviews: 0, practice: 0, correct: 0, retrievals: 0, studyMs: 0 });
-    const row = days.get(d);
-    if (e.type === 'review') row.reviews++;
-    if (e.type === 'practice') row.practice++;
-    if (isRetrieval(e)) {
-      row.retrievals++;
-      if (e.response?.correct) row.correct++;
-    }
-    row.studyMs += e.activeMs || 0;
+    if (corr.get(e.id)?.voided) continue;
+    addActivity(days, e, 1);
   }
   return days;
 }
 
+/**
+ * Take out events an earlier `dailyActivity` counted that have since been
+ * undone (the incremental activity cache).
+ */
+export function retractActivity(days, events) {
+  for (const e of events) if (isRetrieval(e) || e.type === 'copy') addActivity(days, e, -1);
+  return days;
+}
+
+const studied = (activity, day) => (activity.get(day)?.retrievals || 0) > 0;
+
 export function currentStreak(activity, today) {
   let streak = 0;
   let day = today;
-  if (!activity.has(day)) day = addDays(day, -1); // today not studied yet does not break the streak
-  while (activity.has(day) && (activity.get(day).retrievals > 0)) {
+  if (!studied(activity, day)) day = addDays(day, -1); // today not studied yet does not break the streak
+  while (studied(activity, day)) {
     streak++;
     day = addDays(day, -1);
   }
@@ -69,7 +122,7 @@ export function currentStreak(activity, today) {
 }
 
 export function longestStreak(activity) {
-  const days = [...activity.keys()].sort();
+  const days = [...activity.keys()].filter((d) => studied(activity, d)).sort();
   let best = 0;
   let run = 0;
   let prev = null;
@@ -83,76 +136,95 @@ export function longestStreak(activity) {
 
 /**
  * Accuracy series: first-attempt accuracy of scheduled, independent
- * retrievals per day (or per week), with Wilson intervals.
+ * retrievals per day (or per week), with Wilson intervals. `correct` is the
+ * matcher's raw verdict; `independentCorrect` applies corrections (see
+ * `outcome`), and `rescued` counts the answers it includes only because the
+ * learner accepted an alias or marked them correct.
  */
 export function accuracySeries(events, { bucket = 'day', corr = correctionIndex(events) } = {}) {
   const buckets = new Map();
   for (const e of events) {
     if (!isScheduled(e) || !e.firstAttempt) continue;
-    const cls = answerClass(e, corr);
-    if (cls === 'voided') continue;
+    const o = outcome(e, corr);
+    if (!o) continue;
     const key = bucket === 'week' ? weekKey(e.studyDay) : e.studyDay;
-    if (!buckets.has(key)) buckets.set(key, { key, n: 0, correct: 0, hinted: 0, revealed: 0, overridden: 0, independentCorrect: 0 });
+    if (!buckets.has(key)) buckets.set(key, { key, n: 0, correct: 0, hinted: 0, revealed: 0, overridden: 0, rescued: 0, independentCorrect: 0 });
     const b = buckets.get(key);
     b.n++;
     if (e.response?.correct) b.correct++;
-    if (cls === 'hinted') b.hinted++;
-    if (cls === 'revealed') b.revealed++;
-    if (cls === 'overridden') b.overridden++;
-    if (cls === 'independent-correct') b.independentCorrect++;
+    if (o.cls === 'hinted') b.hinted++;
+    if (o.cls === 'revealed') b.revealed++;
+    if (o.cls === 'overridden') b.overridden++;
+    if (o.independent) b.independentCorrect++;
+    if (o.independent && o.rescued) b.rescued++;
   }
   return [...buckets.values()].sort((a, b) => (a.key < b.key ? -1 : 1)).map((b) => ({ ...b, ci: wilson(b.independentCorrect, b.n) }));
 }
 
-function weekKey(day) {
+/** Monday of the week containing `day` (YYYY-MM-DD). */
+export function weekKey(day) {
   const [y, m, d] = day.split('-').map(Number);
   const t = new Date(Date.UTC(y, m - 1, d));
   const dow = (t.getUTCDay() + 6) % 7; // Monday = 0
   return addDays(day, -dow);
 }
 
-/** Summary used by the dashboard header. */
+/**
+ * Summary used by the dashboard header. Undone (voided) reviews and
+ * practice answers count nowhere, not even in study time.
+ * `practicedUnits`: how many of the averaged units had optional practice
+ * since their last scheduled review, which the memory model has not
+ * incorporated, so the predicted recall is incomplete for them.
+ */
 export function summary(events, units, { today, now, params, corr = correctionIndex(events) }) {
-  const todays = events.filter((e) => e.studyDay === today);
-  const scheduledToday = todays.filter((e) => isScheduled(e) && answerClass(e, corr) !== 'voided');
-  const retrievals = events.filter((e) => isRetrieval(e) && answerClass(e, corr) !== 'voided');
+  const retrievals = effectiveRetrievals(events, corr);
+  const todays = retrievals.filter((e) => e.studyDay === today);
   const latencies = retrievals.map((e) => e.grading?.measurements?.raw?.latencyMs).filter(Number.isFinite);
   const adjusted = retrievals.map((e) => e.grading?.measurements?.adjusted?.latencyMs).filter(Number.isFinite);
   const hesitation = retrievals.map((e) => e.grading?.scores?.hesitation).filter(Number.isFinite);
   const first = retrievals.filter((e) => isScheduled(e) && e.firstAttempt);
-  const independent = first.filter((e) => answerClass(e, corr) === 'independent-correct').length;
-  const eventual = eventualSuccess(events);
+  const independent = first.filter((e) => outcome(e, corr).independent).length;
+  const eventual = eventualSuccess(events, corr);
+  const activeMs = (list) => list.reduce((s, e) => s + (e.activeMs || 0), 0);
   let rSum = 0;
   let rN = 0;
+  let practiced = 0;
   for (const u of units) {
     if (!u.active || !u.state || u.state.state === State.New) continue;
     const r = retrievability(u.state, now, u.params || params);
     if (r != null) {
       rSum += r;
       rN++;
+      if (u.practiceSinceLast) practiced++;
     }
   }
   return {
-    reviewedToday: scheduledToday.length,
+    reviewedToday: todays.filter(isScheduled).length,
     practicedToday: todays.filter((e) => e.type === 'practice').length,
-    studyMsToday: todays.reduce((s, e) => s + (e.activeMs || 0), 0),
-    studyMsTotal: events.reduce((s, e) => s + (e.activeMs || 0), 0),
+    studyMsToday: activeMs(todays),
+    studyMsTotal: activeMs(retrievals),
     medianLatencyMs: median(latencies),
+    meanLatencyMs: mean(latencies),
     medianAdjustedLatencyMs: median(adjusted),
+    meanAdjustedLatencyMs: mean(adjusted),
     medianHesitation: median(hesitation),
     firstAttemptAccuracy: wilson(independent, first.length),
     eventualSuccess: eventual,
     predictedRecall: rN ? rSum / rN : null,
     predictedRecallUnits: rN,
-    practiceSinceModel: events.some((e) => e.type === 'practice'),
+    practicedUnits: practiced,
+    practiceSinceModel: practiced > 0,
   };
 }
 
-/** First-attempt vs eventual success within sessions. */
-export function eventualSuccess(events) {
+/**
+ * First-attempt vs eventual success within sessions (reviews and
+ * practice). Correction-aware: undone answers are skipped, a rescued
+ * answer is a success and a revealed one is not (see `outcome`).
+ */
+export function eventualSuccess(events, corr = correctionIndex(events)) {
   const bySessionUnit = new Map();
-  for (const e of events) {
-    if (!isRetrieval(e)) continue;
+  for (const e of effectiveRetrievals(events, corr)) {
     const key = `${e.sessionId}|${e.unitId}`;
     if (!bySessionUnit.has(key)) bySessionUnit.set(key, []);
     bySessionUnit.get(key).push(e);
@@ -163,10 +235,87 @@ export function eventualSuccess(events) {
   for (const list of bySessionUnit.values()) {
     list.sort((a, b) => a.ts - b.ts);
     n++;
-    if (list[0].response?.correct) firstCorrect++;
-    if (list.some((e) => e.response?.correct)) eventuallyCorrect++;
+    if (outcome(list[0], corr).correct) firstCorrect++;
+    if (list.some((e) => outcome(e, corr).correct)) eventuallyCorrect++;
   }
   return { n, firstAttempt: n ? firstCorrect / n : null, eventual: n ? eventuallyCorrect / n : null };
+}
+
+/**
+ * Retrieval latency over time: mean and median first-keystroke latency
+ * (raw and after the reading-time estimate) of the retrievals in each day
+ * or week, undone answers excluded.
+ */
+export function latencySeries(events, { bucket = 'week', corr = correctionIndex(events) } = {}) {
+  const buckets = new Map();
+  for (const e of effectiveRetrievals(events, corr)) {
+    const raw = e.grading?.measurements?.raw?.latencyMs;
+    if (!Number.isFinite(raw)) continue;
+    const key = bucket === 'week' ? weekKey(e.studyDay) : e.studyDay;
+    if (!buckets.has(key)) buckets.set(key, { key, raw: [], adjusted: [] });
+    const b = buckets.get(key);
+    b.raw.push(raw);
+    const adj = e.grading?.measurements?.adjusted?.latencyMs;
+    if (Number.isFinite(adj)) b.adjusted.push(adj);
+  }
+  return [...buckets.values()].sort((a, b) => (a.key < b.key ? -1 : 1)).map((b) => ({
+    key: b.key,
+    n: b.raw.length,
+    meanMs: mean(b.raw),
+    medianMs: median(b.raw),
+    meanAdjustedMs: mean(b.adjusted),
+    medianAdjustedMs: median(b.adjusted),
+  }));
+}
+
+/**
+ * Optional 1-5 confidence self-ratings compared with what the answers
+ * showed: for each rating, how often the answer was correct (Wilson
+ * interval), the mean automatic (inferred) grade — the re-grade for a
+ * rescued answer — and the mean heuristic grading confidence; for each
+ * automatic grade, the mean self-rating. The last rating given to an
+ * answer counts; undone answers are left out. Descriptive only:
+ * self-ratings never feed grading or scheduling.
+ */
+export function selfRatingAnalysis(events, { corr = correctionIndex(events) } = {}) {
+  const targets = new Map();
+  const latest = new Map();
+  for (const e of events) {
+    if (isRetrieval(e)) targets.set(e.id, e);
+    else if (e.type === 'self-rating' && Number.isInteger(e.value) && e.value >= 1 && e.value <= 5) {
+      const prev = latest.get(e.targetId);
+      if (!prev || e.ts > prev.ts || (e.ts === prev.ts && (e.seq ?? 0) > (prev.seq ?? 0))) latest.set(e.targetId, e);
+    }
+  }
+  const levels = [1, 2, 3, 4, 5].map((value) => ({ value, n: 0, correct: 0, grades: [], confidences: [] }));
+  const grades = [1, 2, 3, 4].map((grade) => ({ grade, ratings: [] }));
+  const byResult = { correct: [], incorrect: [] };
+  let n = 0;
+  for (const [targetId, rating] of latest) {
+    const e = targets.get(targetId);
+    const o = e && outcome(e, corr);
+    if (!o) continue;
+    n++;
+    const row = levels[rating.value - 1];
+    row.n++;
+    if (o.correct) row.correct++;
+    byResult[o.correct ? 'correct' : 'incorrect'].push(rating.value);
+    // A rescued answer was re-graded automatically as a correct one.
+    const grade = o.rescued ? corr.get(e.id)?.rating ?? e.grading?.grade : e.grading?.grade;
+    if ([1, 2, 3, 4].includes(grade)) {
+      row.grades.push(grade);
+      grades[grade - 1].ratings.push(rating.value);
+    }
+    if (Number.isFinite(e.grading?.confidence)) row.confidences.push(e.grading.confidence);
+  }
+  const avg = (list) => (list.length ? mean(list) : null);
+  return {
+    n,
+    levels: levels.map((r) => ({ value: r.value, n: r.n, correct: r.correct, accuracy: wilson(r.correct, r.n), meanGrade: avg(r.grades), meanConfidence: avg(r.confidences) })),
+    byGrade: grades.map((g) => ({ grade: g.grade, n: g.ratings.length, meanRating: avg(g.ratings) })),
+    meanRatingCorrect: avg(byResult.correct),
+    meanRatingIncorrect: avg(byResult.incorrect),
+  };
 }
 
 /**
@@ -180,8 +329,8 @@ export function retentionCalibration(events, { bins = 5, corr = correctionIndex(
   let affected = 0;
   for (const e of events) {
     if (!isScheduled(e) || !e.firstAttempt || e.predictedR == null || (e.elapsedDays ?? 0) < 1) continue;
-    const cls = answerClass(e, corr);
-    if (cls === 'voided') continue;
+    const o = outcome(e, corr);
+    if (!o) continue;
     if (e.flags?.practiceSinceLast || e.flags?.siblingExposure) {
       affected++;
       continue;
@@ -189,7 +338,7 @@ export function retentionCalibration(events, { bins = 5, corr = correctionIndex(
     const idx = Math.min(bins - 1, Math.floor(e.predictedR * bins));
     rows[idx].n++;
     rows[idx].predictedSum += e.predictedR;
-    if (cls === 'independent-correct') rows[idx].recalled++;
+    if (o.independent) rows[idx].recalled++;
   }
   return {
     bins: rows.map((r) => ({ ...r, predicted: r.n ? r.predictedSum / r.n : null, observed: r.n ? r.recalled / r.n : null, ci: wilson(r.recalled, r.n) })),
@@ -225,20 +374,30 @@ export function strongestWeakest(units, { now, params, limit = 5 }) {
   return { strongest, weakest };
 }
 
-/** Per-deck weekly trends of reviews and first-attempt accuracy. */
+/** The `weeks` week keys (Mondays) ending with the week of `today`, oldest first. */
+export function recentWeeks(today, weeks = 8) {
+  const last = weekKey(today);
+  return Array.from({ length: weeks }, (_, i) => addDays(last, -7 * (weeks - 1 - i)));
+}
+
+/**
+ * Per-deck weekly trends of reviews and first-attempt accuracy over the
+ * last `weeks` calendar weeks (only weeks with reviews are listed).
+ */
 export function deckTrends(events, { weeks = 8, today, corr = correctionIndex(events) }) {
-  const start = addDays(today, -7 * weeks);
+  const start = recentWeeks(today, weeks)[0];
   const byDeck = new Map();
   for (const e of events) {
     if (!isScheduled(e) || e.studyDay < start || !e.firstAttempt) continue;
-    if (answerClass(e, corr) === 'voided') continue;
+    const o = outcome(e, corr);
+    if (!o) continue;
     if (!byDeck.has(e.deckId)) byDeck.set(e.deckId, new Map());
     const wk = weekKey(e.studyDay);
     const m = byDeck.get(e.deckId);
     if (!m.has(wk)) m.set(wk, { week: wk, n: 0, correct: 0 });
     const row = m.get(wk);
     row.n++;
-    if (answerClass(e, corr) === 'independent-correct') row.correct++;
+    if (o.independent) row.correct++;
   }
   const out = new Map();
   for (const [deckId, m] of byDeck) out.set(deckId, [...m.values()].sort((a, b) => (a.week < b.week ? -1 : 1)));
