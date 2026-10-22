@@ -27,7 +27,7 @@ import { startViewport, keyboardLikelyOpen, viewportState } from '../viewport.js
 import { TrialRecorder, ScreenClock } from '../../study/trial.js';
 import { MODES } from '../../study/session.js';
 import { unitContent, effectiveCardSettings, TASK_TYPE_LABELS } from '../../core/model.js';
-import { evaluateAnswer, planReview, planOverride, planUndo, exposureEvent } from '../../core/review.js';
+import { evaluateAnswer, planReview, planOverride, planUndo, exposureEvent, knewThatGrade } from '../../core/review.js';
 import { classifyModality, promptStats, mergeGradingConfig, baselineKey, REASON_TEXT, MODALITY_LABELS } from '../../core/fluency.js';
 import { matchAnswer, answerDiff, DIAGNOSTIC_LABELS, WARNING_LABELS } from '../../core/match/index.js';
 import { addAlias } from '../../core/aliases.js';
@@ -945,12 +945,13 @@ class StudyScreen {
     if ((p === 'feedback' || p === 'retype') && cur) {
       const correct = cur.match?.correct || cur.override;
       if (!correct) {
-        if (cur.trial?.responseText && !cur.trial.assistance.revealed) left.push(act('Correct & save alias', 'check', () => this.override('alias'), '⌥A', { kind: '' }));
-        left.push(act('Mark correct', null, () => this.override('correct'), '⌥C'));
+        const revealed = cur.trial?.assistance.revealed || cur.trial?.assistance.solutionViewed;
+        if (cur.trial?.responseText && !revealed) left.push(act('Correct & save alias', 'check', () => this.override('alias'), '⌥A', { kind: '' }));
+        if (!revealed) left.push(act('Mark correct', null, () => this.override('correct'), '⌥C'));
         if (p === 'retype') left.push(act('Skip retyping', 'skip', () => this.bypassRetype(), '⌥B'));
       } else if (!cur.override && cur.event?.type) {
         const g = cur.effectiveRating || cur.event.rating;
-        if (g < 4) left.push(act('I knew that', 'zap', () => this.override('knew'), '⌥K'));
+        if (knewThatGrade(cur.event, this.gradingConfig) > g) left.push(act('I knew that', 'zap', () => this.override('knew'), '⌥K'));
         if (g > 1) left.push(act('I guessed', null, () => this.override('guessed'), '⌥G'));
       }
       right.push(act('Undo', 'undo', () => this.undo(), '⌥Z'));
@@ -1030,7 +1031,9 @@ class StudyScreen {
     const correct = cur.match.correct || cur.override;
     if ((kind === 'alias' || kind === 'correct') && correct) return;
     if ((kind === 'knew' || kind === 'guessed') && !correct) return;
-    if (kind === 'alias' && (!cur.trial.responseText.trim() || cur.trial.assistance.revealed)) return;
+    if ((kind === 'alias' || kind === 'correct') && (cur.trial.assistance.revealed || cur.trial.assistance.solutionViewed)) return;
+    if (kind === 'alias' && !cur.trial.responseText.trim()) return;
+    if (kind === 'knew' && knewThatGrade(cur.event, this.gradingConfig) <= (cur.effectiveRating || cur.event.rating)) return;
     try {
       const target = cur.event;
       const unitEvents = await store.eventsForUnit(cur.unit.id);

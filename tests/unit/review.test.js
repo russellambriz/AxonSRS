@@ -319,6 +319,39 @@ test('alias rescue re-grades from the original measurements (hint ceiling still 
   assert.ok(rescue.event.reasons.includes('ALIAS_RESCUE') && rescue.event.reasons.includes('HINT_CEILING'));
 });
 
+test('“I knew that” never lifts an answer past its hint ceiling or a typo past Good', async () => {
+  const { mergeGradingConfig } = await import('../../js/core/fluency.js');
+  const { knewThatGrade } = await import('../../js/core/review.js');
+  const hard = mergeGradingConfig({ hintCeiling: 'hard' });
+  const deck = makeDeck({ answerMode: 'text' });
+  const card = makeCard({ answerMode: 'text', front: 'Largest planet', back: 'Jupiter' });
+  const [unit] = makeUnits(card, deck);
+  const knew = (target, cfg) => planOverride({ eventId: `o-${target.id}`, now: T0 + 1000, deviceId: 'dev-A', seq: 2, target, kind: 'knew', unit, unitEvents: [target], studyDay: '2026-01-05', gradingConfig: cfg });
+  const hinted = review({ unit, card, deck, text: 'Jupiter', at: T0, eventId: 'k-hint' }).event;
+  Object.assign(hinted, { rating: 2, grading: { ...hinted.grading, grade: 2 }, assistance: { ...hinted.assistance, hintShown: true } });
+  const k1 = knew(hinted, hard);
+  assert.equal(k1.event.newRating, 2, 'a hinted answer stays at the Hard ceiling');
+  assert.ok(k1.event.reasons.includes('HINT_CEILING'));
+  assert.equal(knewThatGrade(hinted, hard), 2, 'the study screen can tell the button would change nothing');
+  const typo = review({ unit, card, deck, text: 'Jupiter', at: T0, eventId: 'k-typo' }).event;
+  Object.assign(typo, { rating: 3, grading: { ...typo.grading, grade: 3 }, response: { ...typo.response, typoTolerated: true } });
+  const k2 = knew(typo);
+  assert.equal(k2.event.newRating, 3, 'a typo-tolerated answer never becomes Easy');
+  assert.ok(k2.event.reasons.includes('TYPO_NO_EASY'));
+  const clean = review({ unit, card, deck, text: 'Jupiter', at: T0, eventId: 'k-clean' }).event;
+  Object.assign(clean, { rating: 3, grading: { ...clean.grading, grade: 3 } });
+  assert.equal(knew(clean).event.newRating, 4, 'an unassisted exact answer can still be raised to Easy');
+  // "I guessed" on a hinted or typo answer only ever lowers.
+  const g = planOverride({ eventId: 'o-g', now: T0 + 1000, deviceId: 'dev-A', seq: 3, target: hinted, kind: 'guessed', unit, unitEvents: [hinted], studyDay: '2026-01-05', gradingConfig: hard });
+  assert.ok(g.event.newRating <= 2);
+  // Overrides that would count a revealed answer as recalled are refused.
+  const revealed = review({ unit, card, deck, text: '', at: T0, eventId: 'k-rev' }).event;
+  revealed.assistance = { ...revealed.assistance, revealed: true };
+  for (const kind of ['correct', 'alias', 'knew']) {
+    assert.throws(() => planOverride({ eventId: `o-r-${kind}`, now: T0 + 1000, deviceId: 'dev-A', seq: 4, target: revealed, kind, alias: kind === 'alias' ? 'x' : null, unit, unitEvents: [revealed], studyDay: '2026-01-05' }), /revealed/);
+  }
+});
+
 test('edit classification: letter case and matching rules count when they change what is tested', () => {
   const textDeck = createDeck({ id: 'd-text', name: 'Text' });
   const chemDeck = createDeck({ id: 'd-chem', name: 'Chem', settings: { answerMode: 'chem' } });
@@ -341,4 +374,10 @@ test('edit classification: letter case and matching rules count when they change
   const cube = createCard({ id: 'c-m', deckId: textDeck.id, front: 'd/dx x^3', back: '3x^2', answerMode: 'math' });
   assert.equal(classifyEdit(cube, { ...cube, match: { numericTolerance: '1%' } }, textDeck).fwd, 'substantive');
   assert.equal(classifyEdit(cube, { ...cube, back: ['3X^2'] }, textDeck).fwd, 'substantive', 'case matters in maths');
+  // Deleting one occlusion mask and adding another leaves the untouched
+  // mask unchanged; the deleted one is 'removed', not a substantive edit.
+  const masks = [{ id: 'm1', x: 0, y: 0, w: 0.1, h: 0.1, label: ['Atrium'] }, { id: 'm2', x: 0.5, y: 0.5, w: 0.1, h: 0.1, label: ['Ventricle'] }];
+  const occ = createCard({ id: 'c-o', deckId: textDeck.id, kind: 'occlusion', front: [''], back: [], occlusion: { imageId: 'img', alt: 'Heart', masks, order: 'random' } });
+  const edited = { ...occ, occlusion: { ...occ.occlusion, masks: [masks[0], { id: 'm3', x: 0.6, y: 0.6, w: 0.1, h: 0.1, label: ['Aorta'] }] } };
+  assert.deepEqual(classifyEdit(occ, edited, textDeck), { 'o-m1': 'none', 'o-m2': 'removed', 'o-m3': 'added' });
 });

@@ -323,7 +323,7 @@ export function adjustMeasurements(trial, config = DEFAULT_GRADING_CONFIG) {
 /* Grading                                                              */
 /* ------------------------------------------------------------------ */
 
-function ceilingName(name) {
+export function ceilingName(name) {
   return { again: 1, hard: 2, good: 3, easy: 4 }[name] || 3;
 }
 

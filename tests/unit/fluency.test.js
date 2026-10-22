@@ -135,6 +135,29 @@ test('unreliable timing falls back to Good (correct) and stays Again (incorrect)
   assert.equal(wrong.grade, 1);
 });
 
+test('rule combinations: uncertain timing never turns assisted recall into independent recall', () => {
+  const hard = mergeGradingConfig({ hintCeiling: 'hard' });
+  const unreliable = [
+    trial({ hint: true, modality: 'unknown', conf: 0.2, latencyMs: 9000 }),
+    { ...trial({ hint: true, latencyMs: 9000 }), clockAnomaly: true },
+    { ...trial({ hint: true, latencyMs: 9000 }), editorOpened: true },
+    trial({ hint: true, latencyMs: 9000, origins: { paste: 1 } }),
+  ];
+  for (const t of unreliable) {
+    const r = gradeReview(t, personal, hard);
+    assert.equal(r.grade, 2, `hint ceiling holds with unreliable timing: ${r.reasons.join(',')}`);
+    assert.ok(r.reasons.includes('HINT_CEILING'));
+  }
+  // Revealed or solution-viewed stays Again whatever the timing says.
+  assert.equal(gradeReview(trial({ revealed: true, modality: 'unknown', conf: 0.1 }), personal).grade, 1);
+  assert.equal(gradeReview(trial({ solution: true, hint: true, typo: true, latencyMs: 700, typingMs: 500 }), personal).grade, 1);
+  // Hint + typo: both limits apply; the lower one wins.
+  assert.equal(gradeReview(trial({ hint: true, typo: true, latencyMs: 800, typingMs: 600 }), personal).grade, 3);
+  assert.equal(gradeReview(trial({ hint: true, typo: true, latencyMs: 800, typingMs: 600 }), personal, hard).grade, 2);
+  // A hinted, hesitant answer is Hard, never raised by the ceiling.
+  assert.equal(gradeReview(trial({ hint: true, latencyMs: 6000 }), personal).grade, 2);
+});
+
 test('reading-time floor: bounded, never negative latency, never alone produces Easy', () => {
   const long = 'In the context of oxidative phosphorylation, which mobile electron carrier transfers electrons from complex III to complex IV of the chain?';
   const s = promptStats(long);

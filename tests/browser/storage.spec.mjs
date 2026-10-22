@@ -195,4 +195,49 @@ export const tests = [
       }
     },
   },
+  {
+    name: 'an import interrupted mid-transaction saves nothing, and Home and Recovery offer the source text back',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser, { acceptDownloads: true });
+      const page = await openApp(ctx, url);
+      const deckId = await seedDeck(page, { name: 'Ions', cards: [] });
+      const source = 'Nitrate\tNO3^-\nAmmonium\tNH4^+\nSulfate\tSO4^2-';
+      await page.evaluate(() => { location.hash = '#/import'; });
+      await page.getByLabel('Text to import').fill(source);
+      await page.getByRole('button', { name: 'Next' }).click();
+      await page.getByText(/Detected: /).waitFor();
+      await page.getByLabel('Target deck').selectOption(deckId);
+      await page.getByText(/card drafts? found/).waitFor();
+      await page.getByRole('button', { name: 'Preview' }).click();
+      await page.getByRole('button', { name: 'Continue' }).click();
+      await page.getByText('Ready to import').waitFor();
+      // The tab "crashes" inside the import transaction, after some cards
+      // were written: the transaction aborts and nothing is kept.
+      await inApp(page, ({ store }) => {
+        store.commitImport = (rec, data) => store.tx(['cards'], 'readwrite', async (t) => {
+          for (const c of data.newCards.slice(0, 2)) await t.put('cards', c);
+          throw new Error('simulated crash');
+        });
+      });
+      await page.getByRole('button', { name: /^Import \d+ cards?$/ }).click();
+      await page.getByText(/Import failed — nothing was saved/).waitFor();
+      assert.equal((await idbAll(page, 'cards')).length, 0, 'no partial cards');
+      assert.equal((await idbAll(page, 'units')).length, 0);
+      const [rec] = await idbAll(page, 'imports');
+      assert.equal(rec.status, 'in-progress');
+      // After a reload (the real app code again), Home points to Recovery.
+      await page.goto(`${url}#/`);
+      await waitReady(page);
+      await page.getByText('An import was interrupted. No partial cards were saved.').waitFor();
+      await page.getByRole('link', { name: 'Recover' }).click();
+      await page.getByRole('heading', { name: 'Interrupted import' }).waitFor();
+      const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('button', { name: 'Download the source text' }).click()]);
+      assert.equal(readFileSync(await download.path(), 'utf8'), source, 'the pasted text can be recovered exactly');
+      await page.locator('section.panel', { hasText: 'Interrupted import' }).getByRole('button', { name: 'Dismiss' }).click();
+      await page.getByText('Nothing needs recovering.').waitFor();
+      assert.equal((await idbAll(page, 'imports')).filter((i) => i.status === 'in-progress').length, 0);
+      assertNoErrors(page, [/simulated crash/]);
+      await ctx.close();
+    },
+  },
 ];

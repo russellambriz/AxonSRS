@@ -195,6 +195,7 @@ export const tests = [
       await page.keyboard.press('Tab');
       // Move mask 1 a little (drag its body).
       await drag(0.2, 0.2, 0.25, 0.22);
+      await page.getByPlaceholder('Describe the image for screen readers').fill('Diagram of the heart');
       await page.getByRole('button', { name: 'Add card' }).click();
       await page.getByText('Card added').waitFor();
       const [card] = await idbAll(page, 'cards');
@@ -212,6 +213,10 @@ export const tests = [
       for (let i = 0; i < 2; i++) {
         await page.locator('.study .occlusion img').waitFor();
         await page.waitForFunction(() => document.querySelector('.study .occlusion img')?.naturalWidth > 0);
+        assert.equal(await page.getAttribute('.study .occlusion', 'role'), 'img');
+        assert.equal(await page.getAttribute('.study .occlusion', 'aria-label'), 'Diagram of the heart', 'screen readers get the description');
+        assert.equal(await page.getAttribute('.study .occlusion img', 'alt'), 'Diagram of the heart');
+        assert.equal(await page.locator('.study .occlusion .mask[aria-hidden="true"]').count(), await page.locator('.study .occlusion .mask').count(), 'masks are not read out as content');
         const left = await page.$eval('.study .occlusion .mask:not(.other)', (el) => parseFloat(el.style.left));
         assert.equal(await page.locator('.study .occlusion .mask.other').count(), 1, 'the other mask stays covered');
         const target = card.occlusion.masks.reduce((best, m) => (Math.abs(m.x * 100 - left) < Math.abs(best.x * 100 - left) ? m : best));
@@ -222,6 +227,31 @@ export const tests = [
         await waitPhase(page, ['question', 'done']);
       }
       assert.equal((await idbAll(page, 'events')).filter((e) => e.type === 'review' && e.response.correct).length, 2);
+      // Edit the existing card: delete mask 2, add a new mask. Mask 1 keeps
+      // its history; mask 2's unit is kept inactive; the new mask starts new.
+      const before = (await idbAll(page, 'units')).filter((u) => u.cardId === card.id);
+      const keep = before.find((u) => u.key === `o-${card.occlusion.masks[0].id}`);
+      const dropped = before.find((u) => u.key === `o-${card.occlusion.masks[1].id}`);
+      await page.evaluate((id) => { location.hash = `#/card/${id}`; }, card.id);
+      await page.locator('.occlusion.editing img').waitFor();
+      await page.waitForFunction(() => document.querySelector('.occlusion.editing img')?.complete);
+      await page.locator('.occlusion.editing img').scrollIntoViewIfNeeded();
+      Object.assign(box, await page.locator('.occlusion.editing img').boundingBox());
+      await page.getByRole('button', { name: 'Delete mask 2' }).click();
+      await drag(0.6, 0.65, 0.85, 0.8);
+      await page.getByLabel('Label for mask 2').fill('Aorta');
+      await page.keyboard.press('Tab');
+      await page.getByRole('button', { name: /^Save/ }).first().click();
+      await page.getByText('Saved', { exact: true }).waitFor();
+      const edited = (await idbAll(page, 'cards')).find((c) => c.id === card.id);
+      assert.deepEqual(edited.occlusion.masks.map((m) => m.label), [['Atrium'], ['Aorta']]);
+      const after = (await idbAll(page, 'units')).filter((u) => u.cardId === card.id);
+      const kept = after.find((u) => u.id === keep.id);
+      assert.equal(kept.active, true);
+      assert.deepEqual(kept.state, keep.state, 'the untouched mask keeps its schedule');
+      assert.equal(after.find((u) => u.id === dropped.id)?.active, false, 'the deleted mask’s history is kept, inactive');
+      const added = after.find((u) => u.key === `o-${edited.occlusion.masks[1].id}`);
+      assert.ok(added && added.active && !added.state, 'the new mask starts as a new unit');
       assertNoErrors(page, [/Failed to load resource/]);
       await ctx.close();
     },

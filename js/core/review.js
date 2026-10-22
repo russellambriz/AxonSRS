@@ -11,7 +11,7 @@
 
 import { APP_VERSION } from '../config.js';
 import { applyRating, retrievability, State } from './scheduler.js';
-import { gradeReview, overrideGrade, calibrationSample, DEFAULT_GRADING_CONFIG } from './fluency.js';
+import { gradeReview, overrideGrade, calibrationSample, ceilingName, DEFAULT_GRADING_CONFIG } from './fluency.js';
 import { matchAnswer, matchOrderedAnswers } from './match/index.js';
 import { unitContent, effectiveCardSettings } from './model.js';
 import { replayUnit, lastScheduledFrom, RESCUE_REASONS } from './history.js';
@@ -181,9 +181,37 @@ export function planReview(ctx) {
  * and the leech flag and leech auto-suspension it caused. A manual
  * suspension is never changed.
  */
+/**
+ * "I knew that" raises the grade, but never past what the answer's own
+ * assistance allows: the hint ceiling, and Good for a typo-tolerated answer.
+ */
+export function knewThatGrade(target, gradingConfig = DEFAULT_GRADING_CONFIG) {
+  if (target.assistance?.revealed || target.assistance?.solutionViewed) return target.grading?.grade ?? target.rating;
+  return capKnew(overrideGrade('knew', target.grading?.grade ?? target.rating, gradingConfig), target, gradingConfig).grade;
+}
+
+function capKnew(og, target, gradingConfig) {
+  let { grade } = og;
+  const reasons = [...og.reasons];
+  const ceiling = ceilingName(gradingConfig.hintCeiling);
+  if (target.assistance?.hintShown && grade > ceiling) {
+    grade = ceiling;
+    reasons.push('HINT_CEILING');
+  }
+  if (target.response?.typoTolerated && grade > 3) {
+    grade = 3;
+    reasons.push('TYPO_NO_EASY');
+  }
+  return { ...og, grade, reasons };
+}
+
 export function planOverride({ eventId, now, deviceId, seq, target, kind, manualRating = null, unit, unitEvents, alias = null, studyDay, gradingConfig = DEFAULT_GRADING_CONFIG, baseline = null, deck = null }) {
+  if ((target.assistance?.revealed || target.assistance?.solutionViewed) && ['correct', 'alias', 'knew'].includes(kind)) {
+    throw new Error('A revealed answer cannot be counted as recalled.');
+  }
   const original = target.grading?.grade ?? target.rating;
   let og = kind === 'manual' ? { grade: manualRating, reasons: ['MANUAL_GRADE'] } : overrideGrade(kind, original, gradingConfig);
+  if (kind === 'knew') og = capKnew(og, target, gradingConfig);
   const rescued = RESCUE_REASONS.has(kind);
   let hesitation = null;
   if (rescued) {

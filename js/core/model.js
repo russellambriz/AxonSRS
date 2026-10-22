@@ -279,12 +279,17 @@ const MATCH_SETTINGS = Object.freeze({
  */
 export function classifyEdit(before, after, deck) {
   const result = {};
-  const keys = new Set([...unitKeys(before, deck), ...unitKeys(after, deck)]);
+  const beforeKeys = new Set(unitKeys(before, deck));
+  const afterKeys = new Set(unitKeys(after, deck));
+  const keys = new Set([...beforeKeys, ...afterKeys]);
   const sa = effectiveCardSettings(before, deck);
   const sb = effectiveCardSettings(after, deck);
   const caseMatters = [sa, sb].some((s) => s.answerMode !== 'text' || s.caseSensitive);
   const matchingChanged = sa.answerMode !== sb.answerMode || (MATCH_SETTINGS[sb.answerMode] || []).some((k) => (sa[k] ?? null) !== (sb[k] ?? null));
   for (const key of keys) {
+    // A deleted mask or blank is deactivated (history kept); a new one starts new.
+    if (!afterKeys.has(key)) { result[key] = 'removed'; continue; }
+    if (!beforeKeys.has(key)) { result[key] = 'added'; continue; }
     const a = unitContent(before, key);
     const b = unitContent(after, key);
     // A cloze prompt shows the other blanks' answers; editing a sibling's
