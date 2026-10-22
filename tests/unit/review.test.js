@@ -1,9 +1,11 @@
 // Spec 12.8, 12.10, 12.11, 17.11, 17.12, 17.21: wrong answers and event
 // recording, independent forward/reverse scheduling, cram without
-// scheduled reviews, alias rescue applied exactly once, undo.
+// scheduled reviews, alias rescue applied exactly once, undo, formatting
+// versus substantive edits.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { makeDeck, makeCard, makeUnits, review, T0, DAY, MIN } from './helpers.js';
+import { classifyEdit, createCard, createDeck } from '../../js/core/model.js';
 import { planOverride, planUndo, evaluateAnswer, exposureEvent } from '../../js/core/review.js';
 import { replayUnit, statesEqual } from '../../js/core/history.js';
 import { addAlias } from '../../js/core/aliases.js';
@@ -101,6 +103,11 @@ test('alias rescue replaces the failed review effect exactly once and keeps the 
   // Applying the same correction again (retry) is idempotent in replay
   const twice = replayUnit([...events, rescue.event, rescue.event]);
   assert.ok(statesEqual(twice.state, rescue.unit.state));
+  // The rescued answer counts as a success everywhere the unit records it.
+  assert.deepEqual(rescue.unit.lastScheduled, { ...good.unit.lastScheduled, hesitation: rescue.event.hesitation });
+  assert.equal(rescue.unit.perf.recent.at(-1).c, true);
+  assert.equal(rescue.unit.perf.recent.length, failed.unit.perf.recent.length, 'replaced, not added');
+  assert.equal(rescue.unit.lastReviewAt, failed.unit.lastReviewAt);
   // The alias is now accepted
   const updated = { ...card, back: addAlias(card.back, 'Iuppiter') };
   assert.ok(evaluateAnswer(updated, deck, 'fwd', 'Iuppiter').correct);
@@ -116,6 +123,106 @@ test('“I knew that” and “I guessed” are explicit overrides', () => {
   assert.deepEqual(knew.event.reasons, ['OVERRIDE_KNEW']);
   const guessed = planOverride({ eventId: 'o3', now: T0 + 1000, deviceId: 'dev-A', seq: 3, target: p.event, kind: 'guessed', unit: p.unit, unitEvents: [p.event], studyDay: '2026-01-05' });
   assert.ok(guessed.event.newRating <= 2);
+  // The next review's Easy check sees the corrected grade.
+  assert.equal(knew.unit.lastScheduled.grade, knew.event.newRating);
+  assert.equal(guessed.unit.lastScheduled.grade, guessed.event.newRating);
+});
+
+/** Review a card until one failure makes it a leech; returns that failure. */
+function failUntilLeech(deck, card) {
+  let [unit] = makeUnits(card, deck);
+  const events = [];
+  let at = T0;
+  const step = (text, id) => {
+    const p = review({ unit, card, deck, text, at, eventId: id });
+    events.push(p.event);
+    unit = p.unit;
+    return p;
+  };
+  step('SO4^2-', 'g0');
+  at += 10 * MIN;
+  step('SO4^2-', 'g1');
+  for (let i = 0; i < 12; i++) {
+    at = unit.state.due;
+    const p = step('nope', `f${i}`);
+    if (p.unit.leech) return { failed: p, events, at };
+    at += 10 * MIN;
+    step('SO4^2-', `r${i}`);
+  }
+  throw new Error('never became a leech');
+}
+
+test('a rescue also replaces the failure’s other effects: performance, Easy eligibility, leech flag and auto-suspension', async () => {
+  const { createBaseline, addSample } = await import('../../js/core/fluency.js');
+  const deck = makeDeck({ leechThreshold: 3, leechAction: 'suspend' });
+  const card = makeCard();
+  const { failed, events, at } = failUntilLeech(deck, card);
+  assert.equal(failed.unit.suspended, true, 'the failure auto-suspended the leech');
+  assert.equal(failed.unit.lastScheduled.correct, false);
+  const now = at + 5000;
+  const rescue = planOverride({ eventId: 'fix', now, deviceId: 'dev-A', seq: 99, target: failed.event, kind: 'correct', unit: failed.unit, unitEvents: events, studyDay: '2026-01-05', deck });
+  assert.ok(rescue.unit.state.lapses < failed.unit.state.lapses, 'no lapse from the rescued answer');
+  assert.equal(rescue.unit.leech, false, 'the leech flag the failure raised is withdrawn');
+  assert.equal(rescue.unit.leechSince, null);
+  assert.equal(rescue.unit.suspended, false, 'and so is its automatic suspension');
+  assert.equal(rescue.unit.suspendedAt, now, 'as the newest suspension decision, so it syncs');
+  assert.equal(rescue.unit.perf.recent.at(-1).c, true);
+  assert.equal(rescue.unit.perf.recent.filter((r) => !r.c).length, failed.unit.perf.recent.filter((r) => !r.c).length - 1);
+  assert.deepEqual(rescue.unit.lastScheduled, { correct: true, assisted: false, grade: rescue.event.newRating, typoTolerated: false, hesitation: rescue.event.hesitation });
+  // The next fluent answer can be graded Easy again (a remaining failure
+  // summary would block it as inconsistent).
+  let baseline = createBaseline('physical|recall');
+  for (let i = 0; i < 40; i++) baseline = addSample(baseline, { eventId: `b${i}`, ts: i, lnLatency: Math.log(6000) + (((i % 7) - 3) / 3) * 0.25, lnMsPerEffort: Math.log(500) + (((i % 7) - 3) / 3) * 0.25 });
+  const nextAt = rescue.unit.state.due;
+  const after = review({ unit: rescue.unit, card, deck, text: 'SO4^2-', at: nextAt, baseline });
+  assert.equal(after.event.rating, 4, after.event.grading.reasons.join(','));
+  const stale = review({ unit: { ...rescue.unit, lastScheduled: failed.unit.lastScheduled }, card, deck, text: 'SO4^2-', at: nextAt, baseline });
+  assert.ok(stale.event.grading.reasons.includes('EASY_NEEDS_CONSISTENCY'));
+});
+
+test('a rescue never lifts a manual suspension or a leech flag that predates the failure', () => {
+  const deck = makeDeck({ leechThreshold: 3, leechAction: 'flag' });
+  const card = makeCard();
+  const { failed, events, at } = failUntilLeech(deck, card);
+  assert.equal(failed.unit.suspended, false);
+  // Suspended by hand after the failure, then rescued.
+  const manual = { ...failed.unit, suspended: true, suspendedAt: at + 2000 };
+  const rescue = planOverride({ eventId: 'fix', now: at + 5000, deviceId: 'dev-A', seq: 99, target: failed.event, kind: 'correct', unit: manual, unitEvents: events, studyDay: '2026-01-05', deck });
+  assert.equal(rescue.unit.leech, false);
+  assert.equal(rescue.unit.suspended, true, 'manual suspension kept');
+  assert.equal(rescue.unit.suspendedAt, at + 2000);
+  // Already a leech before this failure: the rescue leaves the flag alone.
+  const older = { ...failed.unit, leechSince: failed.event.ts - DAY };
+  const kept = planOverride({ eventId: 'fix2', now: at + 5000, deviceId: 'dev-A', seq: 100, target: { ...failed.event, prevUnitMeta: { ...failed.event.prevUnitMeta, leech: true } }, kind: 'correct', unit: older, unitEvents: events, studyDay: '2026-01-05', deck });
+  assert.equal(kept.unit.leech, true);
+});
+
+test('a correction that lowers the grade can make the card a leech, like the review would have', () => {
+  const deck = makeDeck({ leechThreshold: 3, leechAction: 'suspend' });
+  const card = makeCard();
+  const { failed, events, at } = failUntilLeech(deck, card);
+  // Same history, but the leech-making failure was rescued first …
+  const rescue = planOverride({ eventId: 'fix', now: at + 5000, deviceId: 'dev-A', seq: 99, target: failed.event, kind: 'correct', unit: failed.unit, unitEvents: events, studyDay: '2026-01-05', deck });
+  // … and then graded Again by hand after all.
+  const again = planOverride({ eventId: 'fix2', now: at + 9000, deviceId: 'dev-A', seq: 100, target: failed.event, kind: 'manual', manualRating: 1, unit: rescue.unit, unitEvents: [...events, rescue.event], studyDay: '2026-01-05', deck });
+  assert.equal(again.unit.leech, true);
+  assert.equal(again.unit.suspended, true);
+  assert.equal(again.unit.suspendedAt, at + 9000);
+  // Undo of that review lifts the suspension the correction raised.
+  const undo = planUndo({ eventId: 'u', now: at + 12000, deviceId: 'dev-A', seq: 101, target: failed.event, unit: again.unit, unitEvents: [...events, rescue.event, again.event], studyDay: '2026-01-05' });
+  assert.equal(undo.unit.suspended, false);
+  assert.equal(undo.unit.leech, false);
+});
+
+test('a rescued practice answer counts as a success in recent performance', () => {
+  const deck = makeDeck();
+  const card = makeCard();
+  const [u0] = makeUnits(card, deck);
+  const p = review({ unit: u0, card, deck, text: 'nope', at: T0, live: false, mode: 'cram', eventId: 'pr1' });
+  assert.equal(p.unit.perf.recent.at(-1).c, false);
+  const rescue = planOverride({ eventId: 'o', now: T0 + 3000, deviceId: 'dev-A', seq: 2, target: p.event, kind: 'correct', unit: p.unit, unitEvents: [p.event], studyDay: '2026-01-05' });
+  assert.equal(rescue.unit.perf.recent.at(-1).c, true);
+  assert.equal(rescue.unit.state, p.unit.state, 'practice never touches the schedule');
 });
 
 test('undo reverses scheduling exactly, including after later reviews on another device', () => {
@@ -210,4 +317,28 @@ test('alias rescue re-grades from the original measurements (hint ceiling still 
   const rescue = planOverride({ eventId: 'o9', now: T0 + 4000, deviceId: 'dev-A', seq: 3, target: failed.event, kind: 'alias', unit: failed.unit, unitEvents: [failed.event], alias: 'Iuppiter', studyDay: '2026-01-05', gradingConfig: { ...DEFAULT_GRADING_CONFIG, hintCeiling: 'hard' } });
   assert.equal(rescue.event.newRating, 2, 'a hinted rescue respects the Hard ceiling');
   assert.ok(rescue.event.reasons.includes('ALIAS_RESCUE') && rescue.event.reasons.includes('HINT_CEILING'));
+});
+
+test('edit classification: letter case and matching rules count when they change what is tested', () => {
+  const textDeck = createDeck({ id: 'd-text', name: 'Text' });
+  const chemDeck = createDeck({ id: 'd-chem', name: 'Chem', settings: { answerMode: 'chem' } });
+  const co = createCard({ id: 'c-co', deckId: chemDeck.id, front: 'Carbon monoxide', back: 'CO' });
+  assert.equal(classifyEdit(co, { ...co, back: ['Co'] }, chemDeck).fwd, 'substantive', 'CO (carbon monoxide) is not Co (cobalt)');
+  assert.equal(classifyEdit(co, { ...co, back: ['**CO**'] }, chemDeck).fwd, 'formatting');
+  const paris = createCard({ id: 'c-p', deckId: textDeck.id, front: 'Capital of France', back: 'Paris' });
+  assert.equal(classifyEdit(paris, { ...paris, back: ['paris'] }, textDeck).fwd, 'formatting', 'case is ignored by the matcher here');
+  assert.equal(classifyEdit(paris, { ...paris, back: ['Paris', 'Lutetia'] }, textDeck).fwd, 'aliases');
+  assert.equal(classifyEdit(paris, { ...paris, front: ['capital of france'] }, textDeck).fwd, 'formatting');
+  const strictParis = { ...paris, match: { caseSensitive: true } };
+  assert.equal(classifyEdit(strictParis, { ...strictParis, back: ['paris'] }, textDeck).fwd, 'substantive', 'case-sensitive card');
+  // Matching rules that change which answers are accepted
+  assert.equal(classifyEdit(paris, strictParis, textDeck).fwd, 'substantive');
+  assert.equal(classifyEdit(paris, { ...paris, match: { strictSpelling: true } }, textDeck).fwd, 'substantive');
+  assert.equal(classifyEdit(paris, { ...paris, match: { caseSensitive: false } }, textDeck).fwd, 'none', 'same as the deck default');
+  assert.equal(classifyEdit(paris, { ...paris, answerMode: 'text' }, textDeck).fwd, 'none', 'explicitly the deck’s own mode');
+  assert.equal(classifyEdit(paris, { ...paris, match: { mathEquivalence: 'algebraic' } }, textDeck).fwd, 'none', 'maths rules do not apply to text answers');
+  assert.equal(classifyEdit(paris, { ...paris, answerMode: 'chem' }, textDeck).fwd, 'substantive');
+  const cube = createCard({ id: 'c-m', deckId: textDeck.id, front: 'd/dx x^3', back: '3x^2', answerMode: 'math' });
+  assert.equal(classifyEdit(cube, { ...cube, match: { numericTolerance: '1%' } }, textDeck).fwd, 'substantive');
+  assert.equal(classifyEdit(cube, { ...cube, back: ['3X^2'] }, textDeck).fwd, 'substantive', 'case matters in maths');
 });

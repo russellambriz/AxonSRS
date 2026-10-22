@@ -3,7 +3,7 @@
 // GitHub Gist API, with encryption and no token leaving the device.
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { newContext, openApp, seedDeck, idbAll, inApp, startReview, answer, advance, waitReady, assertNoErrors, fakeGist, promptText } from './harness.mjs';
+import { newContext, openApp, seedDeck, idbAll, inApp, startReview, answer, advance, waitReady, assertNoErrors, fakeGist, promptText, phase } from './harness.mjs';
 
 const CARDS = [
   ['Capital of France?', 'Paris | Paname', { tags: ['geo'], hint: 'P…', explanation: 'Since 508.' }],
@@ -186,6 +186,116 @@ export const tests = [
       }
       await ctxA.close();
       await ctxB.close();
+    },
+  },
+  {
+    name: 'a merge marks practice and sibling exposure from another device and lists implausible clocks for reconciliation',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser);
+      const page = await openApp(ctx, url);
+      await seedDeck(page, { name: 'Capitals', cards: [['Capital of France?', 'Paris'], ['Capital of Spain?', 'Madrid'], ['Capital of Italy?', 'Rome']] });
+      await startReview(page);
+      const answers = { France: 'Paris', Spain: 'Madrid', Italy: 'Rome' };
+      for (let i = 0; i < 6 && (await phase(page)) === 'question'; i++) {
+        const p = await promptText(page);
+        await answer(page, answers[Object.keys(answers).find((k) => p.includes(k))]);
+        await advance(page);
+      }
+      // The other device practised one card, saw a second card's answer as a
+      // sibling, and recorded a review of a third with its clock three days ahead.
+      const ids = await inApp(page, async ({ store }) => {
+        const local = await store.exportDataset({});
+        const it = local.units.find((u) => local.events.some((e) => e.type === 'review' && e.unitId === u.id));
+        const [fr, es] = local.units.filter((u) => u.id !== it.id);
+        const base = local.events.find((e) => e.type === 'review' && e.unitId === it.id && e.id === it.headEventId);
+        const now = Date.now();
+        const other = { deviceId: 'other-device', studyDay: base.studyDay };
+        const extra = [
+          { ...other, id: 'remote-practice', type: 'practice', ts: now - 20, seq: 1, unitId: fr.id, cardId: fr.cardId, deckId: fr.deckId, mode: 'cram', response: { correct: true } },
+          { ...other, id: 'remote-sibling', type: 'sibling-exposure', ts: now - 10, seq: 2, unitId: fr.id, cardId: fr.cardId, deckId: fr.deckId, siblingUnitIds: [es.id] },
+          { ...base, ...other, id: 'remote-future', ts: now + 3 * 86400000, seq: 3, parentId: it.headEventId, prevState: it.state },
+        ];
+        const { report } = await store.mergeIn({ ...local, events: [...local.events, ...extra] }, { reason: 'test merge' });
+        return { fr: fr.id, es: es.id, it: it.id, itState: it.state, itHead: it.headEventId, conflicts: report.conflicts.map((c) => [c.kind, c.issue]), practiceAt: now - 20, siblingAt: now - 10 };
+      });
+      const units = Object.fromEntries((await idbAll(page, 'units')).map((u) => [u.id, u]));
+      assert.equal(units[ids.fr].practiceSinceLast, true, 'practice on the other device marks the next delayed test here');
+      assert.equal(units[ids.fr].lastPracticeAt, ids.practiceAt);
+      assert.equal(units[ids.es].siblingExposedAt, ids.siblingAt);
+      assert.deepEqual(ids.conflicts, [['clock', 'future-timestamp']]);
+      assert.ok((await idbAll(page, 'events')).some((e) => e.id === 'remote-future'), 'the suspicious review is kept');
+      assert.equal(units[ids.it].headEventId, 'remote-future');
+      // Reconcile on the conflicts screen: stop counting it.
+      await page.evaluate(() => { location.hash = '#/conflicts'; });
+      await page.getByRole('heading', { name: 'Dated in the future' }).waitFor();
+      await page.getByRole('button', { name: 'Don’t count this review' }).click();
+      await page.getByRole('heading', { name: 'No conflicts' }).waitFor();
+      const events = await idbAll(page, 'events');
+      assert.ok(events.some((e) => e.type === 'correction' && e.kind === 'void' && e.targetId === 'remote-future' && e.reason === 'clock-issue'));
+      assert.ok(events.some((e) => e.id === 'remote-future'), 'still in the history');
+      const it = (await idbAll(page, 'units')).find((u) => u.id === ids.it);
+      assert.equal(it.headEventId, ids.itHead);
+      assert.deepEqual(it.state, ids.itState, 'schedule back to this device’s own review');
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
+  {
+    name: 'a scheduler version change is announced, never applied silently, and an explicit rebuild can be undone',
+    async run({ browser, url }) {
+      const OLD = 'ts-fsrs@4.0.0 (FSRS-5) + axon-fuzz@0';
+      const ctx = await newContext(browser);
+      const page = await openApp(ctx, url);
+      await seedDeck(page, { name: 'Engine', cards: [['Capital of France?', 'Paris']] });
+      await startReview(page);
+      await answer(page, 'Paris');
+      await advance(page);
+      // The review was scheduled by an older engine that gave it 30 days.
+      const recorded = await inApp(page, async ({ store }, old) => {
+        const [unit] = await store.listUnits();
+        const ev = (await store.eventsForUnit(unit.id)).find((e) => e.type === 'review');
+        const nextState = { ...ev.nextState, due: ev.ts + 30 * 86400000, scheduled_days: 30, state: 2 };
+        await store.tx(['events', 'units'], 'readwrite', async (t) => {
+          await t.put('events', { ...ev, params: { ...ev.params, version: old }, nextState });
+          await t.put('units', { ...unit, state: nextState });
+        });
+        await store.setDevice({ scheduler: { version: old } });
+        return { unitId: unit.id, due: nextState.due };
+      }, OLD);
+      const dueNow = (rebuild = false) => inApp(page, async ({ store }, a) => {
+        if (a.rebuild) await store.rebuildSchedules();
+        return { due: (await store.get('units', a.id)).state.due, version: store.device.scheduler?.version };
+      }, { id: recorded.unitId, rebuild });
+      await page.reload();
+      await waitReady(page);
+      const notice = page.locator('.toast', { hasText: 'scheduling engine was updated' });
+      await notice.waitFor();
+      // Not recomputed automatically, even by a full replay (as after a restore).
+      assert.equal((await dueNow(true)).due, recorded.due);
+      await notice.getByRole('button', { name: 'Options' }).click();
+      await page.locator('dialog[open]').getByRole('button', { name: 'Rebuild schedules' }).click();
+      const done = page.locator('.toast', { hasText: 'Rebuilt 1 schedule with the new engine' });
+      await done.waitFor();
+      assert.notEqual((await dueNow()).due, recorded.due, 'rebuilt with the bundled engine');
+      assert.ok((await inApp(page, ({ store }) => store.listSnapshots())).some((s) => s.reason.startsWith('before rebuilding schedules')));
+      await done.getByRole('button', { name: 'Undo' }).click();
+      await page.locator('.toast', { hasText: 'Schedules restored as they were' }).waitFor();
+      assert.deepEqual(await dueNow(), { due: recorded.due, version: OLD });
+      // Next start: the notice is back; keeping the schedules records the choice.
+      await page.reload();
+      await waitReady(page);
+      await notice.getByRole('button', { name: 'Options' }).click();
+      await page.locator('dialog[open]').getByRole('button', { name: 'Keep current schedules' }).click();
+      await page.locator('.toast', { hasText: 'Your current schedules are kept' }).waitFor();
+      const kept = await dueNow(true);
+      assert.equal(kept.due, recorded.due, 'past reviews keep their recorded results');
+      assert.notEqual(kept.version, OLD);
+      await page.reload();
+      await waitReady(page);
+      await page.waitForTimeout(300);
+      assert.equal(await notice.count(), 0, 'no notice once decided');
+      assertNoErrors(page);
+      await ctx.close();
     },
   },
 ];

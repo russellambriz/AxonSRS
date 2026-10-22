@@ -19,7 +19,7 @@
 import { GistClient, GistError, parseGistId } from '../core/sync/gist.js';
 import { seal, open as openEnvelope, createKeyring, EnvelopeError } from '../core/sync/envelope.js';
 import { datasetToChunks, chunksToDataset, chunkHashes, buildManifest, chunkCount, MANIFEST_FILE, MAX_FILE_CHARS, MAX_REQUEST_CHARS } from '../core/sync/chunks.js';
-import { validateDataset } from '../core/backup.js';
+import { validateDataset, VALIDATORS } from '../core/backup.js';
 import { SYNC_FORMAT } from '../config.js';
 import { sha256Hex, base64ToBytes, bytesToBase64 } from '../core/util.js';
 
@@ -32,6 +32,13 @@ export class SyncError extends Error {
 }
 
 const MAX_ATTEMPTS = 3;
+
+/** "Synced, but N media files were not imported (why…)". */
+export function rejectedMediaMessage(rejected) {
+  const n = rejected.length;
+  const reasons = [...new Set(rejected.map((r) => r.message))].join('; ');
+  return `Synced, but ${n} image or audio file${n === 1 ? '' : 's'} in the Gist ${n === 1 ? 'was' : 'were'} not imported (${reasons}). ${n === 1 ? 'It stays' : 'They stay'} in the Gist unchanged.`;
+}
 
 export class SyncService {
   constructor(store) {
@@ -175,8 +182,13 @@ export class SyncService {
     this.setStatus('syncing', 'Syncing…');
     this.running = run()
       .then(async (result) => {
-        await this.store.setDevice({ sync: { ...this.config, lastSyncAt: Date.now(), lastError: null, lastRemoteVersion: result.remoteVersion } });
-        this.setStatus('ok', 'Synced', { result });
+        // Media the Gist holds but this device refused: reported every time
+        // (status), and flagged as new when they were not refused before.
+        const rejected = result.pulled?.rejectedMedia || [];
+        const known = new Set((this.config.rejectedMedia || []).map((r) => r.file));
+        if (result.pulled) result.pulled.newlyRejected = rejected.filter((r) => !known.has(r.file));
+        await this.store.setDevice({ sync: { ...this.config, lastSyncAt: Date.now(), lastError: null, lastRemoteVersion: result.remoteVersion, rejectedMedia: rejected } });
+        this.setStatus('ok', rejected.length ? rejectedMediaMessage(rejected) : 'Synced', { result });
         return result;
       })
       .catch(async (err) => {
@@ -191,9 +203,14 @@ export class SyncService {
     return this.running;
   }
 
+  /**
+   * Read and validate the Gist. Media files that fail validation (type,
+   * size, encoding) are never imported; they are returned as `rejected`
+   * and left untouched in the Gist.
+   */
   async readRemote(client, gist) {
     const manifestText = await client.fileContent(gist, MANIFEST_FILE);
-    if (!manifestText) return { manifest: null, dataset: null, errors: [] };
+    if (!manifestText) return { manifest: null, dataset: null, errors: [], rejected: [] };
     let env;
     try {
       env = JSON.parse(manifestText);
@@ -202,23 +219,30 @@ export class SyncService {
     }
     const manifest = await openEnvelope(env, { keyring: this.keyring, expectedFormat: SYNC_FORMAT });
     const chunks = [];
+    const rejected = [];
     for (const [name, info] of Object.entries(manifest.files || {})) {
       const text = await client.fileContent(gist, name);
       if (text == null) throw new SyncError(`Sync file ${name} is missing from the Gist. Another device may be mid-upload; try again shortly.`, 'remote-incomplete');
       const value = await openEnvelope(JSON.parse(text), { keyring: this.keyring, expectedFormat: SYNC_FORMAT });
       if ((await sha256Hex(JSON.stringify(value))) !== info.sha256) throw new SyncError(`Sync file ${name} does not match the manifest (partial upload?). Try again shortly.`, 'remote-incomplete');
+      if (value?.kind === 'media') {
+        const m = value.media;
+        const problem = m && typeof m === 'object' ? VALIDATORS.media(m) : 'not an object';
+        if (problem) {
+          rejected.push({ file: name, id: m?.id ?? null, type: m?.type ?? null, message: problem });
+          continue;
+        }
+      }
       chunks.push(value);
     }
-    const raw = chunksToDataset(chunks);
-    const { dataset, errors } = validateDataset(raw);
-    dataset.media = raw.media;
-    return { manifest, dataset, errors };
+    const { dataset, errors } = validateDataset(chunksToDataset(chunks));
+    return { manifest, dataset, errors, rejected };
   }
 
   async syncOnce(reason) {
     const client = this.client();
     const gistId = this.config.gistId;
-    let pulled = { newEvents: 0, conflicts: 0, invalid: 0 };
+    let pulled = { newEvents: 0, conflicts: 0, invalid: 0, rejectedMedia: [] };
     for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
       // 1. Pull
       const gist = await client.getGist(gistId);
@@ -226,7 +250,7 @@ export class SyncService {
       const remote = await this.readRemote(client, gist);
       if (remote.dataset) {
         const { report } = await this.store.mergeIn(remote.dataset, { reason: `sync-${reason}` });
-        pulled = { newEvents: pulled.newEvents + report.newEvents, conflicts: pulled.conflicts + report.conflicts.length, invalid: remote.errors.length, autoMerged: report.autoMerged };
+        pulled = { newEvents: pulled.newEvents + report.newEvents, conflicts: pulled.conflicts + report.conflicts.length, invalid: remote.errors.length + remote.rejected.length, autoMerged: report.autoMerged, rejectedMedia: remote.rejected };
       }
       // 2. Build upload
       const local = await this.store.exportDataset({ includeMedia: true });
@@ -235,8 +259,17 @@ export class SyncService {
       const counts = {};
       for (const [name, value] of chunks) counts[name] = chunkCount(value);
       const previous = remote.manifest;
+      // Rejected media stay in the Gist as they are (another device or a
+      // later version may use them): still listed, never deleted.
+      for (const r of remote.rejected) {
+        const entry = previous?.files?.[r.file];
+        if (entry && !chunks.has(r.file)) {
+          hashes[r.file] = entry.sha256;
+          counts[r.file] = entry.count ?? null;
+        }
+      }
       const changed = [...chunks.keys()].filter((n) => previous?.files?.[n]?.sha256 !== hashes[n]);
-      const removed = Object.keys(previous?.files || {}).filter((n) => !chunks.has(n));
+      const removed = Object.keys(previous?.files || {}).filter((n) => !chunks.has(n) && !(n in hashes));
       if (!changed.length && !removed.length && previous) {
         return { remoteVersion: baseVersion, uploaded: 0, pulled, attempt };
       }

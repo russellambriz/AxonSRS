@@ -8,14 +8,14 @@
  * undone, and leave tombstones so they propagate through sync.
  */
 
-import { DB_VERSION, APP_VERSION } from '../config.js';
+import { DB_VERSION, APP_VERSION, SCHEDULER_VERSION } from '../config.js';
 import { openWithSafety, transaction, StorageError, dumpDatabase, writeSnapshot, listSnapshots, readSnapshot, deleteSnapshot, STORES } from './db.js';
 import { DEFAULT_GLOBAL_SETTINGS, DEFAULT_DEVICE_SETTINGS, mergeSettings } from './settings.js';
 import { uuid, sha256Hex, bytesToBase64, base64ToBytes } from '../core/util.js';
 import { createDeck, createCard, unitKeys, unitId, DEFAULT_DECK_SETTINGS } from '../core/model.js';
 import { stamp, revisionFor } from '../core/sync/versioning.js';
 import { mergeDatasets, emptyDataset } from '../core/sync/merge.js';
-import { replayUnit, statesEqual } from '../core/history.js';
+import { replayUnit, statesEqual, setReplayPolicy, lastScheduledFrom, lastReviewTs, siblingExposureTimes, exposureSince, clockConflicts } from '../core/history.js';
 import { createBaseline, addSample, removeSample, mergeBaselines } from '../core/fluency.js';
 import { studyDay, systemTimeZone } from '../core/time.js';
 import { schedulerParams } from '../core/scheduler.js';
@@ -45,6 +45,7 @@ export class AxonStore {
     this.listeners = new Set();
     this.channel = typeof BroadcastChannel === 'function' ? new BroadcastChannel('axon-data') : null;
     this.upgradeInfo = null;
+    this.schedulerChange = null;
     if (this.channel) {
       this.channel.onmessage = (e) => {
         if (e.data?.origin !== this.instanceId) this.emit(e.data.type, { ...e.data.detail, remote: true }, false);
@@ -74,8 +75,48 @@ export class AxonStore {
       await t.put('meta', { key: 'lastOpenedApp', value: APP_VERSION, at: Date.now() });
     });
     await this.loadSettings();
+    await this.checkScheduler().catch((err) => console.warn('Scheduler version check failed', err));
     this.cleanTrash().catch(() => {});
     return this;
+  }
+
+  /**
+   * Compare the scheduler that produced this device's stored schedules
+   * (recorded in device settings; on first run, the newest review's own
+   * version) with the bundled one. A change is never applied to past
+   * reviews automatically: `schedulerChange` is set so the app can explain
+   * it and let the user keep the schedules or rebuild them (reversibly).
+   */
+  async checkScheduler() {
+    let version = this.device.scheduler?.version || null;
+    if (!version) {
+      const [last] = await this.tx(['events'], 'readonly', (t) => t.lastFromIndex('events', 'ts', 1, (e) => e.type === 'review' && !!e.params?.version));
+      version = last?.params.version || SCHEDULER_VERSION;
+      if (version === SCHEDULER_VERSION) await this.setDevice({ scheduler: { version, at: Date.now() } });
+    }
+    this.schedulerChange = version === SCHEDULER_VERSION ? null : { from: version, to: SCHEDULER_VERSION };
+    return this.schedulerChange;
+  }
+
+  /** Keep the stored schedules: past reviews keep their recorded results. */
+  async keepSchedules() {
+    await this.setDevice({ scheduler: { version: SCHEDULER_VERSION, at: Date.now(), keptFrom: this.schedulerChange?.from || null } });
+    this.schedulerChange = null;
+  }
+
+  /**
+   * Rebuild every schedule by replaying the whole review history through
+   * the bundled scheduler, after a snapshot (restoring it undoes this,
+   * including the choice itself, which lives in device settings).
+   */
+  async rebuildForScheduler() {
+    const from = this.schedulerChange?.from || this.device.scheduler?.version || null;
+    const snapshotId = await this.snapshot(`before rebuilding schedules with ${SCHEDULER_VERSION}`);
+    if (!snapshotId) throw new StorageError('A snapshot could not be taken first, so nothing was changed.', 'snapshot');
+    await this.setDevice({ scheduler: { version: SCHEDULER_VERSION, at: Date.now(), recompute: true, rebuiltFrom: from, snapshotId } });
+    const count = await this.rebuildSchedules();
+    this.schedulerChange = null;
+    return { count, snapshotId };
   }
 
   on(fn) {
@@ -112,6 +153,9 @@ export class AxonStore {
     this.globalMeta = { values: g?.values || {}, updatedAt: g?.updatedAt || {} };
     this.global = mergeSettings(DEFAULT_GLOBAL_SETTINGS, this.globalMeta.values);
     this.device = mergeSettings(DEFAULT_DEVICE_SETTINGS, d?.values || {});
+    // Reviews from other scheduler versions are recomputed only after an
+    // explicit rebuild with the bundled engine (see rebuildForScheduler).
+    setReplayPolicy({ recompute: !!this.device.scheduler?.recompute && this.device.scheduler.version === SCHEDULER_VERSION });
   }
 
   async setGlobal(patch) {
@@ -837,7 +881,9 @@ export class AxonStore {
   /**
    * Merge an incoming dataset (sync pull or backup restore) into the
    * local database in one transaction, then rebuild affected schedules
-   * from the merged event history.
+   * from the merged event history. Exposure since the last review
+   * (practice and sibling exposure on any device) is derived from the
+   * merged history too, so the next delayed test here is marked by it.
    */
   async mergeIn(incoming, { reason = 'merge' } = {}) {
     const local = await this.exportDataset({ includeMedia: false });
@@ -848,15 +894,27 @@ export class AxonStore {
       if (!eventsByUnit.has(e.unitId)) eventsByUnit.set(e.unitId, []);
       eventsByUnit.get(e.unitId).push(e);
     }
+    const siblingAt = siblingExposureTimes(dataset.events);
     const unitsOut = [];
+    const exposed = new Map();
     const concurrent = [];
     for (const u of dataset.units) {
-      if (!report.unitsToReplay.has(u.id)) continue;
-      const replay = replayUnit(eventsByUnit.get(u.id) || []);
-      unitsOut.push({ ...u, state: replay.state, headEventId: replay.headEventId, lastReviewAt: replay.applied.length ? replay.applied[replay.applied.length - 1].event.ts : null, updatedAt: Date.now() });
-      for (const group of replay.concurrent) {
-        concurrent.push({ id: `concurrent:${u.id}:${group.map((e) => e.id).sort().join(':')}`, kind: 'concurrent-review', recordType: 'units', recordId: u.id, cardId: u.cardId, events: group.map((e) => ({ id: e.id, ts: e.ts, deviceId: e.deviceId, rating: e.rating, correct: e.response?.correct })), createdAt: Date.now() });
+      const unitEvents = eventsByUnit.get(u.id) || [];
+      let next = u;
+      if (report.unitsToReplay.has(u.id)) {
+        const replay = replayUnit(unitEvents);
+        next = { ...u, state: replay.state, headEventId: replay.headEventId, lastReviewAt: lastReviewTs(replay), lastScheduled: lastScheduledFrom(replay), updatedAt: Date.now() };
+        for (const group of replay.concurrent) {
+          concurrent.push({ id: `concurrent:${u.id}:${group.map((e) => e.id).sort().join(':')}`, kind: 'concurrent-review', recordType: 'units', recordId: u.id, cardId: u.cardId, events: group.map((e) => ({ id: e.id, ts: e.ts, deviceId: e.deviceId, rating: e.rating, correct: e.response?.correct })), createdAt: Date.now() });
+        }
       }
+      const exposure = exposureSince(unitEvents, { lastReviewAt: next.lastReviewAt ?? null, siblingExposedAt: Math.max(next.siblingExposedAt || 0, siblingAt.get(u.id) || 0) || null });
+      const patch = {};
+      if (!!next.practiceSinceLast !== exposure.practiceSinceLast) patch.practiceSinceLast = exposure.practiceSinceLast;
+      if (exposure.lastPracticeAt != null && next.lastPracticeAt !== exposure.lastPracticeAt) patch.lastPracticeAt = exposure.lastPracticeAt;
+      if (exposure.siblingExposedAt != null && next.siblingExposedAt !== exposure.siblingExposedAt) patch.siblingExposedAt = exposure.siblingExposedAt;
+      if (next !== u) unitsOut.push({ ...next, ...patch });
+      else if (Object.keys(patch).length) exposed.set(u.id, { ...u, ...patch });
     }
     const replayedIds = new Set(unitsOut.map((u) => u.id));
     const localIds = {};
@@ -893,7 +951,8 @@ export class AxonStore {
           continue;
         }
         if (replayedIds.has(u.id)) continue;
-        if (changed('units', u)) unitPuts.push(u);
+        const next = exposed.get(u.id) || u;
+        if (changed('units', next)) unitPuts.push(next);
       }
       await t.putMany('units', unitPuts);
       await t.putMany('units', unitsOut.filter((u) => cardIds.has(u.cardId)));
@@ -916,12 +975,17 @@ export class AxonStore {
     return { report, concurrent: concurrent.length };
   }
 
-  /** Replace all study data with a dataset (after a snapshot). */
+  /**
+   * Replace all study data with a dataset (after a snapshot). Events with
+   * implausible timestamps are kept and listed for reconciliation.
+   */
   async replaceAll(dataset, { reason = 'replace' } = {}) {
     await this.snapshot(`before ${reason}`);
     const stores = ['decks', 'cards', 'units', 'events', 'revisions', 'tombstones', 'links', 'plans', 'conflicts', 'sessions'];
+    const clock = clockConflicts(dataset.events || []);
     await this.tx([...stores, 'media', 'settings', 'calibration'], 'readwrite', async (t) => {
       for (const s of stores) await t.clear(s);
+      await t.putMany('conflicts', clock.map((c) => ({ ...c, createdAt: Date.now(), reason })));
       // Personal timing baselines travel in backups; keep this device's own
       // when the backup has none.
       if (dataset.calibration?.length) {
@@ -939,6 +1003,8 @@ export class AxonStore {
     this.emit('settings', { scope: 'global', keys: Object.keys(dataset.settings?.values || {}) });
     this.emit('decks', {});
     this.emit('cards', {});
+    this.emit('conflicts', {});
+    return { conflicts: clock.length };
   }
 
   /* ---------------- integrity ---------------- */

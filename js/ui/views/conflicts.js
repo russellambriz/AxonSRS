@@ -10,6 +10,14 @@ import { uuid } from '../../core/util.js';
 import { planUndo } from '../../core/review.js';
 import { RATING_LABELS } from '../../core/scheduler.js';
 
+/** Implausible-timestamp entries (history.js clockConflicts). */
+const CLOCK_ISSUES = {
+  'future-timestamp': ['Dated in the future', (one) => `${one ? 'It is' : 'They are'} dated later than this device’s clock, so the recording device’s clock was probably ahead. A review dated in the future can push its card’s next due date too far out.`],
+  'before-parent': ['Dated before the review they followed', (one) => `${one ? 'It is' : 'They are'} dated before the review ${one ? 'it was' : 'they were'} based on, so a device clock was behind. Axon replays ${one ? 'it' : 'them'} after that review.`],
+  'device-clock-went-backwards': ['Device clock went backwards', (one) => `${one ? 'It is' : 'They are'} dated earlier than events the same device recorded before.`],
+  'in-session-clock-jump': ['Clock changed during an answer', (one) => `The device clock jumped while ${one ? 'this answer was' : 'these answers were'} being typed; ${one ? 'its' : 'their'} timing was already left out of grading.`],
+};
+
 function valueText(v) {
   if (v == null) return '—';
   if (Array.isArray(v)) return v.join(' | ');
@@ -18,7 +26,7 @@ function valueText(v) {
 }
 
 export async function view(outlet) {
-  const { root, body } = page({ title: 'Sync conflicts', sub: 'These changes could not be merged automatically. Both versions are preserved until you choose.', crumbs: [{ label: 'Settings', href: '#/settings/sync' }] });
+  const { root, body } = page({ title: 'Sync conflicts', sub: 'Changes that could not be merged automatically, and received events with implausible timestamps. Nothing is overwritten or dropped until you choose.', crumbs: [{ label: 'Settings', href: '#/settings/sync' }] });
   outlet.append(root);
   async function render() {
     await app.cache.load();
@@ -46,8 +54,44 @@ export async function view(outlet) {
           h('div', { class: 'table-wrap' }, h('table', { class: 'table' }, h('tbody', {}, c.events.map((e) => h('tr', {}, h('td', {}, formatDate(e.ts, { dateStyle: 'medium', timeStyle: 'short' })), h('td', {}, e.deviceId === store.deviceId ? 'this device' : 'other device'), h('td', {}, e.correct ? 'correct' : 'incorrect'), h('td', {}, RATING_LABELS[e.rating] || '')))))),
           h('div', { class: 'row' }, button('Keep both', { kind: 'primary', onclick: () => resolveConcurrent(c, 'both') }), button('Keep earliest only', { onclick: () => resolveConcurrent(c, 'earliest') }), button('Keep latest only', { onclick: () => resolveConcurrent(c, 'latest') })));
       }
+      if (c.kind === 'clock') {
+        const [title, text] = CLOCK_ISSUES[c.issue] || ['Implausible timestamps', () => ''];
+        const reviews = c.events.filter((e) => e.type === 'review');
+        const n = c.total ?? c.events.length;
+        // Very long runs are only partly listed; they can be kept, not discounted here.
+        const partial = n > c.events.length;
+        return h('section', { class: 'panel stack' }, h('h3', {}, title),
+          h('p', { class: 'muted small' }, `${n} event${n === 1 ? '' : 's'} from ${c.deviceId === store.deviceId ? 'this device' : 'another device'}. ${text(n === 1)}`),
+          callout('info', 'Suspicious events are kept in your history and counted in time order; a review is never replayed before the review it was based on. Keep them as they are, or stop counting the suspicious reviews in scheduling (their records stay in the history).'),
+          h('div', { class: 'table-wrap' }, h('table', { class: 'table' }, h('tbody', {}, c.events.slice(0, 10).map((e) => {
+            const card = app.cache.cards.get(e.cardId);
+            return h('tr', {}, h('td', {}, formatDate(e.ts, { dateStyle: 'medium', timeStyle: 'short' })), h('td', { class: 'small' }, card ? valueText(card.front[0]) : '—'), h('td', {}, e.type), h('td', {}, RATING_LABELS[e.rating] || ''));
+          })))),
+          n > 10 ? h('p', { class: 'faint small' }, `and ${n - 10} more${partial ? '. Too many to stop counting one by one here: they are kept.' : ''}`) : null,
+          h('div', { class: 'row' }, button(n === 1 ? 'Keep it' : 'Keep them', { kind: 'primary', onclick: () => resolveClock(c, false) }),
+            reviews.length && !partial ? button(`Don’t count ${reviews.length === 1 ? 'this review' : `these ${reviews.length} reviews`}`, { onclick: () => resolveClock(c, true) }) : null));
+      }
       return null;
     }));
+  }
+  async function resolveClock(c, discount) {
+    try {
+      if (discount) {
+        for (const d of c.events.filter((e) => e.type === 'review')) {
+          const events = await store.eventsForUnit(d.unitId);
+          const target = events.find((e) => e.id === d.id);
+          const unit = await store.get('units', d.unitId);
+          if (!target || !unit) continue;
+          const plan = planUndo({ eventId: uuid(), now: Date.now(), deviceId: store.deviceId, seq: null, target, unit, unitEvents: events, studyDay: store.today(), reason: 'clock-issue' });
+          await store.commitCorrection(plan, {});
+        }
+      }
+      await store.tx(['conflicts'], 'readwrite', (t) => t.delete('conflicts', c.id));
+      toast(discount ? 'Those reviews no longer count in scheduling' : 'Kept');
+      render();
+    } catch (err) {
+      errorToast(err);
+    }
   }
   async function resolve(c, choice) {
     try {

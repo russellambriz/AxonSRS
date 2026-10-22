@@ -41,6 +41,20 @@ test('events merge by id: idempotent, retry-safe, no duplicates', () => {
   assert.equal(tampered.dataset.events.find((e) => e.id === 'e1').rating, 3);
 });
 
+test('incoming events with an implausible clock are merged (never dropped) and flagged for reconciliation', () => {
+  const { ds } = baseWorld();
+  const now = 1_000_000_000;
+  const local = { ...ds, events: [ev('e1', 'c:fwd', now - 5000)] };
+  const remote = { ...ds, events: [ev('e1', 'c:fwd', now - 5000), ev('ahead', 'c:fwd', now + 7 * 86400000, { deviceId: 'B', parentId: 'e1' })] };
+  const r = mergeDatasets(local, remote, { now });
+  assert.ok(r.dataset.events.some((e) => e.id === 'ahead'), 'the suspicious event is kept');
+  assert.ok(r.report.unitsToReplay.has('c:fwd'));
+  const clock = r.report.conflicts.filter((c) => c.kind === 'clock');
+  assert.deepEqual(clock.map((c) => [c.issue, c.events.map((e) => e.id)]), [['future-timestamp', ['ahead']]]);
+  // Merging the same data again raises nothing new: only new events are checked.
+  assert.equal(mergeDatasets(r.dataset, remote, { now }).report.conflicts.length, 0);
+});
+
 test('a descendant edit wins over its ancestor on either side', () => {
   const { ds, card } = baseWorld();
   const e1 = edit(card.record, { back: ['A2'] }, 'B', 5);
@@ -211,6 +225,67 @@ test('Gist client explains authentication, permission, rate-limit and network er
   assert.equal(parseGistId('https://gist.github.com/someone/0123456789abcdef0123456789abcdef'), '0123456789abcdef0123456789abcdef');
   assert.equal(explainStatus(409, new Headers()).code, 'conflict');
   assert.throws(() => new GistClient({}));
+});
+
+test('sync pull never keeps media that fail validation, says why, and leaves them in the Gist', async () => {
+  const { SyncService } = await import('../../js/data/sync.js');
+  const { SYNC_FORMAT } = await import('../../js/config.js');
+  const { sha256Hex } = await import('../../js/core/util.js');
+  const { MANIFEST_FILE } = await import('../../js/core/sync/chunks.js');
+  // A Gist written by another device: one valid image, one SVG, one oversized asset that claims to be tiny.
+  const files = new Map();
+  const history = ['v1'];
+  const put = async (name, value) => {
+    files.set(name, JSON.stringify(await seal(value, { format: SYNC_FORMAT, deviceId: 'B' })));
+    return sha256Hex(JSON.stringify(value));
+  };
+  const good = { id: 'sha256-good', type: 'image/png', size: 3, data: 'AAAA' };
+  const svg = { id: 'sha256-svg', type: 'image/svg+xml', size: 10, data: 'PHN2Zz4=' };
+  const huge = { id: 'sha256-huge', type: 'image/png', size: 12, data: 'A'.repeat(28 * 1024 * 1024) };
+  const hashes = { 'axon-records.json': await put('axon-records.json', { kind: 'records', decks: [], cards: [], units: [], links: [], plans: [], tombstones: [], settings: { values: {}, updatedAt: {} } }) };
+  for (const m of [good, svg, huge]) hashes[`axon-media-${m.id}.json`] = await put(`axon-media-${m.id}.json`, { kind: 'media', media: m });
+  files.set(MANIFEST_FILE, JSON.stringify(await seal(buildManifest({ hashes, counts: {}, deviceId: 'B', encrypted: false }), { format: SYNC_FORMAT, deviceId: 'B' })));
+  const batches = [];
+  const client = {
+    getGist: async () => ({ id: 'g', history: history.map((version) => ({ version })) }),
+    fileContent: async (gist, name) => files.get(name) ?? null,
+    updateGist: async (id, batch) => {
+      batches.push(batch);
+      for (const [n, f] of Object.entries(batch)) (f ? files.set(n, f.content) : files.delete(n));
+      history.unshift(`v${history.length + 1}`);
+    },
+  };
+  const merged = [];
+  const store = {
+    deviceId: 'A',
+    device: { sync: { gistId: 'g' } },
+    async mergeIn(ds) {
+      merged.push(ds);
+      return { report: { newEvents: 0, conflicts: [], autoMerged: 0 } };
+    },
+    // This device has one review of its own to upload.
+    exportDataset: async () => ({ ...emptyDataset(), events: [ev('mine', 'c:fwd', Date.UTC(2026, 2, 1))], media: merged.at(-1)?.media || [] }),
+    async setDevice(patch) {
+      this.device = { ...this.device, ...patch };
+    },
+  };
+  const svc = new SyncService(store);
+  svc.token = 'not-a-real-token';
+  svc.client = () => client;
+  const result = await svc.sync({ reason: 'manual' });
+  assert.deepEqual(merged[0].media.map((m) => m.id), ['sha256-good'], 'refused media are not merged');
+  assert.deepEqual(result.pulled.rejectedMedia.map((r) => r.id).sort(), ['sha256-huge', 'sha256-svg']);
+  assert.equal(result.pulled.newlyRejected.length, 2);
+  assert.match(svc.status.message, /2 image or audio files in the Gist were not imported \(.*unsupported media type image\/svg\+xml.*too large/);
+  // The upload neither deletes nor unlists them.
+  assert.ok(batches.length, 'this device uploaded its review');
+  assert.ok(batches.every((b) => !Object.keys(b).some((n) => n.includes('sha256-svg') || n.includes('sha256-huge'))));
+  const manifest = await open(JSON.parse(files.get(MANIFEST_FILE)));
+  assert.ok(manifest.files['axon-media-sha256-svg.json'] && manifest.files['axon-media-sha256-huge.json']);
+  // Reported once as new; later syncs still say so in the status.
+  const again = await svc.sync({ reason: 'manual' });
+  assert.equal(again.pulled.newlyRejected.length, 0);
+  assert.match(svc.status.message, /not imported/);
 });
 
 test('chunking splits by kind and month, round-trips, and only changed chunks differ', async () => {

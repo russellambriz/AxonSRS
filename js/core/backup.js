@@ -21,6 +21,22 @@ const isStr = (v) => typeof v === 'string' && v.length > 0;
 const isNum = (v) => typeof v === 'number' && Number.isFinite(v);
 const isStrArray = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string');
 
+/**
+ * Size in bytes that a base64 string decodes to (ASCII whitespace ignored,
+ * as atob does), or -1 when it is not valid base64. Worked out from the
+ * length, so an oversized asset is refused without decoding it, whatever
+ * its `size` field claims.
+ */
+export function base64ByteLength(text) {
+  const s = /[\t\n\f\r ]/.test(text) ? text.replace(/[\t\n\f\r ]+/g, '') : text;
+  if (!/^[A-Za-z0-9+/]*={0,2}$/.test(s)) return -1;
+  const pad = s.endsWith('==') ? 2 : s.endsWith('=') ? 1 : 0;
+  if (pad ? s.length % 4 !== 0 : s.length % 4 === 1) return -1;
+  return Math.floor(((s.length - pad) * 3) / 4);
+}
+
+const mb = (bytes) => `${(bytes / 1048576).toFixed(1)} MB`;
+
 function fsrsStateOk(s) {
   if (s == null) return true;
   return typeof s === 'object' && isNum(s.due) && isNum(s.stability) && isNum(s.difficulty) && isNum(s.reps) && isNum(s.lapses) && [0, 1, 2, 3].includes(s.state);
@@ -78,8 +94,12 @@ export const VALIDATORS = {
   media(m) {
     if (!isStr(m.id) || !isStr(m.type)) return 'missing id/type';
     if (!/^(image\/(png|jpeg|gif|webp|avif)|audio\/(mpeg|mp4|ogg|webm|wav|x-wav|aac))$/.test(m.type)) return `unsupported media type ${m.type}`;
-    if (m.data != null && typeof m.data !== 'string') return 'media data must be base64';
-    if ((m.size || 0) > MAX_MEDIA_BYTES) return 'media asset too large';
+    if (m.data == null) return (m.size || 0) > MAX_MEDIA_BYTES ? 'media asset too large' : null;
+    if (typeof m.data !== 'string') return 'media data must be base64';
+    // Bounded by the data itself, never by the claimed size.
+    const bytes = base64ByteLength(m.data);
+    if (bytes < 0) return 'media data is not valid base64';
+    if (bytes > MAX_MEDIA_BYTES) return `media asset too large (${mb(bytes)}; the limit is ${mb(MAX_MEDIA_BYTES)})`;
     return null;
   },
   calibration(c) {
@@ -100,6 +120,8 @@ function normalize(collection, r) {
     };
   }
   if (collection === 'units') return { active: true, suspended: false, overlays: {}, overlaysAt: 0, suspendedAt: 0, perf: { recent: [] }, ...r };
+  // The stored size is the real one, not whatever the file claimed.
+  if (collection === 'media' && typeof r.data === 'string') return { ...r, size: base64ByteLength(r.data) };
   return r;
 }
 

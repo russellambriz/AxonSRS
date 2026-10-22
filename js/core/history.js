@@ -19,13 +19,35 @@
  * delayed recall from the shared parent — and flag the group so the user
  * can keep both, keep only the earliest, or keep only the latest. Never
  * "latest timestamp wins" and never "largest interval wins".
+ *
+ * Scheduler versions: a review recorded by another scheduler version (a
+ * different FSRS library release or fuzz rule) cannot be reproduced by
+ * the bundled engine, and recomputing it would silently move due dates.
+ * Replay therefore reuses such a review's recorded result while its input
+ * (rating and previous state) is unchanged, and recomputes it with the
+ * bundled engine only when its input changed (a correction or a review
+ * inserted before it) or after the user explicitly chose to rebuild every
+ * schedule with the bundled engine (`setReplayPolicy`).
  */
 
 import { applyRating } from './scheduler.js';
+import { SCHEDULER_VERSION } from '../config.js';
 
 /** Events that change FSRS state when replayed. 'reset' returns a unit to New. */
 export const SCHEDULING_TYPES = new Set(['review', 'reset']);
 export const CLOCK_FUTURE_TOLERANCE_MS = 5 * 60 * 1000;
+export const CLOCK_EVENTS_LISTED = 500;
+
+let recomputeOtherVersions = false;
+
+/**
+ * recompute: true once the user chose to rebuild every schedule with the
+ * bundled engine, so reviews from other scheduler versions are replayed
+ * through it too. Set by the data layer from this device's settings.
+ */
+export function setReplayPolicy({ recompute = false } = {}) {
+  recomputeOtherVersions = !!recompute;
+}
 
 export function compareOrder(a, b) {
   const ta = a._orderTs ?? a.ts;
@@ -124,17 +146,28 @@ export function detectConcurrent(reviews) {
  * Rebuild a unit's FSRS state from its events.
  * Each event's own recorded parameters are used, so historical
  * transitions are reproduced even after settings or defaults change.
+ * `recomputed` lists reviews from another scheduler version that had to
+ * be recomputed with the bundled engine because their input changed.
  */
-export function replayUnit(events) {
+export function replayUnit(events, { recompute = recomputeOtherVersions } = {}) {
   const { applied, voided, concurrent } = effectiveHistory(events);
   let state = null;
   const steps = [];
+  const recomputed = [];
   for (const item of applied) {
     const e = item.event;
     if (e.type === 'reset') {
       steps.push({ eventId: e.id, rating: null, prev: state, next: null, transition: { reset: true } });
       state = null;
       continue;
+    }
+    if (!recompute && e.params?.version && e.params.version !== SCHEDULER_VERSION) {
+      if (e.nextState && item.rating === e.rating && statesEqual(state, e.prevState ?? null)) {
+        steps.push({ eventId: e.id, rating: item.rating, prev: state, next: e.nextState, transition: e.transition || null, recorded: true });
+        state = e.nextState;
+        continue;
+      }
+      recomputed.push(e.id);
     }
     const { state: next, transition } = applyRating(state, item.rating, e.ts, e.params, e.id);
     steps.push({ eventId: e.id, rating: item.rating, prev: state, next, transition });
@@ -147,6 +180,67 @@ export function replayUnit(events) {
     applied,
     voided,
     concurrent,
+    recomputed,
+  };
+}
+
+/** Corrections that turn a wrong answer into an accepted one. */
+export const RESCUE_REASONS = new Set(['alias', 'correct']);
+
+/**
+ * The unit's `lastScheduled` summary (read by the next review's Easy check)
+ * for the last applied scheduled review, with its corrections applied: a
+ * rescued answer counts as correct, at its corrected grade. Null when the
+ * history ends with a reset or has no review.
+ */
+export function lastScheduledFrom(replay) {
+  const last = replay.applied[replay.applied.length - 1];
+  if (!last || last.event.type !== 'review') return null;
+  const e = last.event;
+  const rescue = last.corrections.filter((c) => RESCUE_REASONS.has(c.reason)).pop();
+  const a = e.assistance || {};
+  return {
+    correct: !!(e.response?.correct || rescue),
+    assisted: !!(a.hintShown || a.revealed || a.solutionViewed),
+    grade: last.rating,
+    typoTolerated: rescue ? false : !!e.response?.typoTolerated,
+    hesitation: rescue ? rescue.hesitation ?? null : e.grading?.scores?.hesitation ?? null,
+  };
+}
+
+/** Time of the last applied scheduled review (resets are not reviews). */
+export function lastReviewTs(replay) {
+  for (let i = replay.applied.length - 1; i >= 0; i--) if (replay.applied[i].event.type === 'review') return replay.applied[i].event.ts;
+  return null;
+}
+
+/** Latest sibling-answer exposure per exposed unit id. */
+export function siblingExposureTimes(events) {
+  const out = new Map();
+  for (const e of events) {
+    if (e.type !== 'sibling-exposure') continue;
+    for (const id of e.siblingUnitIds || []) if (!(out.get(id) >= e.ts)) out.set(id, e.ts);
+  }
+  return out;
+}
+
+/**
+ * Exposure that affects a unit's next delayed test, from its events on
+ * every device: practice since the last scheduled review (voided practice
+ * does not count) and the latest sibling-answer exposure. A review marks
+ * itself with these (flags.practiceSinceLast / siblingExposure).
+ */
+export function exposureSince(unitEvents, { lastReviewAt = null, siblingExposedAt = null } = {}) {
+  const corrections = resolveCorrections(unitEvents.filter((e) => e.type === 'correction'));
+  let lastPracticeAt = null;
+  for (const e of unitEvents) {
+    if (e.type !== 'practice' || corrections.get(e.id)?.voided) continue;
+    if (lastPracticeAt == null || e.ts > lastPracticeAt) lastPracticeAt = e.ts;
+  }
+  return {
+    practiceSinceLast: lastPracticeAt != null && (lastReviewAt == null || lastPracticeAt > lastReviewAt),
+    lastPracticeAt,
+    siblingExposedAt,
   };
 }
 
@@ -170,4 +264,62 @@ export function timestampIssues(event, { now = Date.now(), parent = null, previo
   if (previousFromDevice && event.seq > previousFromDevice.seq && event.ts < previousFromDevice.ts - CLOCK_FUTURE_TOLERANCE_MS) issues.push('device-clock-went-backwards');
   if (event.flags?.clockAnomaly) issues.push('in-session-clock-jump');
   return issues;
+}
+
+/**
+ * Reconciliation entries for incoming events (sync pull, backup merge or
+ * restore) with implausible timestamps: dated in the future, before the
+ * review they were based on, earlier than an event their device recorded
+ * before them, or with a clock jump during the answer. The events are never
+ * dropped: they are kept and replayed as usual (with causal repair), and the
+ * entry lets the user keep them or stop counting the suspicious reviews.
+ * One entry per issue and device, listing at most CLOCK_EVENTS_LISTED
+ * events (with the total), so a long-wrong clock cannot bloat the store.
+ * @param {object[]} incoming events new to this device
+ * @param {{ known?: object[], now?: number }} opts events already here; this device's clock
+ */
+export function clockConflicts(incoming, { known = [], now = Date.now() } = {}) {
+  if (!incoming.length) return [];
+  const byId = new Map(known.map((e) => [e.id, e]));
+  for (const e of incoming) byId.set(e.id, e);
+  // For each event, the latest-dated earlier event (by sequence) of its device.
+  const devices = new Set(incoming.map((e) => e.deviceId));
+  const lists = new Map();
+  for (const e of byId.values()) {
+    if (!devices.has(e.deviceId) || !Number.isFinite(e.seq)) continue;
+    if (!lists.has(e.deviceId)) lists.set(e.deviceId, []);
+    lists.get(e.deviceId).push(e);
+  }
+  const previous = new Map();
+  for (const list of lists.values()) {
+    list.sort((a, b) => a.seq - b.seq);
+    let latest = null;
+    for (const e of list) {
+      if (latest) previous.set(e.id, latest);
+      if (!latest || e.ts > latest.ts) latest = e;
+    }
+  }
+  const groups = new Map();
+  for (const e of incoming) {
+    const issues = timestampIssues(e, { now, parent: e.parentId ? byId.get(e.parentId) || null : null, previousFromDevice: previous.get(e.id) || null });
+    for (const issue of issues) {
+      const key = `${issue}\u0000${e.deviceId}`;
+      if (!groups.has(key)) groups.set(key, { issue, deviceId: e.deviceId, events: [] });
+      groups.get(key).events.push(e);
+    }
+  }
+  return [...groups.values()].map(({ issue, deviceId, events }) => {
+    events.sort(compareOrder);
+    return {
+      id: `clock:${issue}:${deviceId}:${events[0].id}`,
+      kind: 'clock',
+      issue,
+      recordType: 'events',
+      recordId: events[0].id,
+      deviceId,
+      detectedAt: now,
+      total: events.length,
+      events: events.slice(0, CLOCK_EVENTS_LISTED).map((e) => ({ id: e.id, type: e.type, ts: e.ts, unitId: e.unitId || null, cardId: e.cardId || null, rating: e.rating ?? null, correct: e.response?.correct ?? null })),
+    };
+  });
 }
