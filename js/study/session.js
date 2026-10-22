@@ -6,7 +6,8 @@
 import { app } from '../app.js';
 import { store } from '../data/store.js';
 import { uuid } from '../core/util.js';
-import { buildDailyQueue, buildCramQueue, buildDrillQueue, buildSpeedQueue, buildInterleaveQueue } from '../core/queue.js';
+import { buildDailyQueue, buildCramQueue, buildDrillQueue, buildSpeedQueue, buildInterleaveQueue, applySiblingSpacing } from '../core/queue.js';
+import { addDays } from '../core/time.js';
 import { siblingGroups } from '../core/queue.js';
 
 export const MODES = Object.freeze({
@@ -93,6 +94,12 @@ export async function createSession(opts) {
     warmupPending: true,
   };
   await store.saveSession(session);
+  // Units held back by next-day sibling spacing show as Deferred (not Due)
+  // in the browser and counts until the next study day.
+  if (session.deferred.length) {
+    const until = addDays(tctx.today, 1);
+    await store.patchUnits(session.deferred.map((d) => ({ unitId: d.unitId, overlays: { deferredUntil: until } })));
+  }
   return session;
 }
 
@@ -102,7 +109,8 @@ function buildExamQueue(qctx, opts) {
   const drill = buildDrillQueue(qctx, { ...scope, limit: Math.ceil((opts.limit || 30) * 0.7), retrievabilityOf: qctx.retrievabilityOf });
   const fresh = buildCramQueue(qctx, { ...scope, order: 'shuffled', includeNew: true, limit: null });
   const newOnes = fresh.queue.filter((id) => !app.cache.units.get(id)?.state).slice(0, Math.max(0, (opts.limit || 30) - drill.queue.length));
-  return { queue: [...drill.queue, ...newOnes], deferred: [] };
+  const joined = [...drill.queue, ...newOnes].map((id) => app.cache.units.get(id));
+  return { queue: applySiblingSpacing(joined, qctx, { override: 'spread', deferral: false }).queue.map((u) => u.id), deferred: [] };
 }
 
 /** Quick start of today's review from Home/Deck screens. */

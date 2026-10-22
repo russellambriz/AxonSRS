@@ -416,7 +416,7 @@ export function exposureBreakdown(events) {
 export function unitHistory(events, unitId) {
   const corr = correctionIndex(events);
   return events
-    .filter((e) => e.unitId === unitId && (isRetrieval(e) || ['hint', 'reveal', 'copy', 'skip', 'sibling-exposure', 'edit'].includes(e.type)))
+    .filter((e) => e.unitId === unitId && (isRetrieval(e) || ['hint', 'reveal', 'copy', 'skip', 'abandon', 'sibling-exposure', 'edit'].includes(e.type)))
     .sort((a, b) => a.ts - b.ts)
     .map((e) => {
       const c = corr.get(e.id);

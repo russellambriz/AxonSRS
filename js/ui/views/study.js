@@ -24,7 +24,7 @@ import { toast, sheet, confirmDialog, errorToast, menu, callout } from '../compo
 import { renderInto, answerHtml, livePreviewHtml, ensureMath, markdownToHtml, mediaUrl, resolveMedia } from '../render.js';
 import { announce, reducedMotion } from '../appearance.js';
 import { startViewport, keyboardLikelyOpen, viewportState } from '../viewport.js';
-import { TrialRecorder } from '../../study/trial.js';
+import { TrialRecorder, ScreenClock } from '../../study/trial.js';
 import { MODES } from '../../study/session.js';
 import { unitContent, effectiveCardSettings, TASK_TYPE_LABELS } from '../../core/model.js';
 import { evaluateAnswer, planReview, planOverride, planUndo, exposureEvent } from '../../core/review.js';
@@ -32,7 +32,7 @@ import { classifyModality, promptStats, mergeGradingConfig, baselineKey, REASON_
 import { matchAnswer, answerDiff, DIAGNOSTIC_LABELS, WARNING_LABELS } from '../../core/match/index.js';
 import { addAlias } from '../../core/aliases.js';
 import { addClozeAlias } from '../../core/cloze.js';
-import { requeuePosition, LEARN_AHEAD_MS } from '../../core/queue.js';
+import { requeuePosition, siblingSafeIndex, siblingGroups, LEARN_AHEAD_MS } from '../../core/queue.js';
 import { previewRatings, RATING_LABELS, State } from '../../core/scheduler.js';
 import { uuid, formatDuration, formatInterval, pluralize } from '../../core/util.js';
 import { plainText } from '../../core/text.js';
@@ -65,6 +65,7 @@ class StudyScreen {
     this.session = session;
     this.phase = 'loading';
     this.trial = new TrialRecorder();
+    this.screen = new ScreenClock();
     this.current = null;
     this.last = null;
     this.undoStack = [];
@@ -131,6 +132,8 @@ class StudyScreen {
     this.releaseLock = null;
     this.cancelAutoAdvance();
     this.trial.pause('hidden');
+    this.screen.hold('hidden');
+    this.logAbandon('other-tab');
     this.abort.abort();
     this.abort = new AbortController();
     for (const u of this.unsubs) u();
@@ -217,17 +220,17 @@ class StudyScreen {
     this.voiceBtn.addEventListener('click', () => this.voice(), sig);
     document.addEventListener('pointerdown', (e) => {
       this.lastPointerType = e.pointerType;
-      this.trial.onPointer(e);
+      this.trial.onPointer(e, { inField: this.input.contains(e.target) });
       this.cancelAutoAdvance();
       this.userTappedElsewhere = !this.composer.contains(e.target);
     }, { ...sig, capture: true });
     document.addEventListener('keydown', () => this.cancelAutoAdvance(), { ...sig, capture: true });
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) this.trial.pause('hidden');
-      else this.trial.resume();
+      if (document.hidden) { this.trial.pause('hidden'); this.screen.hold('hidden'); }
+      else { this.trial.resume(); this.screen.release('hidden'); }
     }, sig);
-    window.addEventListener('pagehide', () => this.trial.pause('hidden'), sig);
-    window.addEventListener('pageshow', () => this.trial.resume(), sig);
+    window.addEventListener('pagehide', () => { this.trial.pause('hidden'); this.screen.hold('hidden'); }, sig);
+    window.addEventListener('pageshow', () => { this.trial.resume(); this.screen.release('hidden'); }, sig);
     window.visualViewport?.addEventListener('resize', () => { if (viewportState().shrunk) this.trial.setViewportShrunk(true); }, sig);
     this.unsubs.push(app.onChange(() => this.renderProgress()));
   }
@@ -352,6 +355,10 @@ class StudyScreen {
       app.setBusy('study', null);
       return;
     }
+    // Focus time is the time each card was on screen: question, feedback
+    // and retyping, without paused, hidden or editing time.
+    this.session = { ...this.session, focusMs: (this.session.focusMs || 0) + this.screen.elapsed() };
+    this.screen.start();
     if (this.focusDue()) return;
     const s = this.session;
     while (s.index < s.queue.length) {
@@ -465,7 +472,7 @@ class StudyScreen {
       const parts = [];
       if (showCardTimer && (this.phase === 'question')) parts.push(`${(this.trial.elapsed() / 1000).toFixed(1)}s`);
       if (focusMin) {
-        const left = Math.max(0, focusMin * 60000 - (this.session.activeMs || 0) - (this.phase === 'question' ? this.trial.elapsed() : 0));
+        const left = Math.max(0, focusMin * 60000 - (this.session.focusMs || 0) - this.screen.elapsed());
         parts.push(`${Math.floor(left / 60000)}:${String(Math.floor((left % 60000) / 1000)).padStart(2, '0')}`);
       }
       this.timerEl.textContent = parts.join(' · ');
@@ -477,10 +484,17 @@ class StudyScreen {
   focusDue() {
     const f = store.global.focusTimer;
     if (!f?.enabled || !f.minutes) return false;
-    const done = (this.session.activeMs || 0) >= f.minutes * 60000;
+    const done = (this.session.focusMs || 0) >= f.minutes * 60000;
     if (!done || this.session.focusAcknowledgedAt === this.session.index) return false;
+    this.screen.hold('break');
     this.showOverlay('Focus session complete', `You studied for ${f.minutes} minutes. Take a ${f.breakMinutes || 5}-minute break — your place is saved.`, [
-      { label: 'Keep going', primary: true, run: async () => { this.session = { ...this.session, focusAcknowledgedAt: this.session.index, activeMs: 0, warmupPending: true }; await store.saveSession(this.session); this.next(); } },
+      { label: 'Keep going', primary: true, run: async () => {
+        this.session = { ...this.session, focusAcknowledgedAt: this.session.index, focusMs: 0, warmupPending: true };
+        await store.saveSession(this.session);
+        this.screen.release('break');
+        this.screen.start();
+        this.next();
+      } },
       { label: 'End session', run: () => this.endSession() },
     ]);
     return true;
@@ -608,6 +622,12 @@ class StudyScreen {
       this.gradingStartedAt = performance.now();
       return;
     }
+    // Show the verdict at once; the full feedback replaces it when saved.
+    const ok = match.correct;
+    this.input.className = `answer-input ${ok ? 'correct' : 'incorrect'}`;
+    replace(this.feedbackEl, h('section', { class: ['feedback', ok ? 'correct' : 'incorrect'], 'aria-hidden': 'true' },
+      h('div', { class: 'verdict' }, icon(ok ? 'check' : 'x'), h('span', {}, ok ? 'Correct' : revealed ? 'Answer revealed' : 'Not quite')),
+      h('div', { class: 'faint small' }, 'Saving…')));
     await this.commit();
   }
 
@@ -652,6 +672,8 @@ class StudyScreen {
       });
     } catch (err) {
       errorToast(err);
+      this.input.className = 'answer-input';
+      clear(this.feedbackEl);
       this.setPhase('question');
       return;
     }
@@ -671,14 +693,14 @@ class StudyScreen {
     let requeuedAt = null;
     const attempts = { ...(s.attempts || {}), [cur.unit.id]: (s.attempts?.[cur.unit.id] || 0) + 1 };
     if (plan.requeue && (attempts[cur.unit.id] || 0) < 4) {
-      requeuedAt = requeuePosition(queue.length, s.index, { seed: cur.eventId });
+      requeuedAt = this.siblingSafe(queue, requeuePosition(queue.length, s.index, { seed: cur.eventId }), cur.unit.id, s.index);
       queue.splice(requeuedAt, 0, cur.unit.id);
     } else if (plan.event.type === 'review' && plan.unit.state && (plan.unit.state.state === State.Learning || plan.unit.state.state === State.Relearning)) {
       // Learning steps: bring the card back roughly when it falls due.
       const wait = plan.unit.state.due - Date.now();
       if (wait <= LEARN_AHEAD_MS && !queue.slice(s.index + 1).includes(cur.unit.id)) {
         const offset = Math.max(3, Math.round(wait / 12000));
-        requeuedAt = Math.min(queue.length, s.index + 1 + offset);
+        requeuedAt = this.siblingSafe(queue, Math.min(queue.length, s.index + 1 + offset), cur.unit.id, s.index);
         queue.splice(requeuedAt, 0, cur.unit.id);
       }
     }
@@ -691,6 +713,13 @@ class StudyScreen {
       activeMs: (s.activeMs || 0) + (plan.event.activeMs || 0),
       results: [...(s.results || []), { unitId: cur.unit.id, eventId: plan.event.id, type: plan.event.type, correct: plan.event.response.correct, firstAttempt: cur.firstAttempt, rating: plan.event.rating, requeuedAt, activeMs: plan.event.activeMs }],
     };
+  }
+
+  /** A slot at or after `at` that is not next to a sibling or related card. */
+  siblingSafe(queue, at, unitId, current) {
+    this.groups ??= siblingGroups([...app.cache.units.values()], app.cache.links, { includeLinks: store.global.relatedSpacing !== false });
+    const groupOf = (id) => this.groups.get(id) || app.cache.units.get(id)?.cardId || id;
+    return siblingSafeIndex(queue, at, unitId, groupOf, { from: current, min: current + 1 });
   }
 
   async persist() {
@@ -843,7 +872,7 @@ class StudyScreen {
     if (ev?.grading && store.global.showWhy !== false && !pending) {
       const g = ev.grading;
       const conf = `${g.confidenceLabel} heuristic confidence (${Math.round(g.confidence * 100)}%, not a calibrated probability)`;
-      parts.push(h('details', { class: 'why' }, h('summary', {}, 'Why this grade?'), h('div', { class: 'stack', style: { gap: '4px', marginTop: '6px' } },
+      parts.push(h('details', { class: 'why', ontoggle: (e) => { if (e.currentTarget.open) announce(e.currentTarget.querySelector('.stack').innerText); } }, h('summary', {}, 'Why this grade?'), h('div', { class: 'stack', style: { gap: '4px', marginTop: '6px' } },
         h('p', {}, ev.grading.mode === 'manual' ? `You graded this ${RATING_LABELS[ev.rating]}. Axon’s automatic grade would have been ${RATING_LABELS[g.grade]}.` : g.explanation),
         cur.overrideReasons ? h('p', {}, cur.overrideReasons.map((r) => REASON_TEXT[r]).join(' ')) : null,
         h('p', { class: 'faint tiny' }, `${conf} · ${MODALITY_LABELS[ev.modality?.kind || 'unknown']}${ev.modality?.source === 'override' ? ' (your setting)' : ''} · calibration ${g.calibration.level} (${g.calibration.n} samples) · ${g.ruleVersion}`),
@@ -883,7 +912,8 @@ class StudyScreen {
     }
     replace(this.feedbackEl, h('section', { class: ['feedback', correct || overridden ? 'correct' : 'incorrect'], 'aria-label': 'Feedback' }, parts));
     resolveMedia(this.feedbackEl, mediaFetcher);
-    announce(`${verdict}. ${correct ? '' : `The answer is ${plainText(cur.content.answerDisplay)}.`} ${gradeName && !pending ? `Graded ${gradeName}.` : ''}`, { assertive: !correct });
+    const why = ev?.grading && store.global.showWhy !== false && !pending && ev.grading.mode !== 'manual' ? ev.grading.explanation : '';
+    announce(`${verdict}. ${correct ? '' : `The answer is ${plainText(cur.content.answerDisplay)}.`} ${gradeName && !pending ? `Graded ${gradeName}.` : ''} ${why}`.trim(), { assertive: !correct });
     requestAnimationFrame(() => this.feedbackEl.scrollIntoView({ block: 'nearest', behavior: reducedMotion() ? 'auto' : 'smooth' }));
   }
 
@@ -1132,7 +1162,7 @@ class StudyScreen {
     const s = this.session;
     const queue = s.queue.slice();
     const alreadySkipped = (s.skipped || []).includes(cur.unit.id);
-    if (!alreadySkipped) queue.push(cur.unit.id);
+    if (!alreadySkipped) queue.splice(this.siblingSafe(queue, queue.length, cur.unit.id, s.index), 0, cur.unit.id);
     const session = { ...s, queue, index: s.index + 1, skipped: [...(s.skipped || []), cur.unit.id], warmupPending: false };
     const ev = exposureEvent({ id: uuid(), type: 'skip', now: Date.now(), deviceId: store.deviceId, seq: null, unit: cur.unit, card: cur.card, sessionId: s.id, studyDay: store.today(), data: { presentationId: cur.eventId, requeued: !alreadySkipped, elapsedMs: Math.round(this.trial.elapsed()) } });
     try {
@@ -1151,6 +1181,7 @@ class StudyScreen {
     const cur = this.current;
     if (!cur || !['question', 'feedback', 'retype'].includes(this.phase)) return;
     this.trial.pause('editor');
+    this.screen.hold('editor');
     store.addEvents([exposureEvent({ id: uuid(), type: 'edit', now: Date.now(), deviceId: store.deviceId, seq: null, unit: cur.unit, card: cur.card, sessionId: this.session.id, studyDay: store.today(), data: { presentationId: cur.eventId, phase: this.phase } })]).catch(() => {});
     const { editorView } = await import('./editor.js');
     let done;
@@ -1162,6 +1193,7 @@ class StudyScreen {
     s.done.then(() => done(null));
     const saved = await finished;
     this.trial.resume();
+    this.screen.release('editor');
     if (saved) {
       await app.cache.load();
       const card = app.cache.cards.get(cur.card.id);
@@ -1262,6 +1294,7 @@ class StudyScreen {
     if (['submitting', 'paused', 'done'].includes(this.phase)) return;
     const prev = this.phase;
     this.trial.pause('hidden');
+    this.screen.hold('paused');
     this.session = { ...this.session, status: 'paused', pausedAt: Date.now() };
     await store.saveSession(this.session);
     this.phase = 'paused';
@@ -1271,6 +1304,7 @@ class StudyScreen {
         this.session = { ...this.session, status: 'active', warmupPending: true };
         await store.saveSession(this.session);
         this.trial.resume();
+        this.screen.release('paused');
         this.overlay?.close();
         this.setPhase(prev);
         this.focusInput();
@@ -1292,7 +1326,16 @@ class StudyScreen {
     });
   }
 
+  /** Record a shown card left without an answer (not a review, not a skip). */
+  logAbandon(reason) {
+    const cur = this.current;
+    if (!cur || this.phase !== 'question' || cur.abandoned) return;
+    cur.abandoned = true;
+    return store.addEvents([exposureEvent({ id: uuid(), type: 'abandon', now: Date.now(), deviceId: store.deviceId, seq: null, unit: cur.unit, card: cur.card, sessionId: this.session.id, studyDay: store.today(), data: { presentationId: cur.eventId, reason, elapsedMs: Math.round(this.trial.elapsed()), typed: this.input.value.length > 0 } })]).catch(() => {});
+  }
+
   async endSession() {
+    await this.logAbandon('ended');
     this.session = { ...this.session, status: 'abandoned', abandonedAt: Date.now() };
     await store.saveSession(this.session);
     await this.finish(true);
@@ -1300,6 +1343,7 @@ class StudyScreen {
 
   async leave() {
     if (this.phase === 'submitting') return;
+    await this.logAbandon('left');
     if (this.session.index < this.session.queue.length) {
       this.session = { ...this.session, status: 'paused', pausedAt: Date.now() };
       await store.saveSession(this.session);
