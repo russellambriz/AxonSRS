@@ -699,8 +699,8 @@ Day-to-day reviews write one event each.
 ## Testing
 
 ```bash
-npm test               # 151 unit tests (node --test), ~1 s
-npm run test:browser   # 23 browser tests (Playwright + Chromium), ~4 min
+npm test               # 197 unit tests (node --test), ~4 s
+npm run test:browser   # 35 browser tests (Playwright + Chromium), ~6 min
 npm run check          # pre-cache list is current + unit tests
 ```
 

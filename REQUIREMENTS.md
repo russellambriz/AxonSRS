@@ -100,7 +100,7 @@ study materials.
 | Requirement | Where | Phase | Verification | Status |
 | --- | --- | --- | --- | --- |
 | Layer A: correct, pinned FSRS | `js/core/scheduler.js` wrapping ts-fsrs 5.4.2 (FSRS-6) | P2 | U:scheduler "matches py-fsrs 6.3.2 reference cases" | ✅ |
-| Layer B: automatic grade from behaviour | `js/core/fluency.js` (`axon-fluency@1.0.0`) | P2 | U:fluency (15 tests) | ✅ |
+| Layer B: automatic grade from behaviour | `js/core/fluency.js` (`axon-fluency@1.1.0`) | P2 | U:fluency (15 tests) | ✅ |
 | Metrics: first-key latency, typing time, total, length, corrections/backspaces, pauses, correctness, typo, reveal, override, modality, history | `js/study/trial.js`, `review.js` | P2 | U:stats "trial recorder measures latency …"; U:review "a wrong answer records … measurements" | ✅ |
 | `performance.now()` for durations | `TrialRecorder` | P2 | U:stats trial tests use an injected monotonic clock | ✅ |
 | Separate baselines: physical keyboard, touch (and voice, per task type) | `baselineKey(modality, taskType)` | P2 | U:fluency "device baselines are separate", "task types: separate baselines" | ✅ |
@@ -139,7 +139,7 @@ study materials.
 | Voice input as its own modality and baseline, excluded from typing calibration | `voice()` (Web Speech), `classifyModality` | P3 | U:fluency "modality detection: physical, touch, voice and unknown"; speech recognition itself unavailable headless | ✅ (grading) / ⚠️ (recognition) |
 | Symbol toolbar `π √ ^ / ( ) - + ² ³ θ Δ ± ∞`, caret insertion, selection replace, focus kept, customisable | `renderSymbols`, `insertSymbol`; Settings → Input | P3 | B:study "toolbar symbols insert at the caret" | ✅ |
 
-## 6. Answer matching (`axon-match@1.0.0`)
+## 6. Answer matching (`axon-match@1.1.0`)
 
 | Requirement | Where | Phase | Verification | Status |
 | --- | --- | --- | --- | --- |
@@ -241,7 +241,7 @@ study materials.
 | Inspect repo first; preserve existing code and data | ✅ (repository was empty) |
 | Complete README (setup, imports, scheduling, offline, deployment, backup, Gist sync) | ✅ `README.md` |
 | Explain grading methodology and limitations | ✅ README "How grading works" |
-| Run all automated tests | ✅ 151 unit + 23 browser tests pass (see README "Testing") |
+| Run all automated tests | ✅ 197 unit + 35 browser tests pass (see README "Testing") |
 | Verify it runs as a static GitHub Pages site | ✅ locally under `/AxonSRS/`; ⛔ live URL: no GitHub Pages build has run on the repository yet (Pages has to be enabled in the repository settings) and this environment cannot reach `github.io` |
 | Commit and push to `main` | ✅ pushed (verified with `git push`) |
 | Report features, tests, deployment, limitations | ✅ README and delivery report |
