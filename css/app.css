@@ -1096,13 +1096,14 @@ body.studying { overflow: hidden; }
 }
 .prompt {
   font-family: var(--font-display);
-  font-size: clamp(1.25rem, 1rem + 1.6vw, 1.9rem);
-  line-height: 1.35;
+  font-size: clamp(1.875rem, 1.3rem + 2.6vw, 2.75rem);
+  line-height: 1.3;
   font-weight: 600;
   text-align: center;
   letter-spacing: -0.015em;
 }
-.prompt.long { font-size: clamp(1.05rem, 0.95rem + 0.6vw, 1.3rem); text-align: left; font-weight: 500; }
+.prompt.short { font-size: clamp(2.375rem, 1.9rem + 2.6vw, 3.5rem); line-height: 1.2; }
+.prompt.long { font-size: clamp(1.25rem, 1.1rem + 0.9vw, 1.6rem); text-align: left; font-weight: 500; }
 .study-meta { display: flex; justify-content: center; gap: 6px; flex-wrap: wrap; }
 .instruction { text-align: center; font-size: 0.85rem; color: var(--text-2); }
 .hint-box { padding: 10px 14px; border-radius: var(--radius-m); background: var(--warning-soft); font-size: 0.95rem; }
@@ -1120,11 +1121,11 @@ body.studying { overflow: hidden; }
 @keyframes fb-in { from { opacity: 0; transform: translateY(4px); } }
 .feedback.correct { border-color: color-mix(in srgb, var(--success) 40%, transparent); background: color-mix(in srgb, var(--success-soft) 70%, var(--surface)); }
 .feedback.incorrect { border-color: color-mix(in srgb, var(--danger) 40%, transparent); background: color-mix(in srgb, var(--danger-soft) 70%, var(--surface)); }
-.feedback .verdict { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 1rem; }
-.feedback .verdict svg { width: 20px; height: 20px; }
+.feedback .verdict { display: flex; align-items: center; gap: 8px; font-weight: 700; font-size: 1.15rem; }
+.feedback .verdict svg { width: 22px; height: 22px; }
 .feedback.correct .verdict { color: var(--success); }
 .feedback.incorrect .verdict { color: var(--danger); }
-.feedback .answer { font-size: 1.15rem; font-weight: 600; }
+.feedback .answer { font-size: 1.5rem; font-weight: 600; }
 .feedback .grade { margin-left: auto; }
 .timing { display: flex; gap: var(--s4); flex-wrap: wrap; font-size: 0.8rem; color: var(--text-2); font-variant-numeric: tabular-nums; }
 .timing b { color: var(--text); font-weight: 600; }
@@ -1181,9 +1182,9 @@ body.studying { overflow: hidden; }
 .answer-input {
   flex: 1;
   min-width: 0;
-  height: 52px;
+  height: 60px;
   padding: 0 16px;
-  border-radius: 14px;
+  border-radius: 16px;
   border: 1.5px solid var(--control-border);
   background: var(--surface);
   font-size: 1.15rem;
@@ -1196,7 +1197,9 @@ body.studying { overflow: hidden; }
 .answer-input.retype { border-style: dashed; }
 .composer .actions { display: flex; gap: 6px; justify-content: space-between; align-items: center; flex-wrap: wrap; }
 .composer .actions .left, .composer .actions .right { display: flex; gap: 4px; flex-wrap: wrap; align-items: center; }
-.submit-btn { height: 52px; min-width: 52px; border-radius: 14px; }
+.submit-btn { height: 60px; min-width: 68px; padding: 0 18px; border-radius: 16px; font-size: 1.1rem; font-weight: 700; gap: 8px; }
+.submit-btn svg { width: 26px; height: 26px; }
+.study[data-phase='feedback'] .submit-btn { min-width: min(11rem, 42vw); }
 .study-done { max-width: 560px; margin: auto; text-align: center; display: flex; flex-direction: column; gap: var(--s4); align-items: center; padding: var(--s6) var(--s4); }
 .study-done .summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s4); width: 100%; }
 

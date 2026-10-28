@@ -418,8 +418,10 @@ class StudyScreen {
     replace(this.metaEl, chips);
 
     // Prompt
-    const long = plainText(content.prompt).length > 140 || /\n/.test(content.prompt);
-    this.promptEl.className = `prompt rich${long ? ' long' : ''}`;
+    const chars = plainText(content.prompt).length;
+    const long = chars > 140 || /\n/.test(content.prompt);
+    const short = !long && chars <= 24 && !content.occlusion;
+    this.promptEl.className = `prompt rich${long ? ' long' : short ? ' short' : ''}`;
     await renderInto(this.promptEl, content.prompt || (content.kind === 'occlusion' ? 'What is hidden here?' : ''), { media: mediaFetcher });
     this.instructionEl.textContent = content.instruction || '';
     clear(this.occlusionEl);
@@ -957,12 +959,12 @@ class StudyScreen {
       right.push(act('Undo', 'undo', () => this.undo(), '⌥Z'));
       right.push(act('Edit', 'edit', () => this.edit(), '⌥E'));
       if (store.global.tts?.enabled) right.push(act('Read', 'volume', () => this.speak(cur.content.answerDisplay), '⌥T'));
-      if (p === 'feedback') right.push(h('button', { class: 'btn small primary', type: 'button', onpointerdown: (e) => e.preventDefault(), onclick: () => this.advance() }, 'Continue', h('kbd', {}, '↵')));
     }
     replace(this.actionsEl, h('div', { class: 'left' }, left), h('div', { class: 'right' }, right));
     this.submitBtn.hidden = !['question', 'retype', 'feedback', 'error'].includes(p);
-    this.submitBtn.setAttribute('aria-label', p === 'feedback' ? 'Next card' : p === 'retype' ? 'Check retyped answer' : 'Submit answer');
-    replace(this.submitBtn, icon(p === 'feedback' ? 'chevronRight' : 'check'));
+    this.submitBtn.setAttribute('aria-label', p === 'feedback' ? 'Continue to the next card (Enter)' : p === 'retype' ? 'Check retyped answer' : 'Submit answer');
+    if (p === 'feedback') replace(this.submitBtn, h('span', {}, 'Continue'), icon('chevronRight'));
+    else replace(this.submitBtn, icon('check'));
   }
 
   scheduleAutoAdvance() {
