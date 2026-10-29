@@ -759,7 +759,7 @@ recognition and system TTS voices are **untested**.
 
 | Component | Version | Notes |
 | --- | --- | --- |
-| App | 1.0.3 | cache `axon-v4` |
+| App | 1.0.4 | cache `axon-v5` |
 | Scheduler | ts-fsrs 5.4.2 (FSRS-6, default parameters) + `axon-fuzz@1` | reference-checked against py-fsrs 6.3.2 |
 | Grading rules | `axon-fluency@1.1.0` | thresholds above; recorded on every review |
 | Reading/warm-up heuristic | `axon-reading@2` | can be disabled |
