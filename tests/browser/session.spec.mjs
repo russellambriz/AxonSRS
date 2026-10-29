@@ -2,9 +2,20 @@
 // announcing grade explanations, abandoned attempts, next-day sibling
 // deferral and focus-timer time.
 import assert from 'node:assert/strict';
-import { newContext, openApp, seedDeck, idbAll, inApp, startReview, answerFromMap, waitPhase, assertNoErrors } from './harness.mjs';
+import { newContext, openApp, seedDeck, idbAll, inApp, startReview, answerFromMap, waitPhase, phase, waitReady, assertNoErrors } from './harness.mjs';
 
 const liveText = (page, id) => page.evaluate((i) => document.getElementById(i)?.textContent || '', id);
+
+/** One stroke on the handwriting pad (synthetic Apple Pencil, finger or palm). */
+const stroke = (page, { type = 'pen', id = 7 } = {}) => page.evaluate(({ type: t, id: pid }) => {
+  const c = document.querySelector('.ink-canvas');
+  const r = c.getBoundingClientRect();
+  const fire = (name, x, y) => c.dispatchEvent(new PointerEvent(name, { pointerType: t, pointerId: pid, isPrimary: true, clientX: r.left + x, clientY: r.top + y, pressure: name === 'pointerup' ? 0 : 0.6, buttons: name === 'pointerup' ? 0 : 1, bubbles: true, cancelable: true }));
+  fire('pointerdown', 30, 30);
+  fire('pointermove', 70, 50);
+  fire('pointermove', 120, 40);
+  fire('pointerup', 120, 40);
+}, { type, id });
 
 export const tests = [
   {
@@ -115,6 +126,66 @@ export const tests = [
       }, session.deferred.map((d) => d.unitId));
       assert.deepEqual(statuses, ['deferred', 'deferred']);
       assert.equal(session.queue.length, 2);
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
+  {
+    name: 'handwriting pad: write with a pen, compare with the answer and grade yourself; Again counts as wrong; the choice is remembered',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser, { viewport: { width: 820, height: 1180 }, hasTouch: true });
+      const page = await openApp(ctx, url);
+      await seedDeck(page, { cards: [['Capital of Peru', 'Lima'], ['Capital of Chile', 'Santiago']] });
+      await startReview(page);
+      await page.getByRole('button', { name: 'Write' }).click();
+      await page.locator('.ink-canvas').waitFor();
+      assert.equal(await page.locator('.answer-input').isVisible(), false, 'no text field, so no on-screen keyboard');
+      const check = page.getByRole('button', { name: 'Check your handwritten answer' });
+      await check.click();
+      assert.equal(await phase(page), 'question', 'nothing written yet');
+      await stroke(page);
+      await stroke(page, { type: 'touch', id: 9 });
+      assert.equal(await page.getAttribute('.ink-canvas', 'data-strokes'), '1', 'a palm touch after the pen is ignored');
+      await check.click();
+      assert.equal(await waitPhase(page, ['grading']), 'grading');
+      await page.getByText('Check your answer', { exact: true }).waitFor();
+      await page.getByRole('img', { name: 'Your handwritten answer' }).waitFor();
+      assert.ok((await page.textContent('.feedback .answer')).trim().length > 0, 'the correct answer is shown to compare');
+      await page.getByRole('button', { name: /^Again/ }).click();
+      assert.equal(await waitPhase(page, ['feedback']), 'feedback', 'no retype step with the pad');
+      await page.getByText('You marked it wrong').waitFor();
+      assert.equal(await page.getByRole('button', { name: 'Mark correct' }).count(), 0, 'no overrides on a self-graded answer');
+      let reviews = (await idbAll(page, 'events')).filter((e) => e.type === 'review');
+      assert.equal(reviews.length, 1);
+      assert.equal(reviews[0].rating, 1);
+      assert.equal(reviews[0].response.correct, false);
+      assert.equal(reviews[0].response.method, 'self');
+      assert.equal(reviews[0].modality.kind, 'handwriting');
+      assert.equal(reviews[0].grading.mode, 'manual');
+      assert.ok(reviews[0].grading.measurements.raw.latencyMs > 0, 'latency runs to the first stroke');
+      await page.getByRole('button', { name: /^Continue/ }).click();
+      await waitPhase(page, ['question']);
+      assert.equal(await page.getAttribute('.ink-canvas', 'data-strokes'), '0', 'a fresh pad for the next card');
+      await stroke(page);
+      await page.keyboard.press('Enter');
+      await waitPhase(page, ['grading']);
+      await page.getByRole('button', { name: /^Good/ }).click();
+      await waitPhase(page, ['feedback']);
+      await page.getByText('You marked it right').waitFor();
+      reviews = (await idbAll(page, 'events')).filter((e) => e.type === 'review').sort((x, y) => x.ts - y.ts);
+      assert.equal(reviews[1].rating, 3);
+      assert.equal(reviews[1].response.correct, true);
+      const baselines = await idbAll(page, 'baselines');
+      assert.ok(baselines.every((b) => !(b.samples || []).length), 'self-judged answers never calibrate');
+      // The choice is remembered on this device.
+      await page.reload();
+      await waitReady(page);
+      await page.waitForTimeout(300);
+      if (!(await page.locator('.study').count())) await page.getByRole('button', { name: /Start review|Resume/ }).first().click();
+      await waitPhase(page, ['question']);
+      await page.locator('.ink-canvas').waitFor({ state: 'visible' });
+      await page.getByRole('button', { name: 'Type' }).click();
+      await page.locator('.answer-input').waitFor({ state: 'visible' });
       assertNoErrors(page);
       await ctx.close();
     },

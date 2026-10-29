@@ -550,6 +550,31 @@ test('text arriving without key presses after a pen touched the field counts as 
   assert.equal(t.finish('²').firstOrigin, 'toolbar');
 });
 
+test('handwriting-pad strokes start the answer clock and count as their own input origin', () => {
+  const c = fakeClock();
+  const r = new TrialRecorder({ now: c.now, wall: c.wall });
+  r.start({ lastPointerType: 'pen' });
+  c.advance(1200);
+  r.onInkStroke();
+  c.advance(800);
+  r.onInkStroke();
+  c.advance(500);
+  const m = r.finish('');
+  assert.equal(m.latencyMs, 1200, 'latency runs to the first stroke');
+  assert.equal(m.firstOrigin, 'ink');
+  assert.equal(m.origins.ink, 2);
+  assert.equal(m.origins.typed, 0);
+  assert.equal(r.signals.inkStrokes, 2);
+  assert.equal(m.answerLength, 0);
+  // Strokes while paused (page hidden) are not counted.
+  const p = new TrialRecorder({ now: c.now, wall: c.wall });
+  p.start({});
+  p.pause('hidden');
+  p.onInkStroke();
+  p.resume();
+  assert.equal(p.finish('').origins.ink, 0);
+});
+
 test('the focus-timer screen clock counts only unheld time, whatever overlaps', async () => {
   const { ScreenClock } = await import('../../js/study/trial.js');
   const c = fakeClock();

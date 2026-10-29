@@ -71,6 +71,7 @@ const PRECACHE = [
   './js/ui/dom.js',
   './js/ui/exporters.js',
   './js/ui/icons.js',
+  './js/ui/inkpad.js',
   './js/ui/keyboard.js',
   './js/ui/local.js',
   './js/ui/occlusion.js',

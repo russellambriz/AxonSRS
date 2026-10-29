@@ -4,12 +4,12 @@
 // versus substantive edits.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { makeDeck, makeCard, makeUnits, review, T0, DAY, MIN } from './helpers.js';
+import { makeDeck, makeCard, makeUnits, review, rawTrial, T0, DAY, MIN } from './helpers.js';
 import { classifyEdit, createCard, createDeck } from '../../js/core/model.js';
-import { planOverride, planUndo, evaluateAnswer, exposureEvent } from '../../js/core/review.js';
+import { planOverride, planUndo, planReview, evaluateAnswer, exposureEvent } from '../../js/core/review.js';
 import { replayUnit, statesEqual } from '../../js/core/history.js';
 import { addAlias } from '../../js/core/aliases.js';
-import { State } from '../../js/core/scheduler.js';
+import { State, schedulerParams } from '../../js/core/scheduler.js';
 
 test('a wrong answer records Again with the full response, diagnostics and measurements, and requeues', () => {
   const deck = makeDeck();
@@ -380,4 +380,30 @@ test('edit classification: letter case and matching rules count when they change
   const occ = createCard({ id: 'c-o', deckId: textDeck.id, kind: 'occlusion', front: [''], back: [], occlusion: { imageId: 'img', alt: 'Heart', masks, order: 'random' } });
   const edited = { ...occ, occlusion: { ...occ.occlusion, masks: [masks[0], { id: 'm3', x: 0.6, y: 0.6, w: 0.1, h: 0.1, label: ['Aorta'] }] } };
   assert.deepEqual(classifyEdit(occ, edited, textDeck), { 'o-m1': 'none', 'o-m2': 'removed', 'o-m3': 'added' });
+});
+
+test('a self-graded handwritten answer: Again counts as wrong, other grades as right, never calibrates', () => {
+  const deck = makeDeck({ answerMode: 'text' });
+  const card = makeCard({ answerMode: 'text', front: 'Capital of Peru', back: 'Lima' });
+  const [unit] = makeUnits(card, deck);
+  const ink = (rating, eventId) => planReview({
+    eventId, now: T0, deviceId: 'dev-A', seq: 1, sessionId: 's1', mode: 'daily', live: true, unit, card, deck,
+    trial: { ...rawTrial({ text: '' }), modality: { kind: 'handwriting', confidence: 0.95, source: 'ink' }, raw: { ...rawTrial().raw, effort: 0, answerLength: 0, origins: { ink: 3 } }, selfJudged: true },
+    match: { correct: rating > 1, method: 'self', diagnostics: [], warnings: [] },
+    gradeMode: 'manual', manualRating: rating, params: schedulerParams(), studyDay: '2026-01-05', timeZone: 'UTC',
+  });
+  const wrong = ink(1, 'ink-1');
+  assert.equal(wrong.event.rating, 1);
+  assert.equal(wrong.event.response.correct, false);
+  assert.equal(wrong.event.response.method, 'self');
+  assert.equal(wrong.event.response.text, '');
+  assert.equal(wrong.event.grading.mode, 'manual');
+  assert.equal(wrong.requeue, true, 'a wrong handwritten answer comes back in the session');
+  const right = ink(3, 'ink-3');
+  assert.equal(right.event.rating, 3);
+  assert.equal(right.event.response.correct, true);
+  assert.equal(right.requeue, false);
+  assert.equal(right.calibration, null, 'self-judged answers never enter a timing baseline');
+  assert.ok(right.calibrationExclusion.includes('self-judged'));
+  assert.equal(ink(4, 'ink-4').event.rating, 4);
 });

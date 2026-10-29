@@ -241,7 +241,7 @@ study materials.
 | Inspect repo first; preserve existing code and data | ✅ (repository was empty) |
 | Complete README (setup, imports, scheduling, offline, deployment, backup, Gist sync) | ✅ `README.md` |
 | Explain grading methodology and limitations | ✅ README "How grading works" |
-| Run all automated tests | ✅ 197 unit + 35 browser tests pass (see README "Testing") |
+| Run all automated tests | ✅ 199 unit + 36 browser tests pass (see README "Testing") |
 | Verify it runs as a static GitHub Pages site | ✅ locally under `/AxonSRS/`; ⛔ live URL: no GitHub Pages build has run on the repository yet (Pages has to be enabled in the repository settings) and this environment cannot reach `github.io` |
 | Commit and push to `main` | ✅ pushed (verified with `git push`) |
 | Report features, tests, deployment, limitations | ✅ README and delivery report |

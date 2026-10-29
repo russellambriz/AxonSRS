@@ -554,6 +554,7 @@ export function calibrationSample(trial, gradeResult, { eventId, ts, mode } = {}
   if (!gradeResult.timingReliable) reasons.push('timing-unreliable');
   if (trial.override) reasons.push('user-override');
   if (trial.correctionCopy) reasons.push('correction-copy');
+  if (trial.selfJudged) reasons.push('self-judged');
   if (mode === 'speed') reasons.push('speed-practice');
   const modality = trial.modality?.kind || 'unknown';
   if (modality === 'unknown') reasons.push('modality-unknown');

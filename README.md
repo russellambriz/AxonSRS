@@ -222,8 +222,24 @@ import leaves no partial cards and appears on the Recovery screen.
 - **Voice input** uses the browser's speech recognition, which on most
   browsers sends audio to an online service and does not work offline. Voice
   answers have their own timing baseline and never affect typing baselines.
+- **Handwriting with Apple Pencil:** two ways.
+  - Write in the answer box: on iPad, Scribble turns the writing into text,
+    which is checked like typed text. Axon labels such answers as likely
+    handwriting and keeps them out of typing baselines. Recognition is
+    Apple's; fix a misread in the box before you submit.
+  - **Write** (Alt+D or D on the study screen) swaps the answer box for a
+    handwriting pad. Nothing is recognised: after **Check**, your ink is shown
+    next to the correct answer and you grade it (Again = wrong, otherwise
+    Hard, Good or Easy). It works with Apple Pencil, any stylus, a finger or a
+    mouse; once a pencil has touched the pad, palm and finger touches are
+    ignored. Latency runs to the first stroke. These answers are self-judged,
+    so they never calibrate timing, are left out of research comparisons and
+    skip the retyping step. The ink is shown only during feedback and is not
+    saved or synced. **Type** switches back; the choice is remembered on the
+    device.
 - **Focus timer** (Settings → Study): Pomodoro-style; Axon suggests a break
-  after the chosen minutes of active study and pauses timing during it.
+  after the chosen minutes on screen (question, feedback and retyping, not
+  paused or hidden time) and holds the timer during the break.
 - Only **one tab studies at a time** (Web Locks). Another tab can take over,
   and the first one then stops. Writes are also guarded per card, so the
   same review can never be scheduled twice, even without Web Locks.
@@ -660,6 +676,7 @@ Customise them in Settings → Input & keyboard (conflicts are rejected).
 | Skip retyping (accessibility) | Alt+B or B |
 | Worked solution · Why this grade? | Alt+W / W · Alt+Y / Y |
 | Read aloud · Voice input · Pause session | Alt+T / T · Alt+M / M · Alt+P / P |
+| Switch between typing and the handwriting pad | Alt+D or D |
 | Manual grades (manual mode) | 1–4 (or Alt+1–4) |
 | Go to Home / Decks / Study / Statistics / Settings | Alt+1 … Alt+5 |
 | Search · New card · Import | / · N · I |
@@ -699,8 +716,8 @@ Day-to-day reviews write one event each.
 ## Testing
 
 ```bash
-npm test               # 197 unit tests (node --test), ~4 s
-npm run test:browser   # 35 browser tests (Playwright + Chromium), ~6 min
+npm test               # 199 unit tests (node --test), ~4 s
+npm run test:browser   # 36 browser tests (Playwright + Chromium), ~6 min
 npm run check          # pre-cache list is current + unit tests
 ```
 

@@ -40,6 +40,7 @@ import { assignArm } from '../../core/research.js';
 import { mediaFetcher } from './editor.js';
 import { local } from '../local.js';
 import { occlusionView } from '../occlusion.js';
+import { inkPad } from '../inkpad.js';
 
 const TOOLBAR_PRESETS = {
   general: ['π', '√', '^', '/', '(', ')', '-', '+', '²', '³', 'θ', 'Δ', '±', '∞'],
@@ -66,6 +67,7 @@ class StudyScreen {
     this.phase = 'loading';
     this.trial = new TrialRecorder();
     this.screen = new ScreenClock();
+    this.inkMode = local.get('axon-ink-mode') === '1';
     this.current = null;
     this.last = null;
     this.undoStack = [];
@@ -198,11 +200,12 @@ class StudyScreen {
       'aria-describedby': 'study-prompt',
       placeholder: 'Type your answer',
     });
-    this.voiceBtn = h('button', { class: 'btn icon submit-btn', type: 'button', 'aria-label': 'Answer by voice', title: 'Voice input (Alt+M)', hidden: true }, icon('mic'));
+    this.voiceBtn = h('button', { class: 'btn icon submit-btn voice-btn', type: 'button', 'aria-label': 'Answer by voice', title: 'Voice input (Alt+M)', hidden: true }, icon('mic'));
     this.submitBtn = h('button', { class: 'btn primary submit-btn', type: 'button', 'aria-label': 'Submit answer' }, icon('check'));
     this.actionsEl = h('div', { class: 'actions' });
-    this.composer = h('div', { class: 'composer' }, h('div', { class: 'composer-inner' }, this.liveEl, this.symbolsEl, h('div', { class: 'answer-row' }, this.input, this.voiceBtn, this.submitBtn), this.actionsEl));
-    this.root = h('div', { class: 'study', role: 'region', 'aria-label': 'Study session' }, top, this.stage, this.composer);
+    this.ink = inkPad({ onStroke: () => { this.trial.onInkStroke(); this.cancelAutoAdvance(); } });
+    this.composer = h('div', { class: 'composer' }, h('div', { class: 'composer-inner' }, this.liveEl, this.symbolsEl, this.ink.el, h('div', { class: 'answer-row' }, this.input, this.voiceBtn, this.submitBtn), this.actionsEl));
+    this.root = h('div', { class: ['study', this.inkMode && 'ink-mode'], role: 'region', 'aria-label': 'Study session' }, top, this.stage, this.composer);
     // Keep focus in the input when tapping composer controls.
     for (const el of [this.submitBtn, this.voiceBtn]) el.addEventListener('pointerdown', (e) => e.preventDefault());
   }
@@ -225,6 +228,14 @@ class StudyScreen {
       this.userTappedElsewhere = !this.composer.contains(e.target);
     }, { ...sig, capture: true });
     document.addEventListener('keydown', () => this.cancelAutoAdvance(), { ...sig, capture: true });
+    // With the handwriting pad the answer field is not focused, so Enter
+    // (from a hardware keyboard) checks or continues from anywhere.
+    document.addEventListener('keydown', (e) => {
+      if (!this.inkMode || e.key !== 'Enter' || e.isComposing || e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (e.target.closest?.('input, textarea, select, button, a, dialog, [contenteditable]')) return;
+      e.preventDefault();
+      this.primaryAction();
+    }, sig);
     document.addEventListener('visibilitychange', () => {
       if (document.hidden) { this.trial.pause('hidden'); this.screen.hold('hidden'); }
       else { this.trial.resume(); this.screen.release('hidden'); }
@@ -254,6 +265,7 @@ class StudyScreen {
     on('study.speak', () => this.speak());
     on('study.voice', () => this.voice());
     on('study.pause', () => this.pause());
+    on('study.ink', () => this.toggleInk());
     on('study.why', () => this.feedbackEl.querySelector('details.why')?.toggleAttribute('open'));
     for (const r of [1, 2, 3, 4]) on(`study.grade${r}`, () => this.phase === 'grading' && this.manualGrade(r));
     this.unsubs.push(sc.on('study.focus', () => {
@@ -291,7 +303,8 @@ class StudyScreen {
   /* ========================================================= helpers */
 
   focusInput(force = false) {
-    if (this.destroyed) return;
+    // The handwriting pad needs no keyboard (focusing would open it on iPad).
+    if (this.destroyed || this.inkMode) return;
     if (force || document.activeElement !== this.input) {
       try {
         this.input.focus({ preventScroll: true });
@@ -397,6 +410,7 @@ class StudyScreen {
       retypeDone: false,
     };
     this.input.value = '';
+    this.ink.clear();
     this.input.className = 'answer-input';
     this.input.placeholder = content.answerGroups.length > 1 ? `${content.answerGroups.length} answers separated by ;` : 'Type your answer';
     this.input.setAttribute('inputmode', 'text');
@@ -576,6 +590,14 @@ class StudyScreen {
 
   primaryAction({ fromEnter = false, synthetic = false } = {}) {
     if (this.phase === 'question') {
+      if (this.inkMode) {
+        if (this.ink.isEmpty()) {
+          announce('Write an answer first, or use Reveal.', { assertive: true });
+          return;
+        }
+        this.submitInk();
+        return;
+      }
       if (!this.input.value.trim()) {
         announce('Type an answer first, or use Reveal.', { assertive: true });
         this.shake();
@@ -604,18 +626,7 @@ class StudyScreen {
     const modality = classifyModality(this.trial.signals, store.device.modalityOverride);
     const match = revealed ? { ...matchAnswer('', ['x']), correct: false, diagnostics: ['revealed'], method: 'revealed' } : evaluateAnswer(cur.card, cur.deck, cur.unit.key, text, { vocabulary: app.cache.vocabulary(cur.card.deckId) });
     const assistance = { ...this.trial.assistance, revealed: revealed || this.trial.assistance.revealed };
-    const trial = {
-      raw: { ...raw, activeMs: raw.totalMs },
-      responseText: text,
-      modality,
-      prompt: promptStats(cur.content.prompt + (cur.content.occlusion ? ' ![](x)' : '')),
-      assistance,
-      isWarmup: cur.isWarmup,
-      editorOpened: this.trial.editorOpened,
-      clockAnomaly: !!raw.clockAnomaly,
-      taskType: cur.card.taskType || cur.settings.taskType,
-    };
-    cur.trial = trial;
+    cur.trial = this.trialRecord(raw, text, modality, assistance);
     cur.match = match;
     cur.raw = raw;
     if (cur.grade.mode === 'manual' && match.correct) {
@@ -633,9 +644,42 @@ class StudyScreen {
     await this.commit();
   }
 
+  trialRecord(raw, text, modality, assistance) {
+    const cur = this.current;
+    return {
+      raw: { ...raw, activeMs: raw.totalMs },
+      responseText: text,
+      modality,
+      prompt: promptStats(cur.content.prompt + (cur.content.occlusion ? ' ![](x)' : '')),
+      assistance,
+      isWarmup: cur.isWarmup,
+      editorOpened: this.trial.editorOpened,
+      clockAnomaly: !!raw.clockAnomaly,
+      taskType: cur.card.taskType || cur.settings.taskType,
+    };
+  }
+
+  /**
+   * A handwritten (ink) answer is never recognised: the learner compares
+   * it with the correct answer and grades it, Again meaning wrong.
+   */
+  submitInk() {
+    const cur = this.current;
+    if (!cur || this.phase !== 'question') return;
+    const raw = this.trial.finish('');
+    cur.ink = { image: this.ink.snapshot(), strokes: this.ink.strokeCount() };
+    cur.trial = { ...this.trialRecord(raw, '', { kind: 'handwriting', confidence: 0.95, source: 'ink', evidence: ['written on the handwriting pad'] }, { ...this.trial.assistance }), selfJudged: true };
+    cur.match = { correct: true, method: 'self', diagnostics: [], warnings: [] };
+    cur.raw = raw;
+    this.renderFeedback({ pending: true });
+    this.setPhase('grading');
+    this.gradingStartedAt = performance.now();
+  }
+
   async manualGrade(rating) {
     if (this.phase !== 'grading') return;
     this.setPhase('submitting');
+    if (this.current.ink) this.current.match = { ...this.current.match, correct: rating > 1 };
     // Capped so a card left open while away does not inflate study time.
     this.current.trial.gradingMs = Math.min(120000, performance.now() - (this.gradingStartedAt || performance.now()));
     await this.commit(rating);
@@ -646,7 +690,8 @@ class StudyScreen {
     const key = baselineKey(cur.trial.modality.kind, cur.trial.taskType);
     const baseline = await store.getBaseline(key);
     const params = store.paramsFor(cur.deck);
-    const research = cur.grade.arm ? { studyId: cur.grade.study?.id, arm: cur.grade.arm } : null;
+    // A self-judged handwritten answer belongs to neither research arm.
+    const research = cur.grade.arm && !cur.ink ? { studyId: cur.grade.study?.id, arm: cur.grade.arm } : null;
     let plan;
     try {
       plan = planReview({
@@ -776,7 +821,7 @@ class StudyScreen {
     this.recordSiblingExposure();
     this.renderFeedback({});
     this.revealOcclusion();
-    const needsRetype = !correct && store.global.requireRetype !== false;
+    const needsRetype = !correct && store.global.requireRetype !== false && !this.inkMode;
     if (needsRetype) {
       this.setPhase('retype');
       this.input.value = '';
@@ -823,9 +868,9 @@ class StudyScreen {
     const overridden = cur.override;
     const mode = cur.settings.answerMode;
     const parts = [];
-    const verdict = overridden ? 'Marked correct' : correct ? (m.typoTolerated ? 'Correct — typo accepted' : 'Correct') : cur.trial?.assistance?.revealed ? 'Answer revealed' : 'Not quite';
+    const verdict = cur.ink ? (pending ? 'Check your answer' : correct ? 'You marked it right' : 'You marked it wrong') : overridden ? 'Marked correct' : correct ? (m.typoTolerated ? 'Correct — typo accepted' : 'Correct') : cur.trial?.assistance?.revealed ? 'Answer revealed' : 'Not quite';
     const gradeName = ev ? RATING_LABELS[cur.effectiveRating || ev.rating] : null;
-    parts.push(h('div', { class: 'verdict' }, icon(correct || overridden ? 'check' : 'x'), h('span', {}, verdict),
+    parts.push(h('div', { class: 'verdict' }, icon(cur.ink && pending ? 'pen' : correct || overridden ? 'check' : 'x'), h('span', {}, verdict),
       gradeName && !pending ? h('span', { class: 'chip grade', title: ev.type === 'practice' ? 'Practice — your long-term schedule is unchanged' : 'FSRS rating applied' }, `${gradeName}${ev.type === 'practice' ? ' · practice' : ''}`) : null));
 
     // Correct answer
@@ -853,6 +898,7 @@ class StudyScreen {
       const diff = answerDiff(cur.trial.responseText, expected);
       parts.push(h('div', { class: 'stack', style: { gap: '4px' } }, h('div', { class: 'faint tiny' }, 'Your answer'), h('div', { class: 'diff', 'aria-label': `You typed ${cur.trial.responseText}` }, diff.map((seg) => h('span', { class: seg.type === 'same' ? '' : seg.type }, seg.text)))));
     }
+    if (cur.ink?.image) parts.push(h('div', { class: 'stack', style: { gap: '4px' } }, h('div', { class: 'faint tiny' }, 'Your answer'), h('img', { class: 'ink-answer', src: cur.ink.image.src, width: cur.ink.image.width, height: cur.ink.image.height, alt: 'Your handwritten answer' })));
     const diags = (m.diagnostics || []).filter((d) => DIAGNOSTIC_LABELS[d] && d !== 'empty');
     if (diags.length) parts.push(h('div', { class: 'row tight' }, diags.map((d) => h('span', { class: 'chip warning' }, icon('alert'), DIAGNOSTIC_LABELS[d]))));
     const warns = (m.warnings || []).filter((w) => WARNING_LABELS[w]);
@@ -863,8 +909,8 @@ class StudyScreen {
     const raw = cur.raw;
     if (raw) {
       parts.push(h('div', { class: 'timing', 'aria-label': 'Timing' },
-        h('span', {}, 'First key ', h('b', {}, raw.latencyMs != null ? formatDuration(raw.latencyMs) : '—')),
-        h('span', {}, 'Typing ', h('b', {}, raw.typingMs != null ? formatDuration(raw.typingMs) : '—')),
+        h('span', {}, cur.ink ? 'First stroke ' : 'First key ', h('b', {}, raw.latencyMs != null ? formatDuration(raw.latencyMs) : '—')),
+        h('span', {}, cur.ink ? 'Writing ' : 'Typing ', h('b', {}, raw.typingMs != null ? formatDuration(raw.typingMs) : '—')),
         h('span', {}, 'Total ', h('b', {}, formatDuration(raw.totalMs))),
         raw.corrections ? h('span', {}, 'Corrections ', h('b', {}, String(raw.corrections))) : null,
         ev?.type === 'review' && cur.unit.state ? h('span', {}, 'Next ', h('b', {}, formatInterval(Math.max(0, (cur.unit.state.due - Date.now()) / 86400000)))) : null));
@@ -875,7 +921,7 @@ class StudyScreen {
       const g = ev.grading;
       const conf = `${g.confidenceLabel} heuristic confidence (${Math.round(g.confidence * 100)}%, not a calibrated probability)`;
       parts.push(h('details', { class: 'why', ontoggle: (e) => { if (e.currentTarget.open) announce(e.currentTarget.querySelector('.stack').innerText); } }, h('summary', {}, 'Why this grade?'), h('div', { class: 'stack', style: { gap: '4px', marginTop: '6px' } },
-        h('p', {}, ev.grading.mode === 'manual' ? `You graded this ${RATING_LABELS[ev.rating]}. Axon’s automatic grade would have been ${RATING_LABELS[g.grade]}.` : g.explanation),
+        h('p', {}, ev.response?.method === 'self' ? `You graded this ${RATING_LABELS[ev.rating]} from your handwritten answer.` : ev.grading.mode === 'manual' ? `You graded this ${RATING_LABELS[ev.rating]}. Axon’s automatic grade would have been ${RATING_LABELS[g.grade]}.` : g.explanation),
         cur.overrideReasons ? h('p', {}, cur.overrideReasons.map((r) => REASON_TEXT[r]).join(' ')) : null,
         h('p', { class: 'faint tiny' }, `${conf} · ${MODALITY_LABELS[ev.modality?.kind || 'unknown']}${ev.modality?.source === 'override' ? ' (your setting)' : ''} · calibration ${g.calibration.level} (${g.calibration.n} samples) · ${g.ruleVersion}`),
         g.measurements.excluded?.length ? h('p', { class: 'faint tiny' }, `Excluded from timing: ${[...new Set(g.measurements.excluded.map((x) => x.reason))].join(', ')}`) : null)));
@@ -898,7 +944,7 @@ class StudyScreen {
     // Manual grading buttons
     if (pending) {
       const preview = previewRatings(cur.unit.state, Date.now(), store.paramsFor(cur.deck));
-      parts.push(h('div', { class: 'stack', style: { gap: '6px' } }, h('div', { class: 'faint small' }, 'How well did you know it?'), h('div', { class: 'row tight' }, [1, 2, 3, 4].map((r) => h('button', { class: ['btn', r === 3 && 'primary'], type: 'button', onpointerdown: (e) => e.preventDefault(), onclick: () => this.manualGrade(r) }, `${RATING_LABELS[r]} · ${formatInterval(preview[r].days)}`, h('kbd', {}, `⌥${r}`))))));
+      parts.push(h('div', { class: 'stack', style: { gap: '6px' } }, h('div', { class: 'faint small' }, cur.ink ? 'Compare with the answer. Choose Again if it was wrong, otherwise how easily you knew it.' : 'How well did you know it?'), h('div', { class: 'row tight' }, [1, 2, 3, 4].map((r) => h('button', { class: ['btn', r === 3 && 'primary'], type: 'button', onpointerdown: (e) => e.preventDefault(), onclick: () => this.manualGrade(r) }, `${RATING_LABELS[r]} · ${formatInterval(preview[r].days)}`, h('kbd', {}, `⌥${r}`))))));
     }
 
     // Worked solution
@@ -909,13 +955,13 @@ class StudyScreen {
       sol.append(body);
       parts.push(sol);
     }
-    if (this.phase === 'retype' || (!correct && !overridden && store.global.requireRetype !== false && !pending)) {
+    if (this.phase === 'retype' || (!correct && !overridden && store.global.requireRetype !== false && !pending && !this.inkMode)) {
       parts.push(h('div', { class: 'faint small' }, 'Type the correct answer once to reinforce it (this is not counted as recall).'));
     }
-    replace(this.feedbackEl, h('section', { class: ['feedback', correct || overridden ? 'correct' : 'incorrect'], 'aria-label': 'Feedback' }, parts));
+    replace(this.feedbackEl, h('section', { class: ['feedback', cur.ink && pending ? 'pending' : correct || overridden ? 'correct' : 'incorrect'], 'aria-label': 'Feedback' }, parts));
     resolveMedia(this.feedbackEl, mediaFetcher);
     const why = ev?.grading && store.global.showWhy !== false && !pending && ev.grading.mode !== 'manual' ? ev.grading.explanation : '';
-    announce(`${verdict}. ${correct ? '' : `The answer is ${plainText(cur.content.answerDisplay)}.`} ${gradeName && !pending ? `Graded ${gradeName}.` : ''} ${why}`.trim(), { assertive: !correct });
+    announce(`${verdict}. ${correct && !(cur.ink && pending) ? '' : `The answer is ${plainText(cur.content.answerDisplay)}.`} ${gradeName && !pending ? `Graded ${gradeName}.` : ''} ${why}`.trim(), { assertive: !correct });
     requestAnimationFrame(() => this.feedbackEl.scrollIntoView({ block: 'nearest', behavior: reducedMotion() ? 'auto' : 'smooth' }));
   }
 
@@ -936,6 +982,7 @@ class StudyScreen {
       return b;
     };
     if (p === 'question' && cur) {
+      left.push(act(this.inkMode ? 'Type' : 'Write', this.inkMode ? 'keyboard' : 'pen', () => this.toggleInk(), '⌥D'));
       if (cur.card.hint) left.push(act('Hint', 'hint', () => this.showHint(), '⌥H'));
       left.push(act('Reveal', 'eye', () => this.revealAnswer(), '⌥R'));
       if (cur.card.explanation) left.push(act('Solution', 'book', () => this.toggleSolution(), '⌥W'));
@@ -946,7 +993,9 @@ class StudyScreen {
     }
     if ((p === 'feedback' || p === 'retype') && cur) {
       const correct = cur.match?.correct || cur.override;
-      if (!correct) {
+      if (cur.ink) {
+        // Self-graded: the grade is already the learner's own judgement.
+      } else if (!correct) {
         const revealed = cur.trial?.assistance.revealed || cur.trial?.assistance.solutionViewed;
         if (cur.trial?.responseText && !revealed) left.push(act('Correct & save alias', 'check', () => this.override('alias'), '⌥A', { kind: '' }));
         if (!revealed) left.push(act('Mark correct', null, () => this.override('correct'), '⌥C'));
@@ -962,9 +1011,29 @@ class StudyScreen {
     }
     replace(this.actionsEl, h('div', { class: 'left' }, left), h('div', { class: 'right' }, right));
     this.submitBtn.hidden = !['question', 'retype', 'feedback', 'error'].includes(p);
-    this.submitBtn.setAttribute('aria-label', p === 'feedback' ? 'Continue to the next card (Enter)' : p === 'retype' ? 'Check retyped answer' : 'Submit answer');
+    const inkCheck = p === 'question' && this.inkMode;
+    this.submitBtn.setAttribute('aria-label', p === 'feedback' ? 'Continue to the next card (Enter)' : p === 'retype' ? 'Check retyped answer' : inkCheck ? 'Check your handwritten answer' : 'Submit answer');
     if (p === 'feedback') replace(this.submitBtn, h('span', {}, 'Continue'), icon('chevronRight'));
+    else if (inkCheck) replace(this.submitBtn, h('span', {}, 'Check'), icon('check'));
     else replace(this.submitBtn, icon('check'));
+  }
+
+  /** Switch between typing and the handwriting pad; remembered on this device. */
+  toggleInk() {
+    if (this.phase !== 'question') return;
+    this.inkMode = !this.inkMode;
+    local.set('axon-ink-mode', this.inkMode ? '1' : '0');
+    this.root.classList.toggle('ink-mode', this.inkMode);
+    this.ink.clear();
+    this.renderActions();
+    if (this.inkMode) {
+      this.input.blur();
+      requestAnimationFrame(() => this.ink.resize());
+      announce('Handwriting pad. Write your answer, then check it and grade yourself.');
+    } else {
+      this.focusInput(true);
+      announce('Typing.');
+    }
   }
 
   scheduleAutoAdvance() {
@@ -1029,6 +1098,7 @@ class StudyScreen {
 
   async override(kind) {
     const cur = this.current;
+    if (cur?.ink) return;
     if (!cur?.event || !['feedback', 'retype'].includes(this.phase)) return;
     const correct = cur.match.correct || cur.override;
     if ((kind === 'alias' || kind === 'correct') && correct) return;

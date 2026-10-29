@@ -36,6 +36,7 @@ export const ACTIONS = Object.freeze({
   'study.speak': { label: 'Read aloud', keys: ['Alt+KeyT', 'KeyT'], scope: 'study' },
   'study.voice': { label: 'Voice input', keys: ['Alt+KeyM', 'KeyM'], scope: 'study' },
   'study.pause': { label: 'Pause session', keys: ['Alt+KeyP', 'KeyP'], scope: 'study' },
+  'study.ink': { label: 'Switch between typing and writing by hand', keys: ['Alt+KeyD', 'KeyD'], scope: 'study' },
   'study.why': { label: 'Why this grade?', keys: ['Alt+KeyY', 'KeyY'], scope: 'study' },
   'study.grade1': { label: 'Grade Again (manual mode)', keys: ['Alt+Digit1', 'Digit1'], scope: 'study-manual' },
   'study.grade2': { label: 'Grade Hard (manual mode)', keys: ['Alt+Digit2', 'Digit2'], scope: 'study-manual' },

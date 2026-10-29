@@ -1200,6 +1200,27 @@ body.studying { overflow: hidden; }
 .submit-btn { height: 60px; min-width: 68px; padding: 0 18px; border-radius: 16px; font-size: 1.1rem; font-weight: 700; gap: 8px; }
 .submit-btn svg { width: 26px; height: 26px; }
 .study[data-phase='feedback'] .submit-btn { min-width: min(11rem, 42vw); }
+/* Handwriting pad (ink answers are self-graded, never recognised) */
+.ink-pad { display: flex; flex-direction: column; gap: 4px; }
+.ink-canvas {
+  display: block;
+  width: 100%;
+  height: clamp(150px, 32dvh, 420px);
+  border-radius: 16px;
+  border: 1.5px dashed var(--control-border);
+  background: var(--surface);
+  color: var(--text);
+  touch-action: none;
+  -webkit-user-select: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+  cursor: crosshair;
+}
+.ink-tools { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
+.study:not(.ink-mode) .ink-pad, .study.ink-mode:not([data-phase='question']) .ink-pad { display: none; }
+.study.ink-mode .answer-input, .study.ink-mode .symbols, .study.ink-mode .live-preview, .study.ink-mode .voice-btn { display: none; }
+.study.ink-mode .answer-row .submit-btn { flex: 1; }
+.ink-answer { display: block; max-width: 100%; height: auto; max-height: 240px; object-fit: contain; object-position: left; border-radius: 12px; background: var(--surface); border: 1px solid var(--border); }
 .study-done { max-width: 560px; margin: auto; text-align: center; display: flex; flex-direction: column; gap: var(--s4); align-items: center; padding: var(--s6) var(--s4); }
 .study-done .summary-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--s4); width: 100%; }
 

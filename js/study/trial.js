@@ -33,7 +33,7 @@ export class TrialRecorder {
     this.corrections = 0;
     this.inDeleteBurst = false;
     this.inputEvents = 0;
-    this.origins = { typed: 0, paste: 0, toolbar: 0, dictation: 0, voice: 0, handwriting: 0, autofill: 0, composition: 0, drop: 0, other: 0 };
+    this.origins = { typed: 0, paste: 0, toolbar: 0, dictation: 0, voice: 0, handwriting: 0, ink: 0, autofill: 0, composition: 0, drop: 0, other: 0 };
     this.firstOrigin = null;
     this.pausedAt = null;
     this.pauseReason = null;
@@ -41,7 +41,7 @@ export class TrialRecorder {
     this.editorMs = 0;
     this.maxHiddenSpan = 0;
     this.lastKeydown = null;
-    this.signals = { textInputs: 0, keydownWithCode: 0, keydownUnidentified: 0, inputsWithoutKeydown: 0, viewportShrunk: false, lastPointerType: null, coarsePointer: false, finePointer: false, voiceInputs: 0, dictationInputs: 0, handwritingInputs: 0 };
+    this.signals = { textInputs: 0, keydownWithCode: 0, keydownUnidentified: 0, inputsWithoutKeydown: 0, viewportShrunk: false, lastPointerType: null, coarsePointer: false, finePointer: false, voiceInputs: 0, dictationInputs: 0, handwritingInputs: 0, inkStrokes: 0 };
     this.composing = false;
     this.voiceStartAt = null;
     this.penStartAt = null;
@@ -186,6 +186,22 @@ export class TrialRecorder {
       this.gaps.push(gap);
     }
     this.lastInputAt = t;
+  }
+
+  /** A stroke began on the handwriting pad (ink is never recognised). */
+  onInkStroke() {
+    if (this.startedAt == null || this.pausedAt != null) return;
+    const t = this.activeNow();
+    this.inputEvents++;
+    this.origins.ink++;
+    this.signals.inkStrokes++;
+    if (this.firstInputAt == null) {
+      this.firstInputAt = t;
+      this.firstOrigin = 'ink';
+      this.lastInputAt = t;
+      return;
+    }
+    this.noteGap(t);
   }
 
   onVoiceStart() {
