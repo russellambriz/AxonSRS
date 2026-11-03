@@ -37,6 +37,7 @@ const PRECACHE = [
   './js/core/import/index.js',
   './js/core/import/notes.js',
   './js/core/import/slug.js',
+  './js/core/ink.js',
   './js/core/levenshtein.js',
   './js/core/match/chem.js',
   './js/core/match/diff.js',
