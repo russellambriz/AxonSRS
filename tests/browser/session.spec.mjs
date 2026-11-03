@@ -7,15 +7,15 @@ import { newContext, openApp, seedDeck, idbAll, inApp, startReview, answerFromMa
 const liveText = (page, id) => page.evaluate((i) => document.getElementById(i)?.textContent || '', id);
 
 /** One stroke on the handwriting pad (synthetic Apple Pencil, finger or palm). */
-const stroke = (page, { type = 'pen', id = 7 } = {}) => page.evaluate(({ type: t, id: pid }) => {
+const stroke = (page, { type = 'pen', id = 7, dx = 0, dy = 0 } = {}) => page.evaluate(({ type: t, id: pid, dx: ox, dy: oy }) => {
   const c = document.querySelector('.ink-canvas');
   const r = c.getBoundingClientRect();
   const fire = (name, x, y) => c.dispatchEvent(new PointerEvent(name, { pointerType: t, pointerId: pid, isPrimary: true, clientX: r.left + x, clientY: r.top + y, pressure: name === 'pointerup' ? 0 : 0.6, buttons: name === 'pointerup' ? 0 : 1, bubbles: true, cancelable: true }));
-  fire('pointerdown', 30, 30);
-  fire('pointermove', 70, 50);
-  fire('pointermove', 120, 40);
-  fire('pointerup', 120, 40);
-}, { type, id });
+  fire('pointerdown', 30 + ox, 30 + oy);
+  fire('pointermove', 70 + ox, 50 + oy);
+  fire('pointermove', 120 + ox, 40 + oy);
+  fire('pointerup', 120 + ox, 40 + oy);
+}, { type, id, dx, dy });
 
 export const tests = [
   {
@@ -215,6 +215,271 @@ export const tests = [
       await waitPhase(page, ['question']);
       const s = (await idbAll(page, 'sessions'))[0];
       assert.equal(s.focusMs, 0, 'Keep going starts a new focus block');
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
+  {
+    name: 'ink keeps coalesced samples and replaces the predicted tail',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser, { viewport: { width: 820, height: 1180 }, hasTouch: true });
+      const page = await openApp(ctx, url);
+      await seedDeck(page, { cards: [['Ink', 'kept']] });
+      await startReview(page);
+      await page.getByRole('button', { name: 'Write' }).click();
+      await page.locator('.ink-canvas').waitFor();
+      await page.waitForFunction(() => document.querySelector('.ink-canvas')?.width > 0);
+      const measured = await page.evaluate(async () => {
+        const c = document.querySelector('.ink-canvas');
+        const pad = c.closest('.ink-pad');
+        const r = c.getBoundingClientRect();
+        const origC = PointerEvent.prototype.getCoalescedEvents;
+        const origP = PointerEvent.prototype.getPredictedEvents;
+        PointerEvent.prototype.getCoalescedEvents = function () {
+          if (this.type !== 'pointermove') return [this];
+          return [8, 16].map((dx) => new PointerEvent('pointermove', { pointerType: 'pen', clientX: this.clientX + dx, clientY: this.clientY, pressure: 0.65, buttons: 1 }));
+        };
+        PointerEvent.prototype.getPredictedEvents = function () {
+          if (this.type !== 'pointermove') return [];
+          return [new PointerEvent('pointermove', { pointerType: 'pen', clientX: r.left + 300, clientY: r.top + 24, pressure: 0.4, buttons: 1 })];
+        };
+        const span = () => {
+          const ctx2 = c.getContext('2d');
+          const { data, width, height } = ctx2.getImageData(0, 0, c.width, c.height);
+          let minX = width;
+          let maxX = 0;
+          let n = 0;
+          for (let y = 0; y < height; y += 2) {
+            for (let x = 0; x < width; x += 2) {
+              if (data[(y * width + x) * 4 + 3] > 20) {
+                n += 1;
+                if (x < minX) minX = x;
+                if (x > maxX) maxX = x;
+              }
+            }
+          }
+          return { n, span: n ? maxX - minX : 0 };
+        };
+        const fire = (name, x, y, buttons) => c.dispatchEvent(new PointerEvent(name, { pointerType: 'pen', pointerId: 4, clientX: r.left + x, clientY: r.top + y, pressure: 0.65, buttons, bubbles: true, cancelable: true }));
+        fire('pointerdown', 20, 36, 1);
+        fire('pointermove', 36, 36, 1);
+        const predicted = pad.dataset.predicted;
+        await new Promise((res) => requestAnimationFrame(() => requestAnimationFrame(res)));
+        const during = span();
+        fire('pointerup', 36, 36, 0);
+        const after = { ...span(), points: Number(c.dataset.points), strokes: Number(c.dataset.strokes), predicted: pad.dataset.predicted };
+        PointerEvent.prototype.getCoalescedEvents = origC;
+        PointerEvent.prototype.getPredictedEvents = origP;
+        return { predicted, during, after };
+      });
+      assert.equal(measured.predicted, '1', 'the tail is shown before the real sample replaces it');
+      assert.ok(measured.during.n > 0, 'ink is on the canvas');
+      assert.ok(measured.during.span > measured.after.span + 30, 'the predicted tail is longer than the committed stroke');
+      assert.equal(measured.after.predicted, '0');
+      assert.equal(measured.after.strokes, 1);
+      assert.ok(measured.after.points >= 3, 'coalesced samples were not dropped');
+      assert.ok(measured.after.n > 0, 'the committed stroke is still drawn');
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
+  {
+    name: 'a hovering pen shows a dot and a finger or mouse does not',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser, { viewport: { width: 820, height: 1180 }, hasTouch: true });
+      const page = await openApp(ctx, url);
+      await seedDeck(page, { cards: [['Hover', 'dot']] });
+      await startReview(page);
+      await page.getByRole('button', { name: 'Write' }).click();
+      await page.locator('.ink-canvas').waitFor();
+      await page.waitForFunction(() => document.querySelector('.ink-overlay')?.width > 0);
+      const hover = (type, buttons = 0) => page.evaluate(({ type: t, buttons: b }) => {
+        const c = document.querySelector('.ink-canvas');
+        const r = c.getBoundingClientRect();
+        c.dispatchEvent(new PointerEvent('pointermove', { pointerType: t, pointerId: 11, buttons: b, clientX: r.left + 48, clientY: r.top + 48, pressure: 0, bubbles: true }));
+        return c.closest('.ink-pad').dataset.hover;
+      }, { type, buttons });
+      assert.equal(await hover('mouse'), '0');
+      assert.equal(await hover('touch'), '0');
+      assert.equal(await hover('pen'), '1');
+      const dot = await page.evaluate(() => {
+        const o = document.querySelector('.ink-overlay');
+        const ctx2 = o.getContext('2d');
+        const { data } = ctx2.getImageData(0, 0, o.width, o.height);
+        return data.some((v, i) => i % 4 === 3 && v > 0);
+      });
+      assert.equal(dot, true, 'the preview dot is painted');
+      assert.equal(await page.getAttribute('.ink-canvas', 'data-strokes'), '0', 'hover is not a stroke');
+      await page.evaluate(() => {
+        const c = document.querySelector('.ink-canvas');
+        c.dispatchEvent(new PointerEvent('pointerleave', { pointerType: 'pen', pointerId: 11, bubbles: true }));
+      });
+      assert.equal(await page.getAttribute('.ink-pad', 'data-hover'), '0');
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
+  {
+    name: 'pencil only and a remembered pen ignore palms, and a pen stroke ignores other pointers',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser, { viewport: { width: 820, height: 1180 }, hasTouch: true });
+      const page = await openApp(ctx, url);
+      await page.evaluate(() => { location.hash = '#/settings/study'; });
+      const pencilOnly = page.getByRole('switch', { name: 'Pencil only' });
+      await pencilOnly.waitFor();
+      // The switch track sits over the input; a DOM click still toggles it.
+      await pencilOnly.evaluate((el) => el.click());
+      assert.equal(await page.evaluate(() => localStorage.getItem('axon-pencil-only')), '1');
+      await seedDeck(page, { cards: [['Palm', 'off']] });
+      await startReview(page);
+      await page.getByRole('button', { name: 'Write' }).click();
+      await page.locator('.ink-canvas').waitFor();
+      await stroke(page, { type: 'touch', id: 2 });
+      assert.equal(await page.getAttribute('.ink-canvas', 'data-strokes'), '0', 'Pencil only ignores touch before any pen');
+      await stroke(page, { type: 'mouse', id: 3 });
+      assert.equal(await page.getAttribute('.ink-canvas', 'data-strokes'), '1', 'a mouse still draws');
+      await page.getByRole('button', { name: 'Clear' }).click();
+      const joined = await page.evaluate(() => {
+        const c = document.querySelector('.ink-canvas');
+        const r = c.getBoundingClientRect();
+        const fire = (name, id, type, x, buttons) => c.dispatchEvent(new PointerEvent(name, { pointerType: type, pointerId: id, clientX: r.left + x, clientY: r.top + 40, pressure: 0.7, buttons, bubbles: true, cancelable: true }));
+        fire('pointerdown', 1, 'pen', 20, 1);
+        fire('pointerdown', 2, 'touch', 80, 1);
+        fire('pointermove', 2, 'touch', 90, 1);
+        fire('pointermove', 1, 'pen', 50, 1);
+        fire('pointerup', 1, 'pen', 50, 0);
+        return { strokes: c.dataset.strokes, penSeen: c.closest('.ink-pad').dataset.penSeen };
+      });
+      assert.equal(joined.strokes, '1', 'a touch during a pen stroke is not a second stroke');
+      assert.equal(joined.penSeen, '1');
+      assert.equal(await page.evaluate(() => localStorage.getItem('axon-pen-seen')), '1');
+      await page.evaluate(() => localStorage.setItem('axon-pencil-only', '0'));
+      await page.reload();
+      await waitReady(page);
+      await page.waitForTimeout(300);
+      if (!(await page.locator('.study').count())) await page.getByRole('button', { name: /Start review|Resume/ }).first().click();
+      await waitPhase(page, ['question']);
+      await page.locator('.ink-canvas').waitFor({ state: 'visible' });
+      await stroke(page, { type: 'touch', id: 8 });
+      assert.equal(await page.getAttribute('.ink-canvas', 'data-strokes'), '0', 'a palm is ignored from the first stroke of the next session');
+      assert.equal(await page.getAttribute('.ink-pad', 'data-pen-seen'), '1');
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
+  {
+    name: 'the eraser removes a whole stroke and undo puts it back',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser, { viewport: { width: 820, height: 1180 }, hasTouch: true });
+      const page = await openApp(ctx, url);
+      await seedDeck(page, { cards: [['Erase', 'undo']] });
+      await startReview(page);
+      await page.getByRole('button', { name: 'Write' }).click();
+      await page.locator('.ink-canvas').waitFor();
+      await stroke(page, { dy: 0 });
+      await stroke(page, { id: 8, dy: 90 });
+      assert.equal(await page.getAttribute('.ink-canvas', 'data-strokes'), '2');
+      await page.getByRole('button', { name: 'Eraser' }).click();
+      assert.equal(await page.getAttribute('.ink-pad button:has-text("Eraser")', 'aria-pressed'), 'true');
+      await stroke(page, { id: 9, dy: 0 });
+      assert.equal(await page.getAttribute('.ink-canvas', 'data-strokes'), '1', 'only the stroke under the eraser goes');
+      await page.getByRole('button', { name: 'Undo stroke' }).click();
+      assert.equal(await page.getAttribute('.ink-canvas', 'data-strokes'), '2', 'undo restores the erased stroke');
+      await page.getByRole('button', { name: 'Clear' }).click();
+      assert.equal(await page.getAttribute('.ink-canvas', 'data-strokes'), '0');
+      assert.equal(await page.locator('button:has-text("Undo stroke")').isDisabled(), true);
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
+  {
+    name: 'a wide ink screen puts the pad beside the prompt and a phone width does not scroll',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser, { viewport: { width: 1100, height: 700 }, hasTouch: true });
+      const page = await openApp(ctx, url);
+      await seedDeck(page, { cards: [['Landscape prompt', 'side']] });
+      await startReview(page);
+      await page.getByRole('button', { name: 'Write' }).click();
+      await page.locator('.ink-canvas').waitFor();
+      const wide = await page.evaluate(() => {
+        const prompt = document.querySelector('#study-prompt').getBoundingClientRect();
+        const pad = document.querySelector('.ink-canvas').getBoundingClientRect();
+        const study = document.querySelector('.study');
+        const overflow = [...study.querySelectorAll('*')].filter((el) => {
+          const box = el.getBoundingClientRect();
+          return box.width > 0 && box.height > 0 && box.right > window.innerWidth + 1;
+        }).slice(0, 3).map((el) => `${el.tagName}.${[...el.classList].join('.')}`);
+        return { promptRight: prompt.right, padLeft: pad.left, padH: pad.height, doc: document.documentElement.scrollWidth <= window.innerWidth + 1, study: study.scrollWidth <= study.clientWidth + 1, overflow };
+      });
+      assert.ok(wide.padLeft >= wide.promptRight - 8, `pad ${wide.padLeft} should sit to the right of the prompt ${wide.promptRight}`);
+      assert.ok(wide.padH >= 280, `pad height ${wide.padH}`);
+      assert.equal(wide.doc, true);
+      assert.equal(wide.study, true);
+      assert.deepEqual(wide.overflow, []);
+      await page.setViewportSize({ width: 320, height: 640 });
+      await page.waitForTimeout(100);
+      const narrow = await page.evaluate(() => {
+        const prompt = document.querySelector('#study-prompt').getBoundingClientRect();
+        const pad = document.querySelector('.ink-canvas').getBoundingClientRect();
+        const study = document.querySelector('.study');
+        const overflow = [...study.querySelectorAll('*')].filter((el) => {
+          const box = el.getBoundingClientRect();
+          return box.width > 0 && box.height > 0 && box.right > window.innerWidth + 1;
+        }).slice(0, 4).map((el) => `${el.tagName.toLowerCase()}.${[...el.classList].join('.')} ${Math.round(box.right)}`);
+        return { stacked: pad.top >= prompt.top, doc: document.documentElement.scrollWidth <= window.innerWidth + 1, study: study.scrollWidth <= study.clientWidth + 1, overflow };
+      });
+      assert.equal(narrow.stacked, true, 'a phone keeps the stacked layout');
+      assert.equal(narrow.doc, true, narrow.overflow.join(', '));
+      assert.equal(narrow.study, true, narrow.overflow.join(', '));
+      assert.deepEqual(narrow.overflow, [], narrow.overflow.join(', '));
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
+  {
+    name: 'skip retyping a handwritten miss records a bypassed copy and no second review',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser, { viewport: { width: 820, height: 1180 }, hasTouch: true });
+      const page = await openApp(ctx, url);
+      await seedDeck(page, { cards: [['Copy', 'once'], ['Next', 'card']] });
+      await startReview(page);
+      await page.getByRole('button', { name: 'Write' }).click();
+      await stroke(page);
+      await page.getByRole('button', { name: 'Check your handwritten answer' }).click();
+      await waitPhase(page, ['grading']);
+      await page.getByRole('button', { name: /^Again/ }).click();
+      assert.equal(await waitPhase(page, ['retype']), 'retype');
+      await page.getByRole('button', { name: 'Skip retyping' }).click();
+      assert.equal(await waitPhase(page, ['feedback']), 'feedback');
+      const events = await idbAll(page, 'events');
+      const reviews = events.filter((e) => e.type === 'review');
+      const copies = events.filter((e) => e.type === 'copy');
+      assert.equal(reviews.length, 1);
+      assert.equal(copies.length, 1);
+      assert.equal(copies[0].bypassed, true);
+      assert.equal(copies[0].targetId, reviews[0].id);
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
+  {
+    name: 'turning off retype skips the handwriting copy step',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser, { viewport: { width: 820, height: 1180 }, hasTouch: true });
+      const page = await openApp(ctx, url);
+      await seedDeck(page, { cards: [['No retype', 'off']] });
+      await inApp(page, ({ store }) => store.setGlobal({ requireRetype: false }));
+      await startReview(page);
+      await page.getByRole('button', { name: 'Write' }).click();
+      await stroke(page);
+      await page.getByRole('button', { name: 'Check your handwritten answer' }).click();
+      await waitPhase(page, ['grading']);
+      await page.getByRole('button', { name: /^Again/ }).click();
+      assert.equal(await waitPhase(page, ['feedback']), 'feedback');
+      assert.equal(await page.locator('.ink-canvas').isVisible(), false);
+      const events = await idbAll(page, 'events');
+      assert.equal(events.filter((e) => e.type === 'review').length, 1);
+      assert.equal(events.filter((e) => e.type === 'copy').length, 0);
       assertNoErrors(page);
       await ctx.close();
     },

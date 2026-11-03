@@ -226,17 +226,39 @@ import leaves no partial cards and appears on the Recovery screen.
   - Write in the answer box: on iPad, Scribble turns the writing into text,
     which is checked like typed text. Axon labels such answers as likely
     handwriting and keeps them out of typing baselines. Recognition is
-    Apple's; fix a misread in the box before you submit.
+    Apple's; fix a misread in the box before you submit. The handwriting pad
+    does not change Scribble.
   - **Write** (Alt+D or D on the study screen) swaps the answer box for a
     handwriting pad. Nothing is recognised: after **Check**, your ink is shown
     next to the correct answer and you grade it (Again = wrong, otherwise
-    Hard, Good or Easy). It works with Apple Pencil, any stylus, a finger or a
-    mouse; once a pencil has touched the pad, palm and finger touches are
-    ignored. Latency runs to the first stroke. These answers are self-judged,
-    so they never calibrate timing, are left out of research comparisons and
-    skip the retyping step. The ink is shown only during feedback and is not
-    saved or synced. **Type** switches back; the choice is remembered on the
-    device.
+    Hard, Good or Easy). Strokes are smoothed and follow pressure. When the
+    browser reports tilt (or altitude), a flatter pencil draws a wider line;
+    twist only nudges that. A short predicted tail keeps the ink near the tip
+    and is replaced as real samples arrive. It works with Apple Pencil,
+    including hover on Pencil Pro and other hover-capable iPads (a small dot
+    shows where the tip will land), any stylus, a finger or a mouse. Once a
+    pencil has touched the pad on this device, palm and finger touches are
+    ignored from the first stroke of later sessions. **Settings → Study →
+    Pencil only** ignores every touch even before that. While a pencil stroke
+    is down, other pointers are ignored. **Eraser** removes each whole stroke
+    it touches, so **Undo stroke** can put it back; **Clear** wipes the pad.
+    The ink colour is the text colour. On a wide study screen (900px and up,
+    such as iPad landscape) the prompt stays on the left and a tall pad fills
+    the right; portrait and phones keep the stacked layout. Latency runs to
+    the first stroke. These answers are self-judged, so they never calibrate
+    timing and are left out of research comparisons. A wrong one asks you to
+    **write the correct answer once** (or **Skip retyping**); that is the
+    same copy event as retyping, never a second review, and it follows
+    Settings → Study → Retype after a mistake. The review ink is shown only
+    during feedback and is not saved or synced. **Type** switches back; the
+    choice is remembered on the device.
+  - In the card editor, **Draw** next to **Image** opens the same pad.
+    **Insert** stores the sketch as a PNG with the same type and size checks
+    as any other image, on the front or the back, and it works offline.
+  - Apple Pencil Pro squeeze, double-tap, barrel roll and haptics are not
+    available to web pages, so Axon does not use them. Hover, pressure, tilt
+    and the optional altitude, azimuth and twist values come through Pointer
+    Events when the browser provides them.
 - **Focus timer** (Settings → Study): Pomodoro-style; Axon suggests a break
   after the chosen minutes on screen (question, feedback and retyping, not
   paused or hidden time) and holds the timer during the break.
@@ -494,7 +516,7 @@ separately and never touch live scheduling. A de-identified CSV export
 
 ## Offline, installation and updates
 
-- The service worker pre-caches the **complete app shell**: 111 files,
+- The service worker pre-caches the **complete app shell**: 113 files,
   including KaTeX and its fonts, mhchem, marked, DOMPurify, fflate and
   OpenDyslexic, all bundled locally. After one online visit, Axon cold-starts
   and works fully offline: studying, editing, importing, statistics,
@@ -716,8 +738,8 @@ Day-to-day reviews write one event each.
 ## Testing
 
 ```bash
-npm test               # 199 unit tests (node --test), ~4 s
-npm run test:browser   # 36 browser tests (Playwright + Chromium), ~6 min
+npm test               # 204 unit tests (node --test), ~4 s
+npm run test:browser   # 44 browser tests (Playwright + Chromium)
 npm run check          # pre-cache list is current + unit tests
 ```
 
@@ -734,7 +756,9 @@ committed).
   against py-fsrs reference cases, fuzz bounds, replay, concurrency, clock
   skew, corrections, undo, queues (limits, siblings, catch-up, postpone,
   drills), time zones and DST, statistics, planning, research, sync merge,
-  encryption, compression, Gist client, chunking, backups, GitHub Pages paths.
+  encryption, compression, Gist client, chunking, backups, GitHub Pages paths,
+  handwriting geometry (smoothing, pressure and tilt width, predicted
+  samples, eraser hit-testing).
 - **Browser**: persistence across reloads; a synthetic v1→v2 schema
   migration with snapshot; a failing migration; refusal to open newer data;
   a failed review transaction (synthetic quota error) with no partial writes;
@@ -744,16 +768,21 @@ committed).
   one study tab at a time; image occlusion created and studied offline;
   leech actions; the import wizard; alias rescue and undo; cram; in-session
   editing; plain and encrypted backup round trips through the UI; two-device
-  sync through a mocked Gist API; responsive layout at 1280, 834, 390 and
+  sync through a mocked Gist API;   responsive layout at 1280, 834, 390 and
   320 px (light and dark) with checks for horizontal scroll, unnamed controls
-  and touch-target size; the 10,000-card performance run.
+  and touch-target size; handwriting smoothing, hover, palm rejection,
+  eraser, wide ink layout, the copy step after a missed ink answer, and a
+  sketch inserted from the card editor; the 10,000-card performance run.
 
 **Device coverage, honestly:** everything ran in desktop Chromium.
 Tablet and phone sizes are **Chromium emulation** (viewport, touch,
 `pointer: coarse`), which is not the same as Safari on an iPhone or Chrome on
-an Android phone. No physical device and no WebKit browser was available, so
-real on-screen keyboards, iOS storage eviction, installation prompts, speech
-recognition and system TTS voices are **untested**.
+an Android phone. Handwriting tests dispatch synthetic Pointer Events
+(`pen`, `touch`, `mouse`), including coalesced and predicted samples. No
+physical device and no WebKit browser was available, so real on-screen
+keyboards, Apple Pencil pressure, tilt and hover, iOS storage eviction,
+installation prompts, speech recognition and system TTS voices are
+**untested**. Scribble is Apple's and is left on the normal answer field.
 
 ## Versions
 
@@ -786,7 +815,9 @@ explicit, reversible migration is offered.
 - Speech recognition usually needs a connection; some TTS voices do too.
 - Anki export is plain text (no `.apkg`, no FSRS state, media or history).
 - Only tested in Chromium; phone and tablet results are emulation (see
-  [Testing](#testing)).
+  [Testing](#testing)). Apple Pencil pressure, tilt and hover are covered
+  with synthetic Pointer Events, not a physical iPad. Pencil Pro squeeze,
+  double-tap, barrel roll and haptics are not exposed to web pages.
 
 ## Deploying to GitHub Pages
 
