@@ -30,7 +30,7 @@ function pencilOnly() {
   return local.get(PENCIL_ONLY_KEY) === '1';
 }
 
-export function inkPad({ onStroke = () => {} } = {}) {
+export function inkPad({ onStroke = () => {}, onChange = null } = {}) {
   const canvas = h('canvas', { class: 'ink-canvas', role: 'img', 'aria-label': 'Handwriting pad. Write your answer with Apple Pencil, a stylus or a finger.', dataset: { strokes: '0', points: '0' } });
   const overlay = h('canvas', { class: 'ink-overlay', 'aria-hidden': 'true' });
   const ctx = canvas.getContext('2d');
@@ -169,6 +169,7 @@ export function inkPad({ onStroke = () => {} } = {}) {
     const busy = !!current;
     undoBtn.disabled = busy || !history.length;
     clearBtn.disabled = !strokes.length && !busy;
+    onChange?.();
   }
 
   function toggleEraser() {

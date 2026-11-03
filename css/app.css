@@ -1229,6 +1229,7 @@ body.studying { overflow: hidden; }
 }
 .ink-pad[data-hover='1'] .ink-canvas { cursor: none; }
 .ink-pad.erasing .ink-canvas { cursor: cell; }
+.ink-pad.sheet .ink-stage { height: min(52dvh, 480px); }
 .ink-tools { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .study:not(.ink-mode) .ink-pad,
 .study.ink-mode:not([data-phase='question']):not([data-phase='retype']) .ink-pad { display: none; }
