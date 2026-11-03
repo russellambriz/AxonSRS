@@ -5,7 +5,8 @@
  * the pad on this device, finger and palm touches are ignored from then
  * on, including the first stroke of a later session. Settings → Study →
  * Pencil only ignores every touch even before a pen is seen. While a pen
- * stroke is down, every other pointer is ignored.
+ * stroke is down, every other pointer is ignored. Eraser removes each
+ * whole stroke it touches, so Undo stroke can put that stroke back.
  *
  * Strokes are smoothed with midpoint quadratics and batched onto one
  * animation frame. getPredictedEvents(), when the browser provides it,
@@ -17,7 +18,7 @@
 import { h } from './dom.js';
 import { icon } from './icons.js';
 import { local } from './local.js';
-import { paintSamples, splitPointerSamples, strokeWidth } from '../core/ink.js';
+import { eraseStrokes, ERASER_RADIUS, paintSamples, splitPointerSamples, strokeWidth } from '../core/ink.js';
 
 const HINT = 'Write your answer, then check it';
 /** Set after a pen has touched a pad on this device. */
@@ -36,7 +37,11 @@ export function inkPad({ onStroke = () => {} } = {}) {
   const octx = overlay.getContext('2d');
   const stage = h('div', { class: 'ink-stage' }, canvas, overlay);
   const strokes = [];
+  const history = [];
   let current = null;
+  let erasing = false;
+  let eraseLog = null;
+  let eraserAt = null;
   let penSeen = local.get(PEN_SEEN_KEY) === '1';
   let dpr = 1;
   let queued = [];
@@ -45,9 +50,10 @@ export function inkPad({ onStroke = () => {} } = {}) {
   let rafId = 0;
 
   const undoBtn = h('button', { class: 'btn small ghost', type: 'button', disabled: true, onclick: () => undo() }, icon('undo'), 'Undo stroke');
+  const eraserBtn = h('button', { class: 'btn small ghost', type: 'button', 'aria-pressed': 'false', onclick: () => toggleEraser() }, icon('eraser'), 'Eraser');
   const clearBtn = h('button', { class: 'btn small ghost', type: 'button', disabled: true, onclick: () => clear() }, icon('trash'), 'Clear');
   const hintEl = h('span', { class: 'faint small ink-hint' }, HINT);
-  const el = h('div', { class: 'ink-pad', dataset: { predicted: '0', hover: '0', penSeen: penSeen ? '1' : '0' } }, stage, h('div', { class: 'ink-tools' }, hintEl, h('div', { class: 'row tight' }, undoBtn, clearBtn)));
+  const el = h('div', { class: 'ink-pad', dataset: { predicted: '0', hover: '0', penSeen: penSeen ? '1' : '0' } }, stage, h('div', { class: 'ink-tools' }, hintEl, h('div', { class: 'row tight' }, undoBtn, eraserBtn, clearBtn)));
 
   /** Touch is ignored after a pen has been used here, or whenever Pencil only is on. Any second pointer is ignored while a stroke — a pen stroke in particular — is active. */
   function ignored(e) {
@@ -161,27 +167,75 @@ export function inkPad({ onStroke = () => {} } = {}) {
     canvas.dataset.strokes = String(strokes.length);
     canvas.dataset.points = String(strokes.reduce((n, s) => n + s.length, 0) + queued.length);
     const busy = !!current;
-    undoBtn.disabled = busy || !strokes.length;
+    undoBtn.disabled = busy || !history.length;
     clearBtn.disabled = !strokes.length && !busy;
+  }
+
+  function toggleEraser() {
+    erasing = !erasing;
+    eraserBtn.setAttribute('aria-pressed', erasing ? 'true' : 'false');
+    el.classList.toggle('erasing', erasing);
+    if (!erasing) eraserAt = null;
+    drawOverlay();
   }
 
   function undo() {
     if (current) return;
-    strokes.pop();
+    const action = history.pop();
+    if (!action) return;
+    if (action.kind === 'add') {
+      const i = strokes.lastIndexOf(action.stroke);
+      if (i >= 0) strokes.splice(i, 1);
+    } else {
+      // Reinsert from the last removal so earlier indexes still land.
+      for (let i = action.items.length - 1; i >= 0; i--) {
+        const item = action.items[i];
+        strokes.splice(Math.min(item.index, strokes.length), 0, item.stroke);
+      }
+    }
     redraw();
+    update();
+  }
+
+  function eraseWith(e) {
+    const events = eventList(e, 'getCoalescedEvents');
+    let changed = false;
+    for (const ev of events) {
+      const p = pointerFrom(ev);
+      eraserAt = p;
+      const { kept, removed } = eraseStrokes(strokes, p.x, p.y);
+      if (!removed.length) continue;
+      strokes.length = 0;
+      for (const s of kept) strokes.push(s);
+      eraseLog.push(...removed);
+      changed = true;
+    }
+    if (changed) redraw();
+    drawOverlay();
     update();
   }
 
   function drawOverlay() {
     octx.setTransform(1, 0, 0, 1, 0, 0);
     octx.clearRect(0, 0, overlay.width, overlay.height);
-    if (!hover || !overlay.width) return;
+    if (!overlay.width) return;
     octx.setTransform(dpr, 0, 0, dpr, 0, 0);
     octx.fillStyle = getComputedStyle(canvas).color;
-    octx.globalAlpha = 0.55;
-    octx.beginPath();
-    octx.arc(hover.x, hover.y, 4, 0, Math.PI * 2);
-    octx.fill();
+    if (erasing && eraserAt) {
+      octx.globalAlpha = 0.18;
+      octx.beginPath();
+      octx.arc(eraserAt.x, eraserAt.y, ERASER_RADIUS, 0, Math.PI * 2);
+      octx.fill();
+      octx.globalAlpha = 0.7;
+      octx.lineWidth = 1.25;
+      octx.strokeStyle = octx.fillStyle;
+      octx.stroke();
+    } else if (hover) {
+      octx.globalAlpha = 0.55;
+      octx.beginPath();
+      octx.arc(hover.x, hover.y, 4, 0, Math.PI * 2);
+      octx.fill();
+    }
     octx.globalAlpha = 1;
   }
 
@@ -243,12 +297,19 @@ export function inkPad({ onStroke = () => {} } = {}) {
     } catch {
       /* synthetic or already-released pointer */
     }
+    hideHover();
+    if (erasing) {
+      eraseLog = [];
+      current = { id: e.pointerId, type: e.pointerType, erasing: true };
+      eraseWith(e);
+      update();
+      return;
+    }
     const pts = [pointerFrom(e)];
     strokes.push(pts);
     current = { id: e.pointerId, type: e.pointerType, pts };
     queued = [];
     setPredicted([]);
-    hideHover();
     update();
     redraw();
     onStroke(e);
@@ -256,8 +317,20 @@ export function inkPad({ onStroke = () => {} } = {}) {
 
   canvas.addEventListener('pointermove', (e) => {
     if (ignored(e)) return;
+    if (current?.erasing) {
+      if (e.pointerId !== current.id) return;
+      e.preventDefault();
+      eraseWith(e);
+      return;
+    }
     // Apple Pencil hover: pointermove with no buttons, pen only.
     if (!current && e.pointerType === 'pen' && e.buttons === 0) {
+      if (erasing) {
+        eraserAt = pointerFrom(e);
+        el.dataset.hover = '1';
+        drawOverlay();
+        return;
+      }
       showHover(pointerFrom(e));
       return;
     }
@@ -272,18 +345,37 @@ export function inkPad({ onStroke = () => {} } = {}) {
 
   const end = (e) => {
     if (!current || e.pointerId !== current.id) return;
+    if (current.erasing) {
+      eraseWith(e);
+      if (eraseLog?.length) history.push({ kind: 'erase', items: eraseLog });
+      eraseLog = null;
+      eraserAt = null;
+      current = null;
+      drawOverlay();
+      redraw();
+      update();
+      return;
+    }
+    const finished = current.pts;
     const { real } = ingest(e);
     if (real.length) queued.push(...real);
     applyQueued();
     setPredicted([]);
     cancelFrame();
     current = null;
+    history.push({ kind: 'add', stroke: finished });
     redraw();
     update();
   };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
-  canvas.addEventListener('pointerleave', () => hideHover());
+  canvas.addEventListener('pointerleave', () => {
+    hideHover();
+    if (!current) {
+      eraserAt = null;
+      drawOverlay();
+    }
+  });
   // iOS: no magnifier, selection or scrolling while writing.
   canvas.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
   if (typeof ResizeObserver === 'function') new ResizeObserver(resize).observe(stage);
@@ -291,10 +383,14 @@ export function inkPad({ onStroke = () => {} } = {}) {
   function clear() {
     cancelFrame();
     strokes.length = 0;
+    history.length = 0;
     queued = [];
     setPredicted([]);
+    eraseLog = null;
+    eraserAt = null;
     current = null;
     redraw();
+    drawOverlay();
     update();
   }
 

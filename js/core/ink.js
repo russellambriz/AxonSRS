@@ -1,8 +1,11 @@
 /**
  * Pure geometry for the handwriting pad: pressure/tilt width, midpoint
  * quadratic smoothing, and separating real pointer samples from the
- * predicted tail. No DOM.
+ * predicted tail, and stroke-level eraser hit-testing. No DOM.
  */
+
+/** Eraser disc radius in CSS pixels. A hit removes the whole stroke. */
+export const ERASER_RADIUS = 14;
 
 const MIN_WIDTH = 1.15;
 const PRESSURE_SPAN = 3.7;
@@ -179,4 +182,44 @@ export function splitPointerSamples(previous, coalesced, predicted) {
     prev = p;
   }
   return { real, tail };
+}
+
+function distToSegment(px, py, ax, ay, bx, by) {
+  const dx = bx - ax;
+  const dy = by - ay;
+  const len2 = dx * dx + dy * dy;
+  if (len2 === 0) return Math.hypot(px - ax, py - ay);
+  const t = clamp(((px - ax) * dx + (py - ay) * dy) / len2, 0, 1);
+  return Math.hypot(px - (ax + t * dx), py - (ay + t * dy));
+}
+
+/**
+ * True when the eraser disc touches this stroke: a single dot, or any raw
+ * segment between samples (not only the vertices). Stroke thickness counts.
+ * The caller removes the whole stroke, so Undo can put it back.
+ */
+export function strokeHits(points, x, y, radius = ERASER_RADIUS) {
+  if (!points?.length || !(radius >= 0) || !Number.isFinite(x) || !Number.isFinite(y)) return false;
+  const reach = (pt) => radius + widthOf(pt) / 2;
+  if (points.length === 1) return Math.hypot(points[0].x - x, points[0].y - y) <= reach(points[0]);
+  for (let i = 1; i < points.length; i++) {
+    const a = points[i - 1];
+    const b = points[i];
+    if (distToSegment(x, y, a.x, a.y, b.x, b.y) <= Math.max(reach(a), reach(b))) return true;
+  }
+  return false;
+}
+
+/**
+ * One eraser dab. Returns the strokes that were touched (with the index
+ * they had) and the ones that remain, in order. Does not mutate `strokes`.
+ */
+export function eraseStrokes(strokes, x, y, radius = ERASER_RADIUS) {
+  const kept = [];
+  const removed = [];
+  (strokes || []).forEach((stroke, index) => {
+    if (strokeHits(stroke, x, y, radius)) removed.push({ index, stroke });
+    else kept.push(stroke);
+  });
+  return { kept, removed };
 }

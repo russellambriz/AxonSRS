@@ -1228,6 +1228,7 @@ body.studying { overflow: hidden; }
   touch-action: none;
 }
 .ink-pad[data-hover='1'] .ink-canvas { cursor: none; }
+.ink-pad.erasing .ink-canvas { cursor: cell; }
 .ink-tools { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; }
 .study:not(.ink-mode) .ink-pad, .study.ink-mode:not([data-phase='question']) .ink-pad { display: none; }
 .study.ink-mode .answer-input, .study.ink-mode .symbols, .study.ink-mode .live-preview, .study.ink-mode .voice-btn { display: none; }
