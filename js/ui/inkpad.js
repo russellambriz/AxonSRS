@@ -7,6 +7,8 @@
  * Strokes are smoothed with midpoint quadratics and batched onto one
  * animation frame. getPredictedEvents(), when the browser provides it,
  * draws a tail that the next frame replaces — it is never stored.
+ * A pen hovering above the pad (buttons === 0) shows a preview dot; a
+ * finger or a mouse never does.
  */
 
 import { h } from './dom.js';
@@ -17,19 +19,23 @@ const HINT = 'Write your answer, then check it';
 
 export function inkPad({ onStroke = () => {} } = {}) {
   const canvas = h('canvas', { class: 'ink-canvas', role: 'img', 'aria-label': 'Handwriting pad. Write your answer with Apple Pencil, a stylus or a finger.', dataset: { strokes: '0', points: '0' } });
+  const overlay = h('canvas', { class: 'ink-overlay', 'aria-hidden': 'true' });
   const ctx = canvas.getContext('2d');
+  const octx = overlay.getContext('2d');
+  const stage = h('div', { class: 'ink-stage' }, canvas, overlay);
   const strokes = [];
   let current = null;
   let penSeen = false;
   let dpr = 1;
   let queued = [];
   let predicted = [];
+  let hover = null;
   let rafId = 0;
 
   const undoBtn = h('button', { class: 'btn small ghost', type: 'button', disabled: true, onclick: () => undo() }, icon('undo'), 'Undo stroke');
   const clearBtn = h('button', { class: 'btn small ghost', type: 'button', disabled: true, onclick: () => clear() }, icon('trash'), 'Clear');
   const hintEl = h('span', { class: 'faint small ink-hint' }, HINT);
-  const el = h('div', { class: 'ink-pad', dataset: { predicted: '0' } }, canvas, h('div', { class: 'ink-tools' }, hintEl, h('div', { class: 'row tight' }, undoBtn, clearBtn)));
+  const el = h('div', { class: 'ink-pad', dataset: { predicted: '0', hover: '0' } }, stage, h('div', { class: 'ink-tools' }, hintEl, h('div', { class: 'row tight' }, undoBtn, clearBtn)));
 
   function pointerFrom(e) {
     const r = canvas.getBoundingClientRect();
@@ -132,14 +138,45 @@ export function inkPad({ onStroke = () => {} } = {}) {
     update();
   }
 
+  function drawOverlay() {
+    octx.setTransform(1, 0, 0, 1, 0, 0);
+    octx.clearRect(0, 0, overlay.width, overlay.height);
+    if (!hover || !overlay.width) return;
+    octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    octx.fillStyle = getComputedStyle(canvas).color;
+    octx.globalAlpha = 0.55;
+    octx.beginPath();
+    octx.arc(hover.x, hover.y, 4, 0, Math.PI * 2);
+    octx.fill();
+    octx.globalAlpha = 1;
+  }
+
+  function showHover(pt) {
+    hover = pt;
+    el.dataset.hover = '1';
+    drawOverlay();
+  }
+
+  function hideHover() {
+    if (!hover && el.dataset.hover !== '1') return;
+    hover = null;
+    el.dataset.hover = '0';
+    drawOverlay();
+  }
+
   function resize() {
     const r = canvas.getBoundingClientRect();
     if (!r.width || !r.height) return;
     dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(r.width * dpr);
-    canvas.height = Math.round(r.height * dpr);
+    const w = Math.round(r.width * dpr);
+    const hPx = Math.round(r.height * dpr);
+    canvas.width = w;
+    canvas.height = hPx;
+    overlay.width = w;
+    overlay.height = hPx;
     applyQueued();
     redraw();
+    drawOverlay();
   }
 
   function eventList(e, name) {
@@ -173,13 +210,20 @@ export function inkPad({ onStroke = () => {} } = {}) {
     current = { id: e.pointerId, type: e.pointerType, pts };
     queued = [];
     setPredicted([]);
+    hideHover();
     update();
     redraw();
     onStroke(e);
   });
 
   canvas.addEventListener('pointermove', (e) => {
+    // Apple Pencil hover: pointermove with no buttons, pen only.
+    if (!current && e.pointerType === 'pen' && e.buttons === 0) {
+      showHover(pointerFrom(e));
+      return;
+    }
     if (!current || e.pointerId !== current.id) return;
+    if (hover) hideHover();
     e.preventDefault();
     const { real, tail } = ingest(e);
     if (real.length) queued.push(...real);
@@ -200,9 +244,10 @@ export function inkPad({ onStroke = () => {} } = {}) {
   };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
+  canvas.addEventListener('pointerleave', () => hideHover());
   // iOS: no magnifier, selection or scrolling while writing.
   canvas.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
-  if (typeof ResizeObserver === 'function') new ResizeObserver(resize).observe(canvas);
+  if (typeof ResizeObserver === 'function') new ResizeObserver(resize).observe(stage);
 
   function clear() {
     cancelFrame();
