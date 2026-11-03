@@ -2,7 +2,10 @@
  * Handwriting pad: freehand ink from Apple Pencil, another stylus, a
  * finger or a mouse. Nothing is recognised; the ink is shown back next to
  * the correct answer so the learner can grade it. Once a pen has touched
- * the pad, finger and palm touches are ignored (palm rejection).
+ * the pad on this device, finger and palm touches are ignored from then
+ * on, including the first stroke of a later session. Settings → Study →
+ * Pencil only ignores every touch even before a pen is seen. While a pen
+ * stroke is down, every other pointer is ignored.
  *
  * Strokes are smoothed with midpoint quadratics and batched onto one
  * animation frame. getPredictedEvents(), when the browser provides it,
@@ -13,9 +16,18 @@
 
 import { h } from './dom.js';
 import { icon } from './icons.js';
+import { local } from './local.js';
 import { paintSamples, splitPointerSamples, strokeWidth } from '../core/ink.js';
 
 const HINT = 'Write your answer, then check it';
+/** Set after a pen has touched a pad on this device. */
+export const PEN_SEEN_KEY = 'axon-pen-seen';
+/** Settings → Study. When '1', the pad ignores all touch input. */
+export const PENCIL_ONLY_KEY = 'axon-pencil-only';
+
+function pencilOnly() {
+  return local.get(PENCIL_ONLY_KEY) === '1';
+}
 
 export function inkPad({ onStroke = () => {} } = {}) {
   const canvas = h('canvas', { class: 'ink-canvas', role: 'img', 'aria-label': 'Handwriting pad. Write your answer with Apple Pencil, a stylus or a finger.', dataset: { strokes: '0', points: '0' } });
@@ -25,7 +37,7 @@ export function inkPad({ onStroke = () => {} } = {}) {
   const stage = h('div', { class: 'ink-stage' }, canvas, overlay);
   const strokes = [];
   let current = null;
-  let penSeen = false;
+  let penSeen = local.get(PEN_SEEN_KEY) === '1';
   let dpr = 1;
   let queued = [];
   let predicted = [];
@@ -35,7 +47,29 @@ export function inkPad({ onStroke = () => {} } = {}) {
   const undoBtn = h('button', { class: 'btn small ghost', type: 'button', disabled: true, onclick: () => undo() }, icon('undo'), 'Undo stroke');
   const clearBtn = h('button', { class: 'btn small ghost', type: 'button', disabled: true, onclick: () => clear() }, icon('trash'), 'Clear');
   const hintEl = h('span', { class: 'faint small ink-hint' }, HINT);
-  const el = h('div', { class: 'ink-pad', dataset: { predicted: '0', hover: '0' } }, stage, h('div', { class: 'ink-tools' }, hintEl, h('div', { class: 'row tight' }, undoBtn, clearBtn)));
+  const el = h('div', { class: 'ink-pad', dataset: { predicted: '0', hover: '0', penSeen: penSeen ? '1' : '0' } }, stage, h('div', { class: 'ink-tools' }, hintEl, h('div', { class: 'row tight' }, undoBtn, clearBtn)));
+
+  /** Touch is ignored after a pen has been used here, or whenever Pencil only is on. Any second pointer is ignored while a stroke — a pen stroke in particular — is active. */
+  function ignored(e) {
+    if (current && e.pointerId !== current.id) return true;
+    if (e.pointerType === 'touch' && (penSeen || pencilOnly())) return true;
+    return false;
+  }
+
+  function rememberPen() {
+    if (penSeen) return;
+    penSeen = true;
+    el.dataset.penSeen = '1';
+    local.set(PEN_SEEN_KEY, '1');
+    syncLabel();
+  }
+
+  function syncLabel() {
+    canvas.setAttribute('aria-label', pencilOnly() || penSeen
+      ? 'Handwriting pad. Write with Apple Pencil or a stylus. Finger touches are ignored.'
+      : 'Handwriting pad. Write your answer with Apple Pencil, a stylus or a finger.');
+  }
+  syncLabel();
 
   function pointerFrom(e) {
     const r = canvas.getBoundingClientRect();
@@ -196,9 +230,13 @@ export function inkPad({ onStroke = () => {} } = {}) {
   }
 
   canvas.addEventListener('pointerdown', (e) => {
-    if (e.pointerType === 'pen') penSeen = true;
-    else if (penSeen && e.pointerType === 'touch') return;
-    if (e.button > 0 || current) return;
+    if (e.pointerType === 'pen') rememberPen();
+    if (ignored(e)) {
+      // Keep a resting palm from scrolling the page, but do not start a stroke.
+      if (e.pointerType === 'touch') e.preventDefault();
+      return;
+    }
+    if (e.button > 0) return;
     e.preventDefault();
     try {
       canvas.setPointerCapture(e.pointerId);
@@ -217,6 +255,7 @@ export function inkPad({ onStroke = () => {} } = {}) {
   });
 
   canvas.addEventListener('pointermove', (e) => {
+    if (ignored(e)) return;
     // Apple Pencil hover: pointermove with no buttons, pen only.
     if (!current && e.pointerType === 'pen' && e.buttons === 0) {
       showHover(pointerFrom(e));
