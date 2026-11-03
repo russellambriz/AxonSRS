@@ -1230,7 +1230,8 @@ body.studying { overflow: hidden; }
 .ink-pad[data-hover='1'] .ink-canvas { cursor: none; }
 .ink-pad.erasing .ink-canvas { cursor: cell; }
 .ink-tools { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
-.study:not(.ink-mode) .ink-pad, .study.ink-mode:not([data-phase='question']) .ink-pad { display: none; }
+.study:not(.ink-mode) .ink-pad,
+.study.ink-mode:not([data-phase='question']):not([data-phase='retype']) .ink-pad { display: none; }
 .study.ink-mode .answer-input, .study.ink-mode .symbols, .study.ink-mode .live-preview, .study.ink-mode .voice-btn { display: none; }
 .study.ink-mode .answer-row .submit-btn { flex: 1; }
 /* Wide study screens (iPad landscape): prompt on the left, a tall pad on the right.

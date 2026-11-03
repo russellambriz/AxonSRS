@@ -203,7 +203,12 @@ class StudyScreen {
     this.voiceBtn = h('button', { class: 'btn icon submit-btn voice-btn', type: 'button', 'aria-label': 'Answer by voice', title: 'Voice input (Alt+M)', hidden: true }, icon('mic'));
     this.submitBtn = h('button', { class: 'btn primary submit-btn', type: 'button', 'aria-label': 'Submit answer' }, icon('check'));
     this.actionsEl = h('div', { class: 'actions' });
-    this.ink = inkPad({ onStroke: () => { this.trial.onInkStroke(); this.cancelAutoAdvance(); } });
+    this.ink = inkPad({ onStroke: () => {
+      // Retyping the correct answer is copying, not a new attempt, so it does not move the trial clock.
+      if (this.phase !== 'question') return;
+      this.trial.onInkStroke();
+      this.cancelAutoAdvance();
+    } });
     this.composer = h('div', { class: 'composer' }, h('div', { class: 'composer-inner' }, this.liveEl, this.symbolsEl, this.ink.el, h('div', { class: 'answer-row' }, this.input, this.voiceBtn, this.submitBtn), this.actionsEl));
     this.root = h('div', { class: ['study', this.inkMode && 'ink-mode'], role: 'region', 'aria-label': 'Study session' }, top, this.stage, this.composer);
     // Keep focus in the input when tapping composer controls.
@@ -411,6 +416,7 @@ class StudyScreen {
     };
     this.input.value = '';
     this.ink.clear();
+    this.ink.setHint('Write your answer, then check it');
     this.input.className = 'answer-input';
     this.input.placeholder = content.answerGroups.length > 1 ? `${content.answerGroups.length} answers separated by ;` : 'Type your answer';
     this.input.setAttribute('inputmode', 'text');
@@ -609,7 +615,8 @@ class StudyScreen {
       if (fromEnter && !this.enterArmed) return;
       this.advance();
     } else if (this.phase === 'retype') {
-      this.checkRetype();
+      if (this.inkMode && this.current?.ink) this.finishInkCopy();
+      else this.checkRetype();
     } else if (this.phase === 'error') {
       this.retrySave();
     }
@@ -821,12 +828,20 @@ class StudyScreen {
     this.recordSiblingExposure();
     this.renderFeedback({});
     this.revealOcclusion();
-    const needsRetype = !correct && store.global.requireRetype !== false && !this.inkMode;
+    // A wrong handwritten answer is reinforced on the pad. Typing mode is unchanged.
+    // Reveal in ink mode is not an ink answer, so it does not open the pad.
+    const needsRetype = !correct && store.global.requireRetype !== false && (!this.inkMode || !!cur.ink);
     if (needsRetype) {
       this.setPhase('retype');
-      this.input.value = '';
-      this.input.className = 'answer-input incorrect retype';
-      this.input.placeholder = 'Retype the correct answer to continue';
+      if (cur.ink) {
+        this.ink.clear();
+        this.ink.setHint('Write the correct answer once');
+        requestAnimationFrame(() => this.ink.resize());
+      } else {
+        this.input.value = '';
+        this.input.className = 'answer-input incorrect retype';
+        this.input.placeholder = 'Retype the correct answer to continue';
+      }
       this.retypeStarted = performance.now();
     } else {
       this.setPhase('feedback');
@@ -955,9 +970,9 @@ class StudyScreen {
       sol.append(body);
       parts.push(sol);
     }
-    if (this.phase === 'retype' || (!correct && !overridden && store.global.requireRetype !== false && !pending && !this.inkMode)) {
-      parts.push(h('div', { class: 'faint small' }, 'Type the correct answer once to reinforce it (this is not counted as recall).'));
-    }
+    const reinforce = !pending && !correct && !overridden && store.global.requireRetype !== false;
+    if (reinforce && cur.ink) parts.push(h('div', { class: 'faint small' }, 'Write the correct answer once. This is not counted as recall.'));
+    else if ((this.phase === 'retype' || reinforce) && !this.inkMode) parts.push(h('div', { class: 'faint small' }, 'Type the correct answer once to reinforce it (this is not counted as recall).'));
     replace(this.feedbackEl, h('section', { class: ['feedback', cur.ink && pending ? 'pending' : correct || overridden ? 'correct' : 'incorrect'], 'aria-label': 'Feedback' }, parts));
     resolveMedia(this.feedbackEl, mediaFetcher);
     const why = ev?.grading && store.global.showWhy !== false && !pending && ev.grading.mode !== 'manual' ? ev.grading.explanation : '';
@@ -995,6 +1010,8 @@ class StudyScreen {
       const correct = cur.match?.correct || cur.override;
       if (cur.ink) {
         // Self-graded: the grade is already the learner's own judgement.
+        // A miss still offers the same retype bypass as a typed answer.
+        if (p === 'retype') left.push(act('Skip retyping', 'skip', () => this.bypassRetype(), '⌥B'));
       } else if (!correct) {
         const revealed = cur.trial?.assistance.revealed || cur.trial?.assistance.solutionViewed;
         if (cur.trial?.responseText && !revealed) left.push(act('Correct & save alias', 'check', () => this.override('alias'), '⌥A', { kind: '' }));
@@ -1012,8 +1029,10 @@ class StudyScreen {
     replace(this.actionsEl, h('div', { class: 'left' }, left), h('div', { class: 'right' }, right));
     this.submitBtn.hidden = !['question', 'retype', 'feedback', 'error'].includes(p);
     const inkCheck = p === 'question' && this.inkMode;
-    this.submitBtn.setAttribute('aria-label', p === 'feedback' ? 'Continue to the next card (Enter)' : p === 'retype' ? 'Check retyped answer' : inkCheck ? 'Check your handwritten answer' : 'Submit answer');
+    const inkDone = p === 'retype' && this.inkMode && !!cur?.ink;
+    this.submitBtn.setAttribute('aria-label', p === 'feedback' ? 'Continue to the next card (Enter)' : inkDone ? 'Done' : p === 'retype' ? 'Check retyped answer' : inkCheck ? 'Check your handwritten answer' : 'Submit answer');
     if (p === 'feedback') replace(this.submitBtn, h('span', {}, 'Continue'), icon('chevronRight'));
+    else if (inkDone) replace(this.submitBtn, h('span', {}, 'Done'), icon('check'));
     else if (inkCheck) replace(this.submitBtn, h('span', {}, 'Check'), icon('check'));
     else replace(this.submitBtn, icon('check'));
   }
@@ -1079,9 +1098,26 @@ class StudyScreen {
     this.advance();
   }
 
+  /** The pad is not recognised, so Done records the copy and moves on. It is never a second review. */
+  finishInkCopy() {
+    if (this.phase !== 'retype' || !this.current?.ink) return;
+    if (this.ink.isEmpty()) {
+      announce('Write the correct answer once.', { assertive: true });
+      return;
+    }
+    this.recordCopy(false, '');
+    this.ink.clear();
+    this.ink.setHint('Write your answer, then check it');
+    this.enterArmed = false;
+    this.setPhase('feedback');
+    this.advance();
+  }
+
   bypassRetype() {
     if (this.phase !== 'retype') return;
     this.recordCopy(true, '');
+    this.ink.clear();
+    this.ink.setHint('Write your answer, then check it');
     this.setPhase('feedback');
     this.input.className = 'answer-input incorrect';
     this.input.placeholder = 'Press Enter to continue';

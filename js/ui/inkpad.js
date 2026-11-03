@@ -401,6 +401,10 @@ export function inkPad({ onStroke = () => {} } = {}) {
     isEmpty: () => !strokes.length && !queued.length,
     strokeCount: () => strokes.length,
     clear,
+    /** Prompt under the pad, for example the retype instruction. */
+    setHint(text) {
+      hintEl.textContent = text || HINT;
+    },
     /** The ink cropped to what was written: PNG data URL and size in CSS px (or null). The predicted tail is not included. */
     snapshot() {
       applyQueued();

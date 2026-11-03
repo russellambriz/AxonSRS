@@ -152,7 +152,8 @@ export const tests = [
       await page.getByRole('img', { name: 'Your handwritten answer' }).waitFor();
       assert.ok((await page.textContent('.feedback .answer')).trim().length > 0, 'the correct answer is shown to compare');
       await page.getByRole('button', { name: /^Again/ }).click();
-      assert.equal(await waitPhase(page, ['feedback']), 'feedback', 'no retype step with the pad');
+      assert.equal(await waitPhase(page, ['retype']), 'retype', 'a wrong handwritten answer is written once');
+      await page.getByText('Write the correct answer once').first().waitFor();
       await page.getByText('You marked it wrong').waitFor();
       assert.equal(await page.getByRole('button', { name: 'Mark correct' }).count(), 0, 'no overrides on a self-graded answer');
       let reviews = (await idbAll(page, 'events')).filter((e) => e.type === 'review');
@@ -163,8 +164,14 @@ export const tests = [
       assert.equal(reviews[0].modality.kind, 'handwriting');
       assert.equal(reviews[0].grading.mode, 'manual');
       assert.ok(reviews[0].grading.measurements.raw.latencyMs > 0, 'latency runs to the first stroke');
-      await page.getByRole('button', { name: /^Continue/ }).click();
-      await waitPhase(page, ['question']);
+      await stroke(page);
+      await page.getByRole('button', { name: 'Done' }).click();
+      assert.equal(await waitPhase(page, ['question']), 'question');
+      const copies = (await idbAll(page, 'events')).filter((e) => e.type === 'copy');
+      assert.equal(copies.length, 1, 'writing it down is a copy, not a review');
+      assert.equal(copies[0].bypassed, false);
+      assert.equal(copies[0].targetId, reviews[0].id);
+      assert.equal((await idbAll(page, 'events')).filter((e) => e.type === 'review').length, 1);
       assert.equal(await page.getAttribute('.ink-canvas', 'data-strokes'), '0', 'a fresh pad for the next card');
       await stroke(page);
       await page.keyboard.press('Enter');
