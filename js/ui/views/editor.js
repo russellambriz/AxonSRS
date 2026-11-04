@@ -21,7 +21,8 @@ import { retrievability, STATE_NAMES, RATING_LABELS } from '../../core/scheduler
 import { occlusionEditor } from '../occlusion.js';
 import { percent } from '../dom.js';
 import { inkPad } from '../inkpad.js';
-import { PAPER, penColor } from '../../core/pencil.js';
+import { PAPER, isInkAnswer, penColor } from '../../core/pencil.js';
+import { inkField } from '../inkfield.js';
 
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif'];
 const AUDIO_TYPES = /^audio\/(mpeg|mp4|ogg|webm|wav|x-wav|aac)$/;
@@ -107,14 +108,21 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
   for (const t of [frontInput, backInput, hintInput, explInput]) t.addEventListener('focus', () => { lastFocused = t; });
 
   const occlusionHost = h('div', { class: 'stack' });
-  const frontField = h('div', { class: 'field' }, h('div', { class: 'row between' }, frontLabel, h('div', { class: 'row tight' }, clozeBtn, imageBtn, drawBtn)), frontInput, frontHint);
-  const backField = h('div', { class: 'field' }, backLabel, backInput, backHint);
+  const frontInk = inkField({ which: 'front', label: 'Front', textarea: frontInput, initial: draft.front, onChange: () => { applyKind(); markDirty(); } });
+  const backInk = inkField({ which: 'back', label: 'Back', textarea: backInput, initial: draft.back, onChange: () => { applyKind(); markDirty(); } });
+  const frontField = h('div', { class: 'field' }, h('div', { class: 'row between' }, frontLabel, h('div', { class: 'row tight' }, frontInk.toggle, clozeBtn, imageBtn, drawBtn)), frontInk.host, frontInput, frontHint);
+  const backField = h('div', { class: 'field' }, h('div', { class: 'row between' }, backLabel, backInk.toggle), backInk.host, backInput, backHint);
 
   function applyKind() {
     const kind = draft.kind;
+    const basic = kind === 'basic';
     clozeBtn.hidden = kind !== 'cloze';
     occlusionHost.hidden = kind !== 'occlusion';
     backField.hidden = kind === 'occlusion';
+    frontInk.setVisible(basic);
+    backInk.setVisible(basic && kind !== 'occlusion');
+    imageBtn.hidden = basic && frontInk.isInk();
+    drawBtn.hidden = basic && frontInk.isInk();
     if (kind === 'cloze') {
       frontLabel.textContent = 'Text with clozes';
       frontHint.textContent = 'Wrap hidden text in {{c1::…}}. Different numbers become separate cards; the same number is hidden together. Add a hint with {{c1::answer::hint}} and alternatives with {{c1::a|b}}.';
@@ -126,9 +134,13 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
       renderOcclusionEditor();
     } else {
       frontLabel.textContent = 'Front';
-      frontHint.textContent = 'In “Back → Front” or “Both” decks this side is also typed as an answer, and | separates accepted answers (type \\| for a literal pipe).';
+      frontHint.textContent = frontInk.isInk()
+        ? 'This handwriting is saved as ink. Type switches to the keyboard, where Scribble still works.'
+        : 'In “Back → Front” or “Both” decks this side is also typed as an answer, and | separates accepted answers (type \\| for a literal pipe).';
       backLabel.textContent = 'Back';
-      backHint.textContent = 'Separate accepted answers with | (type \\| for a literal pipe). A back that is only a drawing is the handwritten answer: you grade it yourself, and it is not matched.';
+      backHint.textContent = backInk.isInk()
+        ? 'This handwriting is the answer. You grade it yourself when you review. Type switches to text Axon can match.'
+        : 'Separate accepted answers with | (type \\| for a literal pipe). A back that is only a drawing is the handwritten answer: you grade it yourself, and it is not matched.';
     }
   }
 
@@ -172,7 +184,7 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
   const saveNextBtn = isNew ? button('Add & next', { onclick: () => save(true) }) : null;
   const footer = h('div', { class: 'row end' },
     !isNew && !embedded ? button('Duplicate', { iconName: 'copy', onclick: duplicate }) : null,
-    !isNew && !embedded ? button('Delete', { kind: 'danger', iconName: 'trash', onclick: remove }) : null,
+    !isNew && !embedded ? button('Delete card', { kind: 'danger', iconName: 'trash', onclick: remove }) : null,
     h('span', { class: 'grow' }),
     button('Cancel', { onclick: cancel }),
     saveNextBtn, saveBtn);
@@ -359,7 +371,11 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
   async function renderPreview() {
     const d = deck();
     const v = validateCard(draft);
-    const issues = [...v.errors];
+    const issues = v.errors.filter((e) => {
+      if (e === 'Front is empty' && frontInk.isInk() && (!frontInk.pad.isEmpty() || (!frontInk.touched() && isInkAnswer(draft.front[0] || '')))) return false;
+      if (e === 'Back is empty' && backInk.isInk() && (!backInk.pad.isEmpty() || (!backInk.touched() && isInkAnswer(draft.back[0] || '')))) return false;
+      return true;
+    });
     const notes = [];
     const s = effectiveCardSettings(draft, d);
     const keys = draft.kind === 'basic' ? ['fwd', 'rev'] : unitKeys(draft, d);
@@ -372,7 +388,16 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
       const c = unitContent(draft, key);
       const label = key === 'fwd' ? 'Front → Back' : key === 'rev' ? 'Back → Front' : key.startsWith('o-') ? `Mask ${key.slice(2)}` : `Cloze ${key.startsWith('c') ? key.slice(1) : '(unnumbered)'}`;
       const answers = h('div', { class: 'row tight' });
-      for (const group of c.answerGroups) {
+      const inkPrompt = draft.kind === 'basic' && ((key === 'fwd' && frontInk.isInk()) || (key === 'rev' && backInk.isInk()));
+      const inkAnswer = draft.kind === 'basic' && ((key === 'fwd' && backInk.isInk()) || (key === 'rev' && frontInk.isInk()));
+      const promptField = key === 'rev' ? backInk : frontInk;
+      const promptStored = key === 'rev' ? (draft.back[0] || '') : (draft.front[0] || '');
+      if (inkAnswer) {
+        const side = key === 'fwd' ? backInk : frontInk;
+        const stored = key === 'fwd' ? (draft.back[0] || '') : (draft.front[0] || '');
+        answers.append(inkPreview(side, stored, key === 'fwd' ? 'Handwritten answer' : 'Handwritten prompt'));
+      }
+      for (const group of inkAnswer ? [] : c.answerGroups) {
         for (const a of group) {
           const chip = h('span', { class: 'chip' });
           chip.innerHTML = answerHtml(a, s.answerMode);
@@ -392,7 +417,8 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
       }
       blocks.push(h('div', { class: 'stack', style: { gap: '8px' } },
         h('div', { class: 'faint tiny', style: { textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: 600 } }, label),
-        c.prompt ? richBlock(c.prompt, { class: 'preview-box', media: mediaFetcher }) : h('div', { class: 'preview-box faint' }, '(empty prompt)'),
+        inkPrompt ? inkPreview(promptField, promptStored, key === 'rev' ? 'Handwritten answer' : 'Handwritten prompt') : (c.prompt ? richBlock(c.prompt, { class: 'preview-box', media: mediaFetcher }) : h('div', { class: 'preview-box faint' }, '(empty prompt)')),
+        inkAnswer ? h('div', { class: 'faint small' }, 'You grade this handwriting yourself. It is not matched.') : null,
         c.instruction ? h('div', { class: 'faint small' }, c.instruction) : null,
         h('div', { class: 'row tight' }, h('span', { class: 'faint small' }, 'Accepted:'), answers)));
     }
@@ -404,7 +430,41 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
   }
 
   // ---------------- actions ----------------
+  function inkPreview(field, stored, alt) {
+    if (field.touched() && !field.pad.isEmpty()) {
+      const snap = field.pad.snapshot({ background: PAPER });
+      if (snap) return h('img', { class: 'editor-ink-preview', alt, src: snap.src });
+    }
+    if (!field.touched() && isInkAnswer(stored)) return richBlock(stored, { class: 'preview-box', media: mediaFetcher });
+    return h('div', { class: 'preview-box faint' }, alt === 'Handwritten answer' ? 'Write the answer' : 'Write on the page');
+  }
+
+  async function inkToList(field, alt, filename) {
+    if (!field.touched() && field.pad.isEmpty()) return null;
+    if (field.pad.isEmpty()) return [];
+    const snap = field.pad.snapshot({ background: PAPER });
+    if (!snap) return [];
+    const blob = dataUrlToBlob(snap.src);
+    const file = new File([blob], filename, { type: 'image/png' });
+    const id = await storeImage(file);
+    draft.media = [...new Set([...(draft.media || []), id])];
+    return [`![${alt}](axon-media:${id})`];
+  }
+
+  async function applyInkFields() {
+    if (draft.kind !== 'basic') return;
+    if (frontInk.isInk()) {
+      const next = await inkToList(frontInk, 'Handwritten prompt', 'handwritten-prompt.png');
+      if (next) draft.front = next;
+    } else draft.front = decodeAnswers(frontInput.value);
+    if (backInk.isInk()) {
+      const next = await inkToList(backInk, 'Handwritten answer', 'handwritten-answer.png');
+      if (next) draft.back = next;
+    } else draft.back = decodeAnswers(backInput.value);
+  }
+
   async function save(addAnother) {
+    await applyInkFields();
     const v = validateCard(draft);
     if (!v.valid) {
       renderPreview();
@@ -538,9 +598,11 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
   renderHistory();
   if (!embedded) {
     setTimeout(() => {
-      const target = focus === 'hint' ? hintInput : frontInput;
-      target.focus();
-      if (focus) target.scrollIntoView({ block: 'center' });
+      const target = focus === 'hint' ? hintInput : (frontInk.isInk() ? null : frontInput);
+      if (target) {
+        target.focus();
+        if (focus) target.scrollIntoView({ block: 'center' });
+      }
     }, 30);
   }
   if (!embedded) app.leaveGuard = async () => (!dirty || confirmDialog({ title: 'Leave without saving?', message: 'Your changes to this card will be lost.', confirmLabel: 'Leave', danger: true }));
