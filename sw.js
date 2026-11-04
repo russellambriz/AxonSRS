@@ -12,12 +12,14 @@
  *   IndexedDB is never touched.
  * - fetch: same-origin GETs are served cache-first from the current
  *   cache; navigations fall back to the cached index.html (hash routing,
- *   so every screen works offline). Cross-origin requests (GitHub API for
- *   sync) always go to the network and are never cached.
+ *   so every screen works offline). The worker script itself is never
+ *   answered from the cache, so a browser that asks this worker for
+ *   sw.js still hears about the next release. Cross-origin requests
+ *   (GitHub API for sync) always go to the network and are never cached.
  * All paths are relative so the app works under /AxonSRS/ on GitHub Pages.
  */
 
-const CACHE_NAME = 'axon-v5';
+const CACHE_NAME = 'axon-v6';
 
 const PRECACHE = [
   './',
@@ -162,6 +164,9 @@ self.addEventListener('fetch', (event) => {
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
   if (url.origin !== self.location.origin) return;
+  // Do not answer the worker script from the cache. A cache-first sw.js
+  // would tell the browser the installed copy is still current.
+  if (url.pathname.endsWith('/sw.js')) return;
   if (req.mode === 'navigate') {
     event.respondWith((async () => {
       const cache = await caches.open(CACHE_NAME);

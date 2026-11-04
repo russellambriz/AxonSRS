@@ -62,6 +62,7 @@ test('cache name is versioned and matches js/config.js', () => {
   assert.match(CACHE_NAME, /^axon-v\d+$/);
   assert.match(APP_VERSION, /^\d+\.\d+\.\d+/);
   assert.match(read('sw.js'), /n\.startsWith\('axon-'\) && n !== CACHE_NAME/, 'only Axon caches are cleaned up');
+  assert.match(read('sw.js'), /if \(url\.pathname\.endsWith\('\/sw\.js'\)\) return;/, 'the worker script is fetched from the network, not the cache');
   assert.equal(/indexedDB/i.test(read('sw.js').replace(/\/\*[\s\S]*?\*\//g, '')), false, 'service worker never touches IndexedDB');
 });
 
