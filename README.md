@@ -832,7 +832,7 @@ installation prompts, speech recognition and system TTS voices are
 
 | Component | Version | Notes |
 | --- | --- | --- |
-| App | 1.0.4 | cache `axon-v5` |
+| App | 1.0.5 | cache `axon-v6` |
 | Scheduler | ts-fsrs 5.4.2 (FSRS-6, default parameters) + `axon-fuzz@1` | reference-checked against py-fsrs 6.3.2 |
 | Grading rules | `axon-fluency@1.1.0` | thresholds above; recorded on every review |
 | Reading/warm-up heuristic | `axon-reading@2` | can be disabled |
@@ -865,29 +865,45 @@ explicit, reversible migration is offered.
 
 ## Deploying to GitHub Pages
 
-The repository root *is* the site; there is no build step.
+The repository root *is* the site; there is no build step. Pages publishes
+one branch. It does not follow the default branch on its own.
 
-1. Push to `main`.
-2. In the repository on GitHub: **Settings → Pages → Build and deployment →
-   Source: Deploy from a branch → Branch: `main` / `(root)` → Save.**
-3. After about a minute the site is live at
-   <https://russellambriz.github.io/AxonSRS/>.
+The live site was still the 29 October 2026 release because **Settings →
+Pages → Build and deployment** is **Deploy from a branch**, and that branch
+is `main` / `(root)`. `main` is the 1.0.4 release (`axon-v5`). The default
+branch `claude/axonsrs-github-pages-setup-43lha6` has the merged work, and
+no Pages build has run for it. The last successful Pages deployment is
+Actions run 40807122488, branch `main`, 2026-10-29. Changing this source is
+a repository setting. A pull request cannot do it, and the token used here
+gets 403 from the Pages API.
+
+To publish the default branch:
+
+1. On GitHub: **Settings → Pages → Build and deployment → Source: Deploy
+   from a branch → Branch: `claude/axonsrs-github-pages-setup-43lha6` /
+   `(root)` → Save.**
+2. Wait about a minute. The site is
+   <https://russellambriz.github.io/AxonSRS/>. `sw.js` should then say a
+   cache name newer than `axon-v5`.
 
 `.nojekyll` makes Pages serve every file as-is. All URLs are relative
 (`./…`), including `manifest.json` (`start_url` and `scope` are `./`), icons,
 service-worker registration and its cache list.
 
-**Releasing a new version** (every push to `main` that changes shipped
-files):
+**Releasing a new version** (every change to shipped files on the branch
+Pages publishes):
 
 ```bash
-npm run release -- 1.0.3   # bumps CACHE_NAME (axon-vN → N+1) in sw.js and js/config.js,
+npm run release -- 1.0.5   # bumps CACHE_NAME (axon-vN → N+1) in sw.js and js/config.js,
                            # sets APP_VERSION, refreshes the pre-cache list
 npm run check              # pre-cache list current + unit tests
-git commit -am "Release 1.0.3" && git push origin main
 ```
 
-Without a new cache name, installed copies keep serving the old version.
+Commit that on a branch and merge it to the branch Pages is publishing.
+Without a new cache name, an installed copy keeps serving the old files.
+The new worker waits until you press **Update** on the bar across the top
+of the screen. It will not reload in the middle of a card. The worker
+script itself is not served from the cache, so the next release can be seen.
 
 ## Development
 
