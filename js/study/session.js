@@ -52,14 +52,21 @@ function queueContext(extra) {
 
 /**
  * Create and persist a session. Returns the session record.
- * opts: { mode, deckIds, tags, order, includeNew, keepSiblingsTogether, limit, recordAsReviews, planId }
+ * opts: { mode, deckIds, tags, order, includeNew, keepSiblingsTogether, limit, recordAsReviews, planId, recall }
+ * `recall` is this session only: normal (the deck's direction), reverse
+ * (Back → Front), or mixed. It does not change the deck setting.
  */
 export async function createSession(opts) {
   await app.cache.ensure();
-  const tctx = await todayContext();
-  const qctx = queueContext(tctx);
-  const mode = opts.mode || 'daily';
+  const recall = opts.recall === 'reverse' || opts.recall === 'mixed' ? opts.recall : 'normal';
   const deckIds = opts.deckIds && opts.deckIds.length ? opts.deckIds : null;
+  if (recall !== 'normal') {
+    const made = await store.ensureRecallUnits({ recall, deckIds });
+    if (made.length) await app.cache.load();
+  }
+  const tctx = await todayContext();
+  const qctx = queueContext({ ...tctx, recall });
+  const mode = opts.mode || 'daily';
   let built;
   if (mode === 'daily') built = buildDailyQueue({ ...qctx, deckIds });
   else if (mode === 'catchup') built = buildDailyQueue({ ...qctx, deckIds, catchUpLimit: opts.limit || 50, catchUpOrder: opts.catchUpOrder || 'overdue' });
@@ -76,7 +83,7 @@ export async function createSession(opts) {
     id: uuid(),
     mode,
     live,
-    config: { deckIds, tags: opts.tags || [], order: opts.order || null, limit: opts.limit || null, planId: opts.planId || null, timer: !!opts.timer, focusMinutes: opts.focusMinutes || null },
+    config: { deckIds, tags: opts.tags || [], order: opts.order || null, limit: opts.limit || null, planId: opts.planId || null, timer: !!opts.timer, focusMinutes: opts.focusMinutes || null, recall },
     queue: built.queue,
     index: 0,
     results: [],

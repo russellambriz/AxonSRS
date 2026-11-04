@@ -321,6 +321,43 @@ export class AxonStore {
   }
 
   /**
+   * Make sure basic cards have the direction units a session will study.
+   * Does not change the deck's direction. A unit the deck does not normally
+   * study is stored inactive, with its own schedule, so Normal review is
+   * unchanged.
+   */
+  async ensureRecallUnits({ recall = 'normal', deckIds = null } = {}) {
+    if (recall !== 'reverse' && recall !== 'mixed') return [];
+    const wanted = recall === 'reverse' ? ['rev'] : ['fwd', 'rev'];
+    const now = Date.now();
+    const made = await this.tx(['cards', 'decks', 'units'], 'readwrite', async (t) => {
+      const cards = [];
+      if (deckIds?.length) {
+        for (const id of deckIds) cards.push(...await t.getAllFromIndex('cards', 'deckId', id));
+      } else cards.push(...await t.getAll('cards'));
+      const out = [];
+      for (const card of cards) {
+        if (!card || card.kind !== 'basic') continue;
+        const deck = await t.get('decks', card.deckId);
+        if (!deck) continue;
+        const activeKeys = new Set(unitKeys(card, deck));
+        const existing = await t.getAllFromIndex('units', 'cardId', card.id);
+        const byKey = new Map(existing.map((u) => [u.key, u]));
+        for (const key of wanted) {
+          if (byKey.has(key)) continue;
+          const rec = newUnitRecord(card, key, now);
+          rec.active = activeKeys.has(key);
+          await t.put('units', rec);
+          out.push(rec);
+        }
+      }
+      return out;
+    });
+    if (made.length) this.emit('cards', { recall });
+    return made;
+  }
+
+  /**
    * Save one or more cards (create or update) atomically.
    * `resets`: Map cardId → unit keys whose schedule should restart
    * (recorded as 'reset' events so replay stays faithful).
