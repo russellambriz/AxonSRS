@@ -102,13 +102,13 @@ export function buildShell(root) {
   return { outlet, setActive, refreshCounts, search };
 }
 
-/** Unobtrusive "update available" notice; applies at a safe point. */
+/** Full-width update notice. The switch still waits for a safe point. */
 export function showUpdateBanner(onApply) {
   if (document.querySelector('.update-banner')) return;
-  const status = h('span', {}, 'A new version of Axon is ready.');
-  const btn = h('button', { class: 'btn small primary' }, 'Update');
-  const later = h('button', { class: 'btn small ghost' }, 'Later');
-  const banner = h('div', { class: 'update-banner', role: 'status' }, icon('sparkles'), status, btn, later);
+  const status = h('span', { 'aria-live': 'assertive' }, 'A new version of Axon is ready. Your cards stay on this device.');
+  const btn = h('button', { class: 'btn update-now', type: 'button' }, 'Update');
+  const later = h('button', { class: 'btn', type: 'button' }, 'Later');
+  const banner = h('div', { class: 'update-banner', role: 'region', 'aria-label': 'Update available' }, icon('sparkles'), status, btn, later);
   btn.addEventListener('click', () => {
     if (app.isBusy()) {
       status.textContent = `Will update after you finish: ${[...app.busy.values()][0]}.`;
