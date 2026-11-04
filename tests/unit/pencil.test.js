@@ -1,7 +1,7 @@
 // Pencil card composition: the typed answer is graded, drawings are images.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PEN_COLORS, PEN_WIDTHS, PAPER, composePencilCard, imageRejectReason, penColor, penWidth } from '../../js/core/pencil.js';
+import { PEN_COLORS, PEN_WIDTHS, PAPER, composePencilCard, imageRejectReason, isInkAnswer, isInkSide, penColor, penWidth } from '../../js/core/pencil.js';
 
 test('pen presets stay ordered and every colour is a dark ink for the paper', () => {
   assert.ok(penWidth('fine').scale < penWidth('medium').scale);
@@ -36,6 +36,26 @@ test('a pencil card needs a typed answer, and a drawing is not that answer', () 
   assert.deepEqual(both.mediaIds, ['front', 'back']);
   assert.equal(composePencilCard({ prompt: '  Only text  ', answer: '  Paris  ' }).front, 'Only text');
   assert.equal(composePencilCard({ prompt: '  Only text  ', answer: '  Paris  ' }).back, 'Paris');
+});
+
+test('handwriting with no typed answer is an ink card, and text answers stay text', () => {
+  assert.equal(isInkAnswer('![Handwritten answer](axon-media:sha)'), true);
+  assert.equal(isInkAnswer('Lima\n\n![Handwritten note](axon-media:sha)'), false);
+  assert.equal(isInkAnswer('Paris'), false);
+  assert.equal(isInkAnswer(''), false);
+  assert.equal(isInkSide(['![A](axon-media:1)', '![B](axon-media:2)']), true);
+  assert.equal(isInkSide(['![A](axon-media:1)', 'Paris']), false);
+  const ink = composePencilCard({
+    handwritten: true,
+    frontImage: { id: 'front' },
+    backImage: { id: 'back', alt: 'Handwritten answer' },
+  });
+  assert.equal(ink.ok, true);
+  assert.equal(ink.handwritten, true);
+  assert.equal(ink.back, '![Handwritten answer](axon-media:back)');
+  assert.equal(isInkAnswer(ink.back), true);
+  assert.match(composePencilCard({ handwritten: true, frontImage: { id: 'front' } }).error, /back/);
+  assert.match(composePencilCard({ handwritten: true, answer: 'ignored', backImage: { id: 'back' } }).error, /prompt/);
 });
 
 test('drawings use the same image type and size limits as other card images', () => {
