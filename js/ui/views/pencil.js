@@ -28,6 +28,7 @@ export async function view(outlet, _params, query) {
 
   let deckId = decks.some((d) => d.id === query.deck) ? query.deck : decks[0].id;
   let side = 'front';
+  let handwritten = true;
   let colorId = 'graphite';
   let widthId = 'medium';
   let savedCount = 0;
@@ -114,9 +115,9 @@ export async function view(outlet, _params, query) {
     frontBtn.setAttribute('aria-pressed', side === 'front' ? 'true' : 'false');
     backBtn.setAttribute('aria-pressed', side === 'back' ? 'true' : 'false');
     noteEl.textContent = side === 'front'
-      ? 'The sketch is the prompt. Axon does not read it.'
-      : 'This drawing is a note beside the answer. It is not graded.';
-    ghostEl.textContent = side === 'front' ? 'Sketch the prompt' : 'Optional note';
+      ? 'This ink is the front of the card.'
+      : (handwritten ? 'This ink is the answer. It is printed on the card, not turned into text.' : 'Optional note. The typed answer is what Axon checks.');
+    ghostEl.textContent = side === 'front' ? 'Sketch the prompt' : (handwritten ? 'Write the answer' : 'Optional note');
     requestAnimationFrame(() => active().resize());
     refresh();
   }
@@ -139,15 +140,30 @@ export async function view(outlet, _params, query) {
     clearBtn.disabled = pad.isEmpty();
     eraserBtn.setAttribute('aria-pressed', pad.eraserOn() ? 'true' : 'false');
     ghostEl.hidden = !pad.isEmpty();
-    const preview = composePencilCard({
-      prompt: promptInput.value,
-      answer: answerInput.value,
-      frontImage: frontPad.isEmpty() ? null : { id: 'pending', alt: 'Handwritten prompt' },
-      backImage: backPad.isEmpty() ? null : { id: 'pending', alt: 'Handwritten note' },
-    });
+    const preview = composePencilCard(draftPreview());
     if (!isDirty()) statusEl.textContent = '';
     else if (!preview.ok) statusEl.textContent = preview.error;
-    else statusEl.textContent = 'Ready to save. Only the graded answer is checked.';
+    else statusEl.textContent = handwritten ? 'Ready to save. The answer is the handwriting on the back.' : 'Ready to save. Only the graded answer is checked.';
+  }
+
+  function draftPreview() {
+    return {
+      prompt: promptInput.value,
+      answer: handwritten ? '' : answerInput.value,
+      frontImage: frontPad.isEmpty() ? null : { id: 'pending', alt: 'Handwritten prompt' },
+      backImage: backPad.isEmpty() ? null : { id: 'pending', alt: handwritten ? 'Handwritten answer' : 'Handwritten note' },
+      handwritten,
+    };
+  }
+
+  function setAnswerKind(ink) {
+    handwritten = !!ink;
+    handBtn.setAttribute('aria-pressed', handwritten ? 'true' : 'false');
+    typeBtn.setAttribute('aria-pressed', handwritten ? 'false' : 'true');
+    typedBlock.hidden = handwritten;
+    inkBlock.hidden = !handwritten;
+    if (root) root.dataset.answer = handwritten ? 'ink' : 'typed';
+    showSide(side);
   }
 
   function resetForm() {
@@ -178,16 +194,14 @@ export async function view(outlet, _params, query) {
       app.navigate(`/deck/${deckId}`);
       return;
     }
-    const preview = composePencilCard({
-      prompt: promptInput.value,
-      answer: answerInput.value,
-      frontImage: frontPad.isEmpty() ? null : { id: 'pending', alt: 'Handwritten prompt' },
-      backImage: backPad.isEmpty() ? null : { id: 'pending', alt: 'Handwritten note' },
-    });
+    const preview = composePencilCard(draftPreview());
     if (!preview.ok) {
       statusEl.textContent = preview.error;
       announce(preview.error, { assertive: true });
-      if (!answerInput.value.trim()) answerInput.focus();
+      const hasPrompt = !!(promptInput.value.trim() || !frontPad.isEmpty());
+      if (!handwritten && hasPrompt && !answerInput.value.trim()) answerInput.focus();
+      else if (handwritten && hasPrompt && backPad.isEmpty()) showSide('back');
+      else showSide('front');
       return;
     }
     saving = true;
@@ -195,8 +209,15 @@ export async function view(outlet, _params, query) {
     doneBtn.disabled = true;
     try {
       const frontImage = await storeDrawing(frontPad, 'handwritten-prompt.png', 'Handwritten prompt');
-      const backImage = await storeDrawing(backPad, 'handwritten-note.png', 'Handwritten note');
-      const ready = composePencilCard({ prompt: promptInput.value, answer: answerInput.value, frontImage, backImage });
+      const backAlt = handwritten ? 'Handwritten answer' : 'Handwritten note';
+      const backImage = await storeDrawing(backPad, handwritten ? 'handwritten-answer.png' : 'handwritten-note.png', backAlt);
+      const ready = composePencilCard({
+        prompt: promptInput.value,
+        answer: handwritten ? '' : answerInput.value,
+        frontImage,
+        backImage,
+        handwritten,
+      });
       if (!ready.ok) throw new Error(ready.error);
       const card = createCard({ deckId, front: ready.front, back: ready.back, media: ready.mediaIds }, store.deviceId);
       await store.saveCard(card);
@@ -222,6 +243,16 @@ export async function view(outlet, _params, query) {
     }
   }
 
+  const handBtn = h('button', { type: 'button', 'aria-label': 'Handwritten answer', 'aria-pressed': 'true', onclick: () => setAnswerKind(true) }, 'Handwritten');
+  const typeBtn = h('button', { type: 'button', 'aria-label': 'Typed answer', 'aria-pressed': 'false', onclick: () => setAnswerKind(false) }, 'Typed');
+  const typedBlock = h('div', { class: 'pencil-typed', hidden: true },
+    h('div', { class: 'pencil-kicker' }, 'Graded answer'),
+    h('p', {}, 'Axon checks this text when you study. A drawing on the back is only a note.'),
+    answerInput,
+    h('p', { class: 'faint small' }, 'Separate accepted alternatives with |'));
+  const inkBlock = h('div', { class: 'pencil-ink-copy' },
+    h('div', { class: 'pencil-kicker' }, 'Handwritten answer'),
+    h('p', {}, 'Flip to Back and write the answer. That ink is the back of the card. When you review, you compare your writing with it and choose the grade. Nothing is typed or matched.'));
   const deckSelect = select({
     label: 'Deck',
     options: decks.map((d) => ({ value: d.id, label: d.name })),
@@ -243,19 +274,16 @@ export async function view(outlet, _params, query) {
         noteEl,
         h('div', { class: 'pencil-tools' }, colorHost, widthHost, h('span', { class: 'pencil-tool-gap' }), eraserBtn, undoBtn, redoBtn, clearBtn)),
       h('aside', { class: 'pencil-panel', 'aria-label': 'Text' },
+        h('div', { class: 'pencil-kinds', role: 'group', 'aria-label': 'How the answer is stored' }, handBtn, typeBtn),
         h('label', { class: 'pencil-field' }, h('span', {}, 'Prompt text ', h('span', { class: 'faint' }, 'optional')), promptInput),
-        h('div', { class: 'pencil-graded' },
-          h('div', { class: 'pencil-kicker' }, 'Graded answer'),
-          h('p', {}, 'Axon checks this text when you study. The drawing is not read and is not graded.'),
-          answerInput,
-          h('p', { class: 'faint small' }, 'Separate accepted alternatives with |')),
+        h('div', { class: 'pencil-graded' }, typedBlock, inkBlock),
         statusEl,
         h('div', { class: 'pencil-actions' }, nextBtn, doneBtn))));
 
   outlet.append(root);
   applyPen();
   paintChoices();
-  showSide('front');
+  setAnswerKind(true);
   app.leaveGuard = async () => (!isDirty() || confirmDialog({ title: 'Leave without saving?', message: 'This card has not been saved.', confirmLabel: 'Leave', danger: true }));
 
   return {

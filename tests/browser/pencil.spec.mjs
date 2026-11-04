@@ -1,6 +1,6 @@
 // Create with Pencil: a full-screen studio, a typed answer, and a save-and-next loop.
 import assert from 'node:assert/strict';
-import { newContext, openApp, seedDeck, idbAll, assertNoErrors } from './harness.mjs';
+import { newContext, openApp, seedDeck, idbAll, assertNoErrors, startReview, waitPhase } from './harness.mjs';
 
 const stroke = (page, { x = 36, y = 48, id = 4 } = {}) => page.evaluate(({ x, y, id: pid }) => {
   const c = [...document.querySelectorAll('.pencil-paper .ink-canvas')].find((el) => el.getBoundingClientRect().width > 0);
@@ -73,6 +73,7 @@ export const tests = [
       await page.waitForFunction(() => document.querySelector('.pencil-studio')?.dataset.side === 'front');
       assert.equal(await visibleStrokes(page), '1', 'the front sketch is still there');
 
+      await page.getByRole('button', { name: 'Typed answer' }).click();
       await page.getByRole('button', { name: 'Save & next' }).click();
       await page.getByText('Type the answer Axon should check').waitFor();
       await page.getByRole('textbox', { name: 'Graded answer' }).fill('Lima');
@@ -118,6 +119,61 @@ export const tests = [
       assert.equal(narrow.studio, true, narrow.overflow.join(', '));
       assert.deepEqual(narrow.overflow, []);
       assert.deepEqual(outside, []);
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
+  {
+    name: 'handwriting alone is the card: the back is the ink, and review is self-graded',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser, { viewport: { width: 1100, height: 800 }, hasTouch: true });
+      const page = await openApp(ctx, url);
+      const deckId = await seedDeck(page, { name: 'Ink cards', cards: [] });
+      await page.evaluate((id) => { location.hash = `#/pencil?deck=${id}`; }, deckId);
+      await page.getByRole('heading', { name: 'Create with Pencil' }).waitFor();
+      await page.waitForFunction(() => [...document.querySelectorAll('.pencil-paper .ink-canvas')].some((c) => c.width > 0));
+      assert.equal(await page.getAttribute('.pencil-studio', 'data-answer'), 'ink');
+      await stroke(page, { y: 40, id: 3 });
+      await page.getByRole('button', { name: 'Back' }).click();
+      await page.waitForFunction(() => document.querySelector('.pencil-studio')?.dataset.side === 'back');
+      await page.locator('.pencil-ghost').getByText('Write the answer', { exact: true }).waitFor();
+      await stroke(page, { y: 70, id: 9 });
+      await page.getByRole('button', { name: 'Save & next' }).click();
+      await page.getByText('1 saved').waitFor();
+      const [card] = await idbAll(page, 'cards');
+      assert.match(card.front.join('\n'), /!\[[^\]]*\]\(axon-media:sha256-/);
+      assert.match(card.back.join('\n'), /^!\[Handwritten answer\]\(axon-media:sha256-/);
+      assert.equal(card.back.join('\n').includes('Lima'), false);
+      await page.evaluate(() => { location.hash = '#/cards'; });
+      await page.locator('.card-row img').first().waitFor();
+      await page.waitForFunction(() => document.querySelector('.card-row img')?.naturalWidth > 0);
+      assert.equal(await startReview(page), 'question');
+      await page.locator('#study-prompt img').waitFor();
+      await page.waitForFunction(() => document.querySelector('#study-prompt img')?.naturalWidth > 0);
+      assert.equal(await page.locator('.answer-input').isVisible(), false, 'an ink card does not ask for typed text');
+      await page.getByText('Handwritten', { exact: true }).waitFor();
+      await page.evaluate(() => {
+        const c = document.querySelector('.study .ink-canvas');
+        const r = c.getBoundingClientRect();
+        const fire = (name, x, y) => c.dispatchEvent(new PointerEvent(name, { pointerType: 'pen', pointerId: 12, clientX: r.left + x, clientY: r.top + y, pressure: 0.6, buttons: name === 'pointerup' ? 0 : 1, bubbles: true, cancelable: true }));
+        fire('pointerdown', 30, 40);
+        fire('pointermove', 90, 50);
+        fire('pointerup', 90, 50);
+      });
+      await page.getByRole('button', { name: 'Check your handwritten answer' }).click();
+      assert.equal(await waitPhase(page, ['grading']), 'grading');
+      await page.getByRole('img', { name: 'Handwritten answer', exact: true }).waitFor();
+      await page.getByRole('button', { name: /^Good/ }).click();
+      assert.equal(await waitPhase(page, ['feedback']), 'feedback');
+      const review = (await idbAll(page, 'events')).find((e) => e.type === 'review');
+      assert.equal(review.response.method, 'self');
+      assert.equal(review.response.correct, true);
+      assert.equal(review.modality.kind, 'handwriting');
+      assert.equal(review.selfJudged, true);
+      assert.equal(review.research, null);
+      assert.equal(review.rating, 3);
+      const baselines = await idbAll(page, 'baselines');
+      assert.ok(baselines.every((b) => !(b.samples || []).length), 'an ink card never calibrates timing');
       assertNoErrors(page);
       await ctx.close();
     },
