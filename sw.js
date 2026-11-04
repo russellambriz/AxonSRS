@@ -93,6 +93,7 @@ const PRECACHE = [
   './js/ui/views/home.js',
   './js/ui/views/import.js',
   './js/ui/views/launcher.js',
+  './js/ui/views/pencil.js',
   './js/ui/views/plans.js',
   './js/ui/views/recovery.js',
   './js/ui/views/sample.js',
