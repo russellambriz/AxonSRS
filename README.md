@@ -262,10 +262,17 @@ import leaves no partial cards and appears on the Recovery screen.
     undo, redo and clear work per side. The colours are dark inks on light
     paper, so a saved drawing stays readable in light and dark mode. In
     landscape the paper fills the left and the text sits on the right; in
-    portrait and on a phone the paper is on top. **The graded answer is the
-    text field**, a normal box so Scribble still works. Axon never reads the
-    ink. **Save & next** stores the card and clears the page for another.
+    portrait and on a phone the paper is on top. **Handwritten answer** is
+    the default: the ink on the back *is* the answer, stored and shown as
+    the drawing, with no typed text. **Typed answer** keeps the normal box
+    (Scribble still works) and Axon matches that text; a drawing is then
+    only a note. **Save & next** stores the card and clears the page.
     Drawings go through the same image checks and the 5 MB limit, offline.
+    In the card editor, a back that is only a drawing is the same kind of
+    card. Reviewing one shows the handwriting, asks you to write your
+    answer in ink, and you grade it yourself (Again, Hard, Good or Easy).
+    It is not matched, it does not calibrate timing, and it is left out of
+    research comparisons. A card that still has a typed answer is unchanged.
   - Apple Pencil Pro squeeze, double-tap, barrel roll and haptics are not
     available to web pages, so Axon does not use them. Hover, pressure, tilt
     and the optional altitude, azimuth and twist values come through Pointer
@@ -749,8 +756,8 @@ Day-to-day reviews write one event each.
 ## Testing
 
 ```bash
-npm test               # 208 unit tests (node --test), ~4 s
-npm run test:browser   # 45 browser tests (Playwright + Chromium)
+npm test               # 209 unit tests (node --test), ~4 s
+npm run test:browser   # 46 browser tests (Playwright + Chromium)
 npm run check          # pre-cache list is current + unit tests
 ```
 
@@ -770,7 +777,7 @@ committed).
   encryption, compression, Gist client, chunking, backups, GitHub Pages paths,
   handwriting geometry (smoothing, pressure and tilt width, predicted
   samples, eraser hit-testing, undo and redo), and pencil-card composition
-  (a typed answer is required; drawings are images).
+  (a typed answer is matched; a side that is only ink is self-graded).
 - **Browser**: persistence across reloads; a synthetic v1→v2 schema
   migration with snapshot; a failing migration; refusal to open newer data;
   a failed review transaction (synthetic quota error) with no partial writes;
@@ -784,9 +791,9 @@ committed).
   320 px (light and dark) with checks for horizontal scroll, unnamed controls
   and touch-target size; handwriting smoothing, hover, palm rejection,
   eraser, wide ink layout, the copy step after a missed ink answer, a
-  sketch inserted from the card editor, and the Create with Pencil studio
-  (draw, undo, redo, save and next, landscape and 320px); the 10,000-card
-  performance run.
+  sketch inserted from the card editor, the Create with Pencil studio
+  (draw, undo, redo, save and next, landscape and 320px), and an ink-only
+  card reviewed by self-grading; the 10,000-card performance run.
 
 **Device coverage, honestly:** everything ran in desktop Chromium.
 Tablet and phone sizes are **Chromium emulation** (viewport, touch,

@@ -143,6 +143,7 @@ study materials.
 | Scribble in the typed answer box is unchanged | answer `<input>` stays mounted; ink mode hides it instead of replacing it | P3 | B:session letters-in-field and IME tests still use the input; ink mode asserts the input is hidden | ✅ / ⚠️ (Scribble itself is Apple's and was not run on iPad) |
 | Editor sketch: Draw inserts a PNG through the image type and size checks, offline | `editor.js` `openSketch` → `insertImage` | P6 | B:draw "Draw inserts a PNG" | ✅ |
 | Create with Pencil: full-screen front/back paper, colours and widths, undo/redo, typed graded answer, save-and-next, same image limits, offline | `js/ui/views/pencil.js`, `js/core/pencil.js` | P6 | U:pencil composition and image limits; U:ink undo/redo; B:pencil "save and start the next card" (1366×1024 and 320px) | ✅ (synthetic pen) / ⚠️ (real iPad and Scribble) |
+| Ink card: no typed answer, handwritten front and back are the card, review is self-judged (`method` self, handwriting modality, `selfJudged`, research null) and text cards still match | `isInkAnswer` / `isInkSide`, `study.js` when the answer side is only images | P3 | U:pencil "handwriting with no typed answer"; B:pencil "handwriting alone is the card" | ✅ (synthetic pen) / ⚠️ (real iPad) |
 | Apple Pencil Pro squeeze, double-tap, barrel roll and haptics | not available to web pages; not implemented | — | code review; README "Handwriting" | ⚠️ platform does not expose them |
 
 ## 6. Answer matching (`axon-match@1.1.0`)
@@ -247,7 +248,7 @@ study materials.
 | Inspect repo first; preserve existing code and data | ✅ (repository was empty) |
 | Complete README (setup, imports, scheduling, offline, deployment, backup, Gist sync) | ✅ `README.md` |
 | Explain grading methodology and limitations | ✅ README "How grading works" |
-| Run all automated tests | ✅ 208 unit + 45 browser tests pass (see README "Testing") |
+| Run all automated tests | ✅ 209 unit + 46 browser tests pass (see README "Testing") |
 | Verify it runs as a static GitHub Pages site | ✅ locally under `/AxonSRS/`; ⛔ live URL: no GitHub Pages build has run on the repository yet (Pages has to be enabled in the repository settings) and this environment cannot reach `github.io` |
 | Commit and push to `main` | ✅ pushed (verified with `git push`) |
 | Report features, tests, deployment, limitations | ✅ README and delivery report |
