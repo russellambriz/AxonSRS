@@ -286,6 +286,12 @@ import leaves no partial cards and appears on the Recovery screen.
     the drawing, with no typed text. **Typed answer** keeps the normal box
     (Scribble still works) and Axon matches that text; a drawing is then
     only a note. **Save & next** stores the card and clears the page.
+    **N saved** under the title opens this deck’s cards, newest first: a
+    strip of thumbnails (the front, with the back peeking out) and a
+    full-size viewer. Swipe or the arrows move between cards, and a tap
+    flips front and back. **Edit** loads that card back onto the page.
+    **Delete** asks you to confirm; the toast can undo it, and the review
+    history is kept. Thumbnails are built only for the ones on screen.
     Drawings go through the same image checks and the 5 MB limit, offline.
     In the card editor, a back that is only a drawing is the same kind of
     card. Reviewing one shows the handwriting, asks you to write your
@@ -775,8 +781,8 @@ Day-to-day reviews write one event each.
 ## Testing
 
 ```bash
-npm test               # 210 unit tests (node --test), ~4 s
-npm run test:browser   # 47 browser tests (Playwright + Chromium)
+npm test               # 211 unit tests (node --test), ~4 s
+npm run test:browser   # 48 browser tests (Playwright + Chromium)
 npm run check          # pre-cache list is current + unit tests
 ```
 
@@ -812,7 +818,8 @@ committed).
   and touch-target size; handwriting smoothing, hover, palm rejection,
   eraser, wide ink layout, the copy step after a missed ink answer, a
   sketch inserted from the card editor, the Create with Pencil studio
-  (draw, undo, redo, save and next, landscape and 320px), an ink-only
+  (draw, undo, redo, save and next, landscape and 320px), saved cards
+  opened from the studio (thumbnails, flip, swipe, edit, delete and undo), an ink-only
   card reviewed by self-grading, and the regular New card editor (typed
   on a mouse, ink pads on a touch device, remembered Type choice, cloze
   stays text, delete from the card list and Delete card in the editor);
@@ -832,7 +839,7 @@ installation prompts, speech recognition and system TTS voices are
 
 | Component | Version | Notes |
 | --- | --- | --- |
-| App | 1.0.5 | cache `axon-v6` |
+| App | 1.0.6 | cache `axon-v7` |
 | Scheduler | ts-fsrs 5.4.2 (FSRS-6, default parameters) + `axon-fuzz@1` | reference-checked against py-fsrs 6.3.2 |
 | Grading rules | `axon-fluency@1.1.0` | thresholds above; recorded on every review |
 | Reading/warm-up heuristic | `axon-reading@2` | can be disabled |
@@ -894,7 +901,7 @@ service-worker registration and its cache list.
 Pages publishes):
 
 ```bash
-npm run release -- 1.0.5   # bumps CACHE_NAME (axon-vN → N+1) in sw.js and js/config.js,
+npm run release -- 1.0.6   # bumps CACHE_NAME (axon-vN → N+1) in sw.js and js/config.js,
                            # sets APP_VERSION, refreshes the pre-cache list
 npm run check              # pre-cache list current + unit tests
 ```

@@ -144,6 +144,7 @@ study materials.
 | Editor sketch: Draw inserts a PNG through the image type and size checks, offline | `editor.js` `openSketch` → `insertImage` | P6 | B:draw "Draw inserts a PNG" | ✅ |
 | Create with Pencil: full-screen front/back paper, colours and widths, undo/redo, typed graded answer, save-and-next, same image limits, offline | `js/ui/views/pencil.js`, `js/core/pencil.js` | P6 | U:pencil composition and image limits; U:ink undo/redo; B:pencil "save and start the next card" (1366×1024 and 320px) | ✅ (synthetic pen) / ⚠️ (real iPad and Scribble) |
 | Ink card: no typed answer, handwritten front and back are the card, review is self-judged (`method` self, handwriting modality, `selfJudged`, research null) and text cards still match | `isInkAnswer` / `isInkSide`, `study.js` when the answer side is only images | P3 | U:pencil "handwriting with no typed answer"; B:pencil "handwriting alone is the card" | ✅ (synthetic pen) / ⚠️ (real iPad) |
+| Create with Pencil: N saved opens this deck’s cards (newest first, lazy thumbnails, front and a peek of the back), full-size swipe/arrow viewer, tap to flip, Edit loads the card, Delete confirms and can be undone | `js/ui/pencilreel.js`, `splitPencilSide` | P6 | U:pencil "saved pencil side splits"; B:pencil "saved cards open from the studio" | ✅ (synthetic pointer) / ⚠️ (real iPad) |
 | New card editor: Basic front and back are ink pads on a touch device, Type per side (remembered in `localStorage`), mouse stays typed, cloze and occlusion unchanged, preview shows the ink, Clear per side, delete from the list and the editor with confirm | `js/ui/inkfield.js`, `chooseSideMode`, `editor.js`, `browser.js` | P6 | U:pencil "editor starts on ink only for a blank side"; B:editor-ink | ✅ (synthetic pen; touch via `hasTouch`) / ⚠️ (real iPad Scribble) |
 | Apple Pencil Pro squeeze, double-tap, barrel roll and haptics | not available to web pages; not implemented | — | code review; README "Handwriting" | ⚠️ platform does not expose them |
 
@@ -249,7 +250,7 @@ study materials.
 | Inspect repo first; preserve existing code and data | ✅ (repository was empty) |
 | Complete README (setup, imports, scheduling, offline, deployment, backup, Gist sync) | ✅ `README.md` |
 | Explain grading methodology and limitations | ✅ README "How grading works" |
-| Run all automated tests | ✅ 210 unit + 47 browser tests pass (see README "Testing") |
+| Run all automated tests | ✅ 211 unit + 48 browser tests pass (see README "Testing") |
 | Verify it runs as a static GitHub Pages site | ✅ locally under `/AxonSRS/`. Live site still serves `main` (29 Oct 2026, `axon-v5`): Pages source is that branch, not the default branch. Retargeting it is a Settings change the Pages API refused (403) |
 | Commit and push to `main` | ✅ pushed (verified with `git push`) |
 | Report features, tests, deployment, limitations | ✅ README and delivery report |

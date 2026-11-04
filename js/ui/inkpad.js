@@ -125,10 +125,28 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     }
   }
 
+  let plate = null;
+  let plateMediaId = null;
+  let plateUrl = null;
+
+  function drawPlate() {
+    if (!plate) return;
+    const r = canvas.getBoundingClientRect();
+    const iw = plate.naturalWidth || plate.width;
+    const ih = plate.naturalHeight || plate.height;
+    if (!r.width || !r.height || !iw || !ih) return;
+    const scale = Math.min(r.width / iw, r.height / ih);
+    const w = iw * scale;
+    const h = ih * scale;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.drawImage(plate, (r.width - w) / 2, (r.height - h) / 2, w, h);
+  }
+
   function redraw() {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (!canvas.width || !canvas.height) return;
+    drawPlate();
     for (const s of strokes) {
       const tail = current && s === current.stroke && predicted.length ? predicted : null;
       applyInk(s.color);
@@ -396,6 +414,14 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
   canvas.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
   if (typeof ResizeObserver === 'function') new ResizeObserver(resize).observe(stage);
 
+  function setPlate(image, id = null, url = null) {
+    if (plateUrl && plateUrl !== url) URL.revokeObjectURL(plateUrl);
+    plate = image || null;
+    plateMediaId = id || null;
+    plateUrl = url || null;
+    redraw();
+  }
+
   function clear() {
     cancelFrame();
     strokes.length = 0;
@@ -406,6 +432,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     eraseLog = null;
     eraserAt = null;
     current = null;
+    setPlate(null);
     redraw();
     drawOverlay();
     update();
@@ -416,6 +443,10 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     canvas,
     resize,
     isEmpty: () => !strokes.length && !queued.length,
+    hasPlate: () => !!plate,
+    plateId: () => plateMediaId,
+    /** Show a saved drawing under new strokes. `url` is revoked when replaced. */
+    setPlate,
     strokeCount: () => strokes.length,
     clear,
     /** Prompt under the pad, for example the retype instruction. */
@@ -440,6 +471,23 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
       setPredicted([]);
       cancelFrame();
       redraw();
+      if (plate && strokes.length) {
+        const out = document.createElement('canvas');
+        out.width = canvas.width;
+        out.height = canvas.height;
+        const o = out.getContext('2d');
+        if (background) {
+          o.fillStyle = background;
+          o.fillRect(0, 0, out.width, out.height);
+        }
+        o.drawImage(canvas, 0, 0);
+        if (current && saved.length) {
+          setPredicted(saved);
+          redraw();
+        }
+        const r = canvas.getBoundingClientRect();
+        return { src: out.toDataURL('image/png'), width: Math.round(r.width), height: Math.round(r.height) };
+      }
       if (!strokes.length) {
         if (saved.length) setPredicted(saved);
         return null;

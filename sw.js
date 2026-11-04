@@ -19,7 +19,7 @@
  * All paths are relative so the app works under /AxonSRS/ on GitHub Pages.
  */
 
-const CACHE_NAME = 'axon-v6';
+const CACHE_NAME = 'axon-v7';
 
 const PRECACHE = [
   './',
@@ -80,6 +80,7 @@ const PRECACHE = [
   './js/ui/keyboard.js',
   './js/ui/local.js',
   './js/ui/occlusion.js',
+  './js/ui/pencilreel.js',
   './js/ui/pwa.js',
   './js/ui/render.js',
   './js/ui/router.js',
