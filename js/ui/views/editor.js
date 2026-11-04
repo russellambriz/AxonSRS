@@ -20,6 +20,7 @@ import { formatInterval, formatDuration, debounce } from '../../core/util.js';
 import { retrievability, STATE_NAMES, RATING_LABELS } from '../../core/scheduler.js';
 import { occlusionEditor } from '../occlusion.js';
 import { percent } from '../dom.js';
+import { inkPad } from '../inkpad.js';
 
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif'];
 const AUDIO_TYPES = /^audio\/(mpeg|mp4|ogg|webm|wav|x-wav|aac)$/;
@@ -100,11 +101,12 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
   const backHint = h('div', { class: 'hint' });
   const clozeBtn = h('button', { class: 'btn small', type: 'button', onclick: insertCloze }, '{{c…}} Insert cloze');
   const imageBtn = h('label', { class: 'btn small', tabindex: '0' }, icon('image'), 'Image', h('input', { type: 'file', accept: IMAGE_TYPES.join(','), class: 'visually-hidden', onchange: (e) => { const f = e.target.files[0]; if (f) insertImage(f, lastFocused || frontInput); e.target.value = ''; } }));
+  const drawBtn = h('button', { class: 'btn small', type: 'button', onclick: () => openSketch(lastFocused || frontInput) }, icon('pen'), 'Draw');
   let lastFocused = null;
   for (const t of [frontInput, backInput, hintInput, explInput]) t.addEventListener('focus', () => { lastFocused = t; });
 
   const occlusionHost = h('div', { class: 'stack' });
-  const frontField = h('div', { class: 'field' }, h('div', { class: 'row between' }, frontLabel, h('div', { class: 'row tight' }, clozeBtn, imageBtn)), frontInput, frontHint);
+  const frontField = h('div', { class: 'field' }, h('div', { class: 'row between' }, frontLabel, h('div', { class: 'row tight' }, clozeBtn, imageBtn, drawBtn)), frontInput, frontHint);
   const backField = h('div', { class: 'field' }, backLabel, backInput, backHint);
 
   function applyKind() {
@@ -183,6 +185,11 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
     field('Tags', tagsInput),
     advanced, errorsEl, footer);
 
+  if (isNew && !embedded) {
+    form.prepend(h('a', { class: 'pencil-launch', href: `#/pencil?deck=${encodeURIComponent(draft.deckId)}` },
+      icon('pen'),
+      h('span', {}, h('strong', {}, 'Create with Pencil'), h('span', {}, 'Sketch the prompt on a full page. You still type the answer Axon checks.'))));
+  }
   container.append(h('div', { class: 'editor-grid' }, h('section', { class: 'panel' }, form), h('section', { class: 'panel', 'aria-label': 'Preview' }, h('h3', {}, 'Preview'), previewEl)));
   if (!embedded) outlet.append(pg.root);
   else outlet.append(container);
@@ -204,9 +211,46 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
       target.dispatchEvent(new Event('input'));
       draft.media = [...new Set([...(draft.media || []), id])];
       toast('Image added — edit the text in [ ] to change its alternative text');
+      return true;
     } catch (err) {
       errorToast(err);
+      return false;
     }
+  }
+
+  /** PNG bytes from a data URL. No network: the drawing never leaves the device. */
+  function dataUrlToBlob(dataUrl) {
+    const comma = dataUrl.indexOf(',');
+    const mime = /data:([^;,]+)/.exec(dataUrl.slice(0, comma))?.[1] || 'image/png';
+    const binary = atob(dataUrl.slice(comma + 1));
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    return new Blob([bytes], { type: mime });
+  }
+
+  function openSketch(target) {
+    let insertBtn;
+    const pad = inkPad({ onChange: () => { if (insertBtn) insertBtn.disabled = pad.isEmpty(); } });
+    pad.el.classList.add('sheet');
+    pad.setHint('Draw, then insert. It is stored with the card like any other image.');
+    pad.canvas.setAttribute('aria-label', 'Drawing canvas. Draw with Apple Pencil, a stylus or a finger.');
+    insertBtn = h('button', { class: 'btn primary', type: 'button', disabled: true, onclick: async () => {
+      const snap = pad.snapshot();
+      if (!snap) return;
+      const blob = dataUrlToBlob(snap.src);
+      const file = new File([blob], 'drawing.png', { type: blob.type || 'image/png' });
+      if (await insertImage(file, target)) dialog.close(true);
+    } }, 'Insert');
+    const dialog = sheet({
+      title: 'Draw',
+      wide: true,
+      content: pad.el,
+      footer: [
+        h('button', { class: 'btn', type: 'button', onclick: () => dialog.close() }, 'Cancel'),
+        insertBtn,
+      ],
+    });
+    requestAnimationFrame(() => requestAnimationFrame(() => pad.resize()));
   }
 
   function handlePaste(e, target) {

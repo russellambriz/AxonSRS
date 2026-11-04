@@ -16,6 +16,8 @@ import { APP_VERSION, DB_VERSION, RECORD_VERSION, SCHEDULER_VERSION, GRADING_VER
 import { systemTimeZone, isValidTimeZone } from '../../core/time.js';
 import { uuid } from '../../core/util.js';
 import { setAllowRemoteImages } from '../render.js';
+import { local } from '../local.js';
+import { PENCIL_ONLY_KEY } from '../inkpad.js';
 
 const SECTIONS = [
   ['appearance', 'Appearance', 'sun'],
@@ -101,6 +103,7 @@ function study() {
       ...['cram', 'drill', 'speed', 'interleave', 'exam'].map((m) => settingRow({ title: `Record ${m === 'interleave' ? 'interleaving' : m} as scheduling reviews`, control: switchControl({ checked: !!practice[m], onchange: (v) => saveG({ practiceAffectsSchedule: { ...g().practiceAffectsSchedule, [m]: v } }) }) }))),
     h('section', { class: 'panel' }, h('h2', {}, 'Review flow'),
       settingRow({ title: 'Retype after a mistake', desc: 'Type the correct answer once before moving on (never counted as recall). Turn off if typing is difficult; you can also skip it per card.', control: switchControl({ checked: g().requireRetype !== false, onchange: (v) => saveG({ requireRetype: v }) }) }),
+      settingRow({ title: 'Pencil only', desc: 'On the handwriting pad, ignore fingers and palms. Apple Pencil and a mouse still draw. After a pencil has touched the pad on this device, palm touches are ignored from the next session even when this is off.', control: switchControl({ checked: local.get(PENCIL_ONLY_KEY) === '1', onchange: (v) => local.set(PENCIL_ONLY_KEY, v ? '1' : '0') }) }),
       settingRow({ title: 'Auto-advance after a correct answer', desc: 'Milliseconds; 0 = off (press Enter to continue).', control: numberInput(g().autoAdvanceMs ?? 0, (v) => saveG({ autoAdvanceMs: v || 0 }), { min: 0, max: 10000, step: 100 }) }),
       settingRow({ title: 'Show “Why this grade?”', control: switchControl({ checked: g().showWhy !== false, onchange: (v) => saveG({ showWhy: v }) }) }),
       settingRow({ title: 'Ask for confidence (optional, 1–5)', desc: 'Stored separately from the automatic grade; never required.', control: switchControl({ checked: g().confidencePrompt !== false, onchange: (v) => saveG({ confidencePrompt: v }) }) }),
