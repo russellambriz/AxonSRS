@@ -142,6 +142,7 @@ study materials.
 | Wrong handwritten answer: write the correct answer once (copy event, not a second review), honour requireRetype, keep Skip retyping | `study.js` `finishInkCopy`, `recordCopy` | P3 | B:session handwriting Again → retype; "skip retyping"; "turning off retype" | ✅ |
 | Scribble in the typed answer box is unchanged | answer `<input>` stays mounted; ink mode hides it instead of replacing it | P3 | B:session letters-in-field and IME tests still use the input; ink mode asserts the input is hidden | ✅ / ⚠️ (Scribble itself is Apple's and was not run on iPad) |
 | Editor sketch: Draw inserts a PNG through the image type and size checks, offline | `editor.js` `openSketch` → `insertImage` | P6 | B:draw "Draw inserts a PNG" | ✅ |
+| Create with Pencil: full-screen front/back paper, colours and widths, undo/redo, typed graded answer, save-and-next, same image limits, offline | `js/ui/views/pencil.js`, `js/core/pencil.js` | P6 | U:pencil composition and image limits; U:ink undo/redo; B:pencil "save and start the next card" (1366×1024 and 320px) | ✅ (synthetic pen) / ⚠️ (real iPad and Scribble) |
 | Apple Pencil Pro squeeze, double-tap, barrel roll and haptics | not available to web pages; not implemented | — | code review; README "Handwriting" | ⚠️ platform does not expose them |
 
 ## 6. Answer matching (`axon-match@1.1.0`)
@@ -195,7 +196,7 @@ study materials.
 | Requirement | Where | Phase | Verification | Status |
 | --- | --- | --- | --- | --- |
 | Manifest, icons, service worker, installable, standalone | `manifest.json`, `icons/`, `sw.js` | P4 | U:paths "manifest start_url, scope, id and icons are relative" | ✅ (installability prompt itself not automated) |
-| Offline shell, creation, study, scheduling, statistics | `sw.js` pre-cache (113 files) | P4 | B:offline "cold-starts and studies offline"; B:study occlusion created and studied offline | ✅ |
+| Offline shell, creation, study, scheduling, statistics | `sw.js` pre-cache (115 files) | P4 | B:offline "cold-starts and studies offline"; B:study occlusion created and studied offline | ✅ |
 | Version-aware cache updates | versioned `CACHE_NAME`, `npm run release` | P4 | U:paths "cache name is versioned and matches js/config.js"; B:offline update test | ✅ |
 | Pinned KaTeX bundled locally with fonts | `vendor/katex` | P4 | B:offline asserts no KaTeX font failed offline | ✅ |
 | Service worker paths/scope under `/AxonSRS/` | `register('./sw.js', { scope: './' })` | P4 | U:paths | ✅ |
@@ -246,7 +247,7 @@ study materials.
 | Inspect repo first; preserve existing code and data | ✅ (repository was empty) |
 | Complete README (setup, imports, scheduling, offline, deployment, backup, Gist sync) | ✅ `README.md` |
 | Explain grading methodology and limitations | ✅ README "How grading works" |
-| Run all automated tests | ✅ 204 unit + 44 browser tests pass (see README "Testing") |
+| Run all automated tests | ✅ 208 unit + 45 browser tests pass (see README "Testing") |
 | Verify it runs as a static GitHub Pages site | ✅ locally under `/AxonSRS/`; ⛔ live URL: no GitHub Pages build has run on the repository yet (Pages has to be enabled in the repository settings) and this environment cannot reach `github.io` |
 | Commit and push to `main` | ✅ pushed (verified with `git push`) |
 | Report features, tests, deployment, limitations | ✅ README and delivery report |

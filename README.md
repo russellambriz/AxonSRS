@@ -255,6 +255,17 @@ import leaves no partial cards and appears on the Recovery screen.
   - In the card editor, **Draw** next to **Image** opens the same pad.
     **Insert** stores the sketch as a PNG with the same type and size checks
     as any other image, on the front or the back, and it works offline.
+  - **Create with Pencil** (a deck’s **Pencil** button, or the banner on a
+    new card) is a full-screen studio meant for a 13-inch iPad. The page is
+    a sheet of paper: sketch the front, flip to the back, and pick graphite,
+    blue, green, amber or rose at a fine, medium or broad width. Eraser,
+    undo, redo and clear work per side. The colours are dark inks on light
+    paper, so a saved drawing stays readable in light and dark mode. In
+    landscape the paper fills the left and the text sits on the right; in
+    portrait and on a phone the paper is on top. **The graded answer is the
+    text field**, a normal box so Scribble still works. Axon never reads the
+    ink. **Save & next** stores the card and clears the page for another.
+    Drawings go through the same image checks and the 5 MB limit, offline.
   - Apple Pencil Pro squeeze, double-tap, barrel roll and haptics are not
     available to web pages, so Axon does not use them. Hover, pressure, tilt
     and the optional altitude, azimuth and twist values come through Pointer
@@ -516,7 +527,7 @@ separately and never touch live scheduling. A de-identified CSV export
 
 ## Offline, installation and updates
 
-- The service worker pre-caches the **complete app shell**: 113 files,
+- The service worker pre-caches the **complete app shell**: 115 files,
   including KaTeX and its fonts, mhchem, marked, DOMPurify, fflate and
   OpenDyslexic, all bundled locally. After one online visit, Axon cold-starts
   and works fully offline: studying, editing, importing, statistics,
@@ -738,8 +749,8 @@ Day-to-day reviews write one event each.
 ## Testing
 
 ```bash
-npm test               # 204 unit tests (node --test), ~4 s
-npm run test:browser   # 44 browser tests (Playwright + Chromium)
+npm test               # 208 unit tests (node --test), ~4 s
+npm run test:browser   # 45 browser tests (Playwright + Chromium)
 npm run check          # pre-cache list is current + unit tests
 ```
 
@@ -758,7 +769,8 @@ committed).
   drills), time zones and DST, statistics, planning, research, sync merge,
   encryption, compression, Gist client, chunking, backups, GitHub Pages paths,
   handwriting geometry (smoothing, pressure and tilt width, predicted
-  samples, eraser hit-testing).
+  samples, eraser hit-testing, undo and redo), and pencil-card composition
+  (a typed answer is required; drawings are images).
 - **Browser**: persistence across reloads; a synthetic v1→v2 schema
   migration with snapshot; a failing migration; refusal to open newer data;
   a failed review transaction (synthetic quota error) with no partial writes;
@@ -771,8 +783,10 @@ committed).
   sync through a mocked Gist API;   responsive layout at 1280, 834, 390 and
   320 px (light and dark) with checks for horizontal scroll, unnamed controls
   and touch-target size; handwriting smoothing, hover, palm rejection,
-  eraser, wide ink layout, the copy step after a missed ink answer, and a
-  sketch inserted from the card editor; the 10,000-card performance run.
+  eraser, wide ink layout, the copy step after a missed ink answer, a
+  sketch inserted from the card editor, and the Create with Pencil studio
+  (draw, undo, redo, save and next, landscape and 320px); the 10,000-card
+  performance run.
 
 **Device coverage, honestly:** everything ran in desktop Chromium.
 Tablet and phone sizes are **Chromium emulation** (viewport, touch,

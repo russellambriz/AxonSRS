@@ -1,7 +1,7 @@
 // Handwriting geometry: smoothing, pressure/tilt width, predicted samples, eraser hits.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { strokeWidth, pencilFlatness, smoothStroke, paintSamples, splitPointerSamples, strokeHits, eraseStrokes, ERASER_RADIUS } from '../../js/core/ink.js';
+import { strokeWidth, pencilFlatness, smoothStroke, paintSamples, splitPointerSamples, strokeHits, eraseStrokes, ERASER_RADIUS, pointWidth, undoInkAction, redoInkAction } from '../../js/core/ink.js';
 
 const pt = (x, y, p = 0.5, extra = {}) => ({ x, y, p, ...extra });
 
@@ -97,4 +97,19 @@ test('eraser hit-testing selects a whole stroke, including the segment between s
   assert.equal(kept[0], far);
   assert.deepEqual(removed.map((r) => r.index), [0]);
   assert.equal(removed[0].stroke, across);
+  const wide = [{ x: 0, y: 0, p: 0.5, scale: 3 }, { x: 80, y: 0, p: 0.5, scale: 3 }];
+  assert.ok(pointWidth(wide[0]) > pointWidth({ x: 0, y: 0, p: 0.5 }));
+  assert.equal(strokeHits({ pts: wide }, 40, pointWidth(wide[0]) / 2, 0), true, 'a wrapped stroke and a wider pen still hit');
+});
+
+test('undo puts a stroke or an erasure back, and redo repeats it', () => {
+  const a = [{ x: 0, y: 0 }];
+  const b = [{ x: 4, y: 0 }];
+  const added = undoInkAction([a, b], { kind: 'add', stroke: b });
+  assert.deepEqual(added, [a]);
+  assert.deepEqual(redoInkAction(added, { kind: 'add', stroke: b }), [a, b]);
+  const afterErase = [b];
+  const restored = undoInkAction(afterErase, { kind: 'erase', items: [{ index: 0, stroke: a }] });
+  assert.deepEqual(restored, [a, b]);
+  assert.deepEqual(redoInkAction(restored, { kind: 'erase', items: [{ index: 0, stroke: a }] }), [b]);
 });

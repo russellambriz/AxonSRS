@@ -185,6 +185,11 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
     field('Tags', tagsInput),
     advanced, errorsEl, footer);
 
+  if (isNew && !embedded) {
+    form.prepend(h('a', { class: 'pencil-launch', href: `#/pencil?deck=${encodeURIComponent(draft.deckId)}` },
+      icon('pen'),
+      h('span', {}, h('strong', {}, 'Create with Pencil'), h('span', {}, 'Sketch the prompt on a full page. You still type the answer Axon checks.'))));
+  }
   container.append(h('div', { class: 'editor-grid' }, h('section', { class: 'panel' }, form), h('section', { class: 'panel', 'aria-label': 'Preview' }, h('h3', {}, 'Preview'), previewEl)));
   if (!embedded) outlet.append(pg.root);
   else outlet.append(container);

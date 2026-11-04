@@ -27,6 +27,7 @@ export async function view(outlet, { id }, query) {
     sub: deck.description || null,
     crumbs: [{ label: 'Decks', href: '#/decks' }, ...(deck.group ? [{ label: deck.group }] : [])],
     actions: [
+      button('Pencil', { iconName: 'pen', href: `#/pencil?deck=${encodeURIComponent(id)}`, title: 'Create with Pencil' }),
       button('Add card', { iconName: 'plus', href: `#/card/new?deck=${encodeURIComponent(id)}` }),
       button('Study', { kind: 'primary', iconName: 'play', onclick: () => startDaily([id]).catch(errorToast) }),
       more,

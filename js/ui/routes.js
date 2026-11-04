@@ -13,6 +13,7 @@ export const routes = [
   { path: '/deck/:id', section: 'decks', title: 'Deck', view: lazy('deck') },
   { path: '/cards', section: 'decks', title: 'Cards', view: lazy('cards') },
   { path: '/card/new', section: 'decks', title: 'New card', view: lazy('editor', 'newCardView') },
+  { path: '/pencil', section: 'decks', title: 'Create with Pencil', view: lazy('pencil') },
   { path: '/card/:id', section: 'decks', title: 'Card', view: lazy('editor') },
   { path: '/import', section: 'decks', title: 'Import', view: lazy('import') },
   { path: '/study', section: 'study', title: 'Study', view: lazy('launcher') },
