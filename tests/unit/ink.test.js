@@ -1,7 +1,7 @@
 // Handwriting geometry: smoothing, pressure/tilt width, predicted samples, eraser hits.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { strokeWidth, pencilFlatness, smoothStroke, paintSamples, splitPointerSamples, strokeHits, eraseStrokes, ERASER_RADIUS, pointWidth, undoInkAction, redoInkAction } from '../../js/core/ink.js';
+import { strokeWidth, pencilFlatness, smoothStroke, paintSamples, stabilizeStroke, ribbonPolygon, smoothingLevel, splitPointerSamples, strokeHits, eraseStrokes, ERASER_RADIUS, pointWidth, undoInkAction, redoInkAction } from '../../js/core/ink.js';
 
 const pt = (x, y, p = 0.5, extra = {}) => ({ x, y, p, ...extra });
 
@@ -66,6 +66,33 @@ test('midpoint smoothing keeps every stroke endpoint and rounds corners', () => 
   assert.equal(painted[0].x, many[0].x);
   assert.equal(painted.at(-1).x, many.at(-1).x);
   assert.equal(painted.at(-1).y, many.at(-1).y);
+});
+
+test('the stabilizer calms a jittery stroke without moving its ends or the saved points', () => {
+  const raw = [];
+  for (let i = 0; i < 12; i++) raw.push(pt(i * 4, i % 2 ? 8 : 0, i % 2 ? 0.95 : 0.15));
+  const snapshot = raw.map((p) => ({ ...p }));
+  assert.equal(smoothingLevel('nope').id, 'medium');
+  assert.equal(stabilizeStroke(raw, 'off'), raw);
+  const medium = stabilizeStroke(raw, 'medium');
+  const high = stabilizeStroke(raw, 'high');
+  assert.deepEqual(raw, snapshot, 'saved points stay raw');
+  assert.equal(medium[0].x, raw[0].x);
+  assert.equal(medium.at(-1).x, raw.at(-1).x);
+  assert.equal(medium.at(-1).y, raw.at(-1).y);
+  assert.ok(Math.abs(medium[5].y) < Math.abs(raw[5].y), 'an interior wobble is pulled in');
+  assert.ok(Math.abs(high[5].y) < Math.abs(medium[5].y), 'high steadies more than medium');
+  const jump = (pts) => pts.slice(1).reduce((sum, p, i) => sum + Math.abs(p.p - pts[i].p), 0);
+  assert.ok(jump(medium) < jump(raw), 'pressure changes taper instead of flickering');
+  const painted = paintSamples(raw, 'high');
+  assert.equal(painted[0].x, raw[0].x);
+  assert.equal(painted.at(-1).x, raw.at(-1).x);
+  assert.equal(painted.at(-1).y, raw.at(-1).y);
+  const flat = paintSamples([pt(0, 0, 0.2), pt(30, 0, 0.2), pt(60, 0, 1)], 'off');
+  const ribbon = ribbonPolygon(flat);
+  assert.ok(ribbon.length >= 4);
+  const widest = Math.max(...flat.map((s) => s.w));
+  assert.ok(ribbon.every((p) => Math.abs(p.y) <= widest / 2 + 0.6));
 });
 
 test('predicted samples are a tail and coalesced movement is kept', () => {

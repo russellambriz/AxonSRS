@@ -138,7 +138,7 @@ study materials.
 | Local audio clips on cards (IndexedDB blobs, stable ids) in backups/sync | editor "Audio clips", `putMedia` (sha256 ids), backup media | P3 | U:backup media round trip (image); audio uses the same path | ✅ (storage) / ⚠️ (playback not automated) |
 | Voice input as its own modality and baseline, excluded from typing calibration | `voice()` (Web Speech), `classifyModality` | P3 | U:fluency "modality detection: physical, touch, voice and unknown"; speech recognition itself unavailable headless | ✅ (grading) / ⚠️ (recognition) |
 | Symbol toolbar `π √ ^ / ( ) - + ² ³ θ Δ ± ∞`, caret insertion, selection replace, focus kept, customisable | `renderSymbols`, `insertSymbol`; Settings → Input | P3 | B:study "toolbar symbols insert at the caret" | ✅ |
-| Handwriting pad: smoothed pressure ink, predicted tail replaced each frame, pen hover dot, palm rejection, Pencil only, stroke eraser with undo | `js/ui/inkpad.js`, `js/core/ink.js`; Settings → Study | P3 | U:ink (width, smoothing, predicted samples, eraser hits); B:session coalesced/predicted tail, hover, pencil only, eraser, wide layout | ✅ (synthetic Pointer Events) / ⚠️ (real Apple Pencil pressure, tilt and hover) |
+| Handwriting pad: smoothed pressure ink, predicted tail replaced each frame, pen hover dot, palm rejection, Pencil only, stroke eraser with undo. Smoothing Off/Low/Medium/High (Medium default, remembered on the device) steadies position and width at draw time; stored points stay raw | `js/ui/inkpad.js`, `js/core/ink.js`; pen row and Settings → Study | P3 | U:ink (width, smoothing, stabilizer, predicted samples, eraser hits); B:pencil studio sets Smoothing High; B:session coalesced/predicted tail, hover, pencil only, eraser, wide layout | ✅ (synthetic Pointer Events) / ⚠️ (real Apple Pencil pressure, tilt and hover) |
 | Wrong handwritten answer: write the correct answer once (copy event, not a second review), honour requireRetype, keep Skip retyping | `study.js` `finishInkCopy`, `recordCopy` | P3 | B:session handwriting Again → retype; "skip retyping"; "turning off retype" | ✅ |
 | Scribble in the typed answer box is unchanged | answer `<input>` stays mounted; ink mode hides it instead of replacing it | P3 | B:session letters-in-field and IME tests still use the input; ink mode asserts the input is hidden | ✅ / ⚠️ (Scribble itself is Apple's and was not run on iPad) |
 | Editor sketch: Draw inserts a PNG through the image type and size checks, offline | `editor.js` `openSketch` → `insertImage` | P6 | B:draw "Draw inserts a PNG" | ✅ |
@@ -250,7 +250,7 @@ study materials.
 | Inspect repo first; preserve existing code and data | ✅ (repository was empty) |
 | Complete README (setup, imports, scheduling, offline, deployment, backup, Gist sync) | ✅ `README.md` |
 | Explain grading methodology and limitations | ✅ README "How grading works" |
-| Run all automated tests | ✅ 211 unit + 48 browser tests pass (see README "Testing") |
+| Run all automated tests | ✅ 212 unit + 48 browser tests pass (see README "Testing") |
 | Verify it runs as a static GitHub Pages site | ✅ locally under `/AxonSRS/`. Live site still serves `main` (29 Oct 2026, `axon-v5`): Pages source is that branch, not the default branch. Retargeting it is a Settings change the Pages API refused (403) |
 | Commit and push to `main` | ✅ pushed (verified with `git push`) |
 | Report features, tests, deployment, limitations | ✅ README and delivery report |

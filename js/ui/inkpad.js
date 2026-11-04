@@ -18,13 +18,52 @@
 import { h } from './dom.js';
 import { icon } from './icons.js';
 import { local } from './local.js';
-import { eraseStrokes, ERASER_RADIUS, paintSamples, pointWidth, redoInkAction, splitPointerSamples, undoInkAction } from '../core/ink.js';
+import { eraseStrokes, ERASER_RADIUS, paintSamples, pointWidth, redoInkAction, ribbonPolygon, SMOOTHING_LEVELS, smoothingLevel, splitPointerSamples, undoInkAction } from '../core/ink.js';
 
 const HINT = 'Write your answer, then check it';
 /** Set after a pen has touched a pad on this device. */
 export const PEN_SEEN_KEY = 'axon-pen-seen';
 /** Settings → Study. When '1', the pad ignores all touch input. */
 export const PENCIL_ONLY_KEY = 'axon-pencil-only';
+/** Per device. Off, low, medium (default) or high. Render only. */
+export const SMOOTHING_KEY = 'axon-ink-smoothing';
+const SMOOTHING_EVENT = 'axon-ink-smoothing';
+
+export function inkSmoothing() {
+  return smoothingLevel(local.get(SMOOTHING_KEY)).id;
+}
+
+export function setInkSmoothing(id) {
+  const next = smoothingLevel(id).id;
+  local.set(SMOOTHING_KEY, next);
+  window.dispatchEvent(new CustomEvent(SMOOTHING_EVENT));
+  return next;
+}
+
+/** The Off / Low / Medium / High control used next to the pen colours. */
+export function smoothingButtons({ prefix = '' } = {}) {
+  const host = h('div', { class: 'pencil-choices pencil-smooth-group', role: 'group', 'aria-label': `${prefix}Smoothing`.trim() });
+  const paint = () => {
+    const current = inkSmoothing();
+    host.replaceChildren(...SMOOTHING_LEVELS.map((level) => h('button', {
+      type: 'button',
+      class: 'pencil-smooth',
+      'aria-label': `${prefix}Smoothing ${level.label}`.replace(/\s+/g, ' ').trim(),
+      'aria-pressed': String(level.id === current),
+      onclick: () => setInkSmoothing(level.id),
+    }, level.label)));
+  };
+  const onSmoothing = () => {
+    if (!host.isConnected) {
+      window.removeEventListener(SMOOTHING_EVENT, onSmoothing);
+      return;
+    }
+    paint();
+  };
+  paint();
+  window.addEventListener(SMOOTHING_EVENT, onSmoothing);
+  return host;
+}
 
 function pencilOnly() {
   return local.get(PENCIL_ONLY_KEY) === '1';
@@ -50,6 +89,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
   let predicted = [];
   let hover = null;
   let rafId = 0;
+  let smoothingId = inkSmoothing();
 
   const undoBtn = tools ? h('button', { class: 'btn small ghost', type: 'button', disabled: true, onclick: () => undo() }, icon('undo'), 'Undo stroke') : null;
   const eraserBtn = tools ? h('button', { class: 'btn small ghost', type: 'button', 'aria-pressed': 'false', onclick: () => setEraser(!erasing) }, icon('eraser'), 'Eraser') : null;
@@ -78,6 +118,16 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
       : 'Handwriting pad. Write your answer with Apple Pencil, a stylus or a finger.');
   }
   syncLabel();
+  const onSmoothing = () => {
+    if (!canvas.isConnected) {
+      window.removeEventListener(SMOOTHING_EVENT, onSmoothing);
+      return;
+    }
+    smoothingId = inkSmoothing();
+    redraw();
+    drawOverlay();
+  };
+  window.addEventListener(SMOOTHING_EVENT, onSmoothing);
 
   function pointerFrom(e) {
     const r = canvas.getBoundingClientRect();
@@ -104,25 +154,28 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     ctx.lineJoin = 'round';
   }
 
+  function fillDot(sample) {
+    ctx.beginPath();
+    ctx.arc(sample.x, sample.y, Math.max(0.6, sample.w / 2), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   function drawPoints(pts) {
-    const samples = paintSamples(pts);
+    const samples = paintSamples(pts, smoothingId);
+    if (!samples.length) return;
     if (samples.length === 1) {
-      const a = samples[0];
-      ctx.beginPath();
-      ctx.arc(a.x, a.y, Math.max(0.6, a.w / 2), 0, Math.PI * 2);
-      ctx.fill();
+      fillDot(samples[0]);
       return;
     }
-    for (let i = 1; i < samples.length; i++) {
-      const a = samples[i - 1];
-      const b = samples[i];
-      if (Math.hypot(b.x - a.x, b.y - a.y) < 0.01) continue;
-      ctx.lineWidth = Math.max(0.6, (a.w + b.w) / 2);
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-      ctx.stroke();
-    }
+    const poly = ribbonPolygon(samples);
+    if (!poly) return;
+    ctx.beginPath();
+    ctx.moveTo(poly[0].x, poly[0].y);
+    for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+    ctx.closePath();
+    ctx.fill();
+    fillDot(samples[0]);
+    fillDot(samples[samples.length - 1]);
   }
 
   let plate = null;

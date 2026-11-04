@@ -231,7 +231,13 @@ import leaves no partial cards and appears on the Recovery screen.
   - **Write** (Alt+D or D on the study screen) swaps the answer box for a
     handwriting pad. Nothing is recognised: after **Check**, your ink is shown
     next to the correct answer and you grade it (Again = wrong, otherwise
-    Hard, Good or Easy). Strokes are smoothed and follow pressure. When the
+    Hard, Good or Easy). Strokes are smoothed and follow pressure.
+    **Smoothing** (Off, Low, Medium, High) is on the pen row in Create with
+    Pencil and the card editor, and under Settings → Study. Medium is the
+    default. It steadies the line and the width when the ink is drawn. The
+    saved points stay as they were sampled, so older cards just draw more
+    steadily, and the tip still follows Pencil prediction. The choice is
+    remembered on this device. When the
     browser reports tilt (or altitude), a flatter pencil draws a wider line;
     twist only nudges that. A short predicted tail keeps the ink near the tip
     and is replaced as real samples arrive. It works with Apple Pencil,
@@ -781,7 +787,7 @@ Day-to-day reviews write one event each.
 ## Testing
 
 ```bash
-npm test               # 211 unit tests (node --test), ~4 s
+npm test               # 212 unit tests (node --test), ~4 s
 npm run test:browser   # 48 browser tests (Playwright + Chromium)
 npm run check          # pre-cache list is current + unit tests
 ```
@@ -839,7 +845,7 @@ installation prompts, speech recognition and system TTS voices are
 
 | Component | Version | Notes |
 | --- | --- | --- |
-| App | 1.0.6 | cache `axon-v7` |
+| App | 1.0.7 | cache `axon-v8` |
 | Scheduler | ts-fsrs 5.4.2 (FSRS-6, default parameters) + `axon-fuzz@1` | reference-checked against py-fsrs 6.3.2 |
 | Grading rules | `axon-fluency@1.1.0` | thresholds above; recorded on every review |
 | Reading/warm-up heuristic | `axon-reading@2` | can be disabled |
@@ -901,7 +907,7 @@ service-worker registration and its cache list.
 Pages publishes):
 
 ```bash
-npm run release -- 1.0.6   # bumps CACHE_NAME (axon-vN → N+1) in sw.js and js/config.js,
+npm run release -- 1.0.7   # bumps CACHE_NAME (axon-vN → N+1) in sw.js and js/config.js,
                            # sets APP_VERSION, refreshes the pre-cache list
 npm run check              # pre-cache list current + unit tests
 ```

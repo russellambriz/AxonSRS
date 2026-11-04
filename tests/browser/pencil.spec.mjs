@@ -36,6 +36,9 @@ export const tests = [
       await page.evaluate((id) => { location.hash = `#/pencil?deck=${id}`; }, deckId);
       await page.getByRole('heading', { name: 'Create with Pencil' }).waitFor();
       await page.waitForFunction(() => [...document.querySelectorAll('.pencil-paper .ink-canvas')].some((c) => c.width > 0));
+      assert.equal(await page.getAttribute('button[aria-label="Smoothing Medium"]', 'aria-pressed'), 'true');
+      await page.getByRole('button', { name: 'Smoothing High' }).click();
+      assert.equal(await page.evaluate(() => localStorage.getItem('axon-ink-smoothing')), 'high');
       assert.equal(await page.locator('textarea.pencil-answer').evaluate((el) => el.tagName), 'TEXTAREA', 'the graded answer is a normal field, so Scribble still works');
       const layout = await page.evaluate(() => {
         const paper = document.querySelector('.pencil-paper').getBoundingClientRect();
@@ -69,6 +72,7 @@ export const tests = [
       assert.equal(await visibleStrokes(page), '0', 'the back page starts blank');
       await stroke(page, { y: 80, id: 8 });
       assert.equal(await visibleStrokes(page), '1');
+      await stroke(page, { x: 80, y: 140, id: 9 });
       await page.getByRole('button', { name: 'Front' }).click();
       await page.waitForFunction(() => document.querySelector('.pencil-studio')?.dataset.side === 'front');
       assert.equal(await visibleStrokes(page), '1', 'the front sketch is still there');
