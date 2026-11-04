@@ -41,6 +41,7 @@ import { mediaFetcher } from './editor.js';
 import { local } from '../local.js';
 import { occlusionView } from '../occlusion.js';
 import { inkPad } from '../inkpad.js';
+import { isInkSide } from '../../core/pencil.js';
 
 const TOOLBAR_PRESETS = {
   general: ['π', '√', '^', '/', '(', ')', '-', '+', '²', '³', 'θ', 'Δ', '±', '∞'],
@@ -236,7 +237,7 @@ class StudyScreen {
     // With the handwriting pad the answer field is not focused, so Enter
     // (from a hardware keyboard) checks or continues from anywhere.
     document.addEventListener('keydown', (e) => {
-      if (!this.inkMode || e.key !== 'Enter' || e.isComposing || e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
+      if (!this.usingInk() || e.key !== 'Enter' || e.isComposing || e.repeat || e.altKey || e.ctrlKey || e.metaKey) return;
       if (e.target.closest?.('input, textarea, select, button, a, dialog, [contenteditable]')) return;
       e.preventDefault();
       this.primaryAction();
@@ -307,9 +308,14 @@ class StudyScreen {
 
   /* ========================================================= helpers */
 
+  /** The pad is up for a chosen ink session, or because this card's answer is handwriting. */
+  usingInk() {
+    return !!(this.inkMode || this.current?.inkAnswer);
+  }
+
   focusInput(force = false) {
     // The handwriting pad needs no keyboard (focusing would open it on iPad).
-    if (this.destroyed || this.inkMode) return;
+    if (this.destroyed || this.usingInk()) return;
     if (force || document.activeElement !== this.input) {
       try {
         this.input.focus({ preventScroll: true });
@@ -418,6 +424,10 @@ class StudyScreen {
     this.ink.clear();
     this.ink.setHint('Write your answer, then check it');
     this.input.className = 'answer-input';
+    this.current.inkAnswer = isInkSide((content.answerGroups || []).flat());
+    this.root.classList.toggle('ink-mode', this.usingInk());
+    this.root.classList.toggle('ink-card', !!this.current.inkAnswer);
+    if (this.current.inkAnswer) requestAnimationFrame(() => this.ink.resize());
     this.input.placeholder = content.answerGroups.length > 1 ? `${content.answerGroups.length} answers separated by ;` : 'Type your answer';
     this.input.setAttribute('inputmode', 'text');
     clear(this.feedbackEl);
@@ -433,6 +443,7 @@ class StudyScreen {
     if (!unit.state) chips.push(h('span', { class: 'chip accent' }, 'New'));
     if (card.taskType && card.taskType !== 'recall') chips.push(h('span', { class: 'chip' }, TASK_TYPE_LABELS[card.taskType]));
     if (unit.key === 'rev') chips.push(h('span', { class: 'chip' }, 'Back → Front'));
+    if (this.current.inkAnswer) chips.push(h('span', { class: 'chip', title: 'The answer is your handwriting. You grade this card yourself.' }, 'Handwritten'));
     if (unit.leech) chips.push(h('button', { class: 'chip danger button', onclick: (e) => this.leechMenu(e.currentTarget) }, icon('flag'), 'Leech'));
     if (this.current.grade.arm) chips.push(h('span', { class: 'chip', title: 'Research comparison arm' }, this.current.grade.arm === 'standard' ? 'Self-graded' : 'Auto-graded'));
     replace(this.metaEl, chips);
@@ -443,7 +454,9 @@ class StudyScreen {
     const short = !long && chars <= 24 && !content.occlusion;
     this.promptEl.className = `prompt rich${long ? ' long' : short ? ' short' : ''}`;
     await renderInto(this.promptEl, content.prompt || (content.kind === 'occlusion' ? 'What is hidden here?' : ''), { media: mediaFetcher });
-    this.instructionEl.textContent = content.instruction || '';
+    this.instructionEl.textContent = this.current.inkAnswer
+      ? 'Write your answer in ink. You will compare it with the handwritten answer and grade it yourself.'
+      : (content.instruction || '');
     clear(this.occlusionEl);
     if (content.occlusion?.imageId) {
       const url = await mediaUrl(content.occlusion.imageId, mediaFetcher);
@@ -596,7 +609,7 @@ class StudyScreen {
 
   primaryAction({ fromEnter = false, synthetic = false } = {}) {
     if (this.phase === 'question') {
-      if (this.inkMode) {
+      if (this.usingInk()) {
         if (this.ink.isEmpty()) {
           announce('Write an answer first, or use Reveal.', { assertive: true });
           return;
@@ -615,7 +628,7 @@ class StudyScreen {
       if (fromEnter && !this.enterArmed) return;
       this.advance();
     } else if (this.phase === 'retype') {
-      if (this.inkMode && this.current?.ink) this.finishInkCopy();
+      if (this.usingInk() && this.current?.ink) this.finishInkCopy();
       else this.checkRetype();
     } else if (this.phase === 'error') {
       this.retrySave();
@@ -670,14 +683,22 @@ class StudyScreen {
    * A handwritten (ink) answer is never recognised: the learner compares
    * it with the correct answer and grades it, Again meaning wrong.
    */
-  submitInk() {
+  async submitInk({ revealed = false } = {}) {
     const cur = this.current;
     if (!cur || this.phase !== 'question') return;
     const raw = this.trial.finish('');
-    cur.ink = { image: this.ink.snapshot(), strokes: this.ink.strokeCount() };
+    cur.ink = { image: this.ink.isEmpty() ? null : this.ink.snapshot(), strokes: this.ink.strokeCount() };
     cur.trial = { ...this.trialRecord(raw, '', { kind: 'handwriting', confidence: 0.95, source: 'ink', evidence: ['written on the handwriting pad'] }, { ...this.trial.assistance }), selfJudged: true };
-    cur.match = { correct: true, method: 'self', diagnostics: [], warnings: [] };
     cur.raw = raw;
+    if (revealed) {
+      cur.match = { correct: false, method: 'self', diagnostics: ['revealed'], warnings: [] };
+      cur.trial.gradingMs = 0;
+      this.gradingStartedAt = performance.now();
+      this.setPhase('submitting');
+      await this.commit(1);
+      return;
+    }
+    cur.match = { correct: true, method: 'self', diagnostics: [], warnings: [] };
     this.renderFeedback({ pending: true });
     this.setPhase('grading');
     this.gradingStartedAt = performance.now();
@@ -830,7 +851,7 @@ class StudyScreen {
     this.revealOcclusion();
     // A wrong handwritten answer is reinforced on the pad. Typing mode is unchanged.
     // Reveal in ink mode is not an ink answer, so it does not open the pad.
-    const needsRetype = !correct && store.global.requireRetype !== false && (!this.inkMode || !!cur.ink);
+    const needsRetype = !correct && store.global.requireRetype !== false && (!this.usingInk() || !!cur.ink);
     if (needsRetype) {
       this.setPhase('retype');
       if (cur.ink) {
@@ -889,7 +910,8 @@ class StudyScreen {
       gradeName && !pending ? h('span', { class: 'chip grade', title: ev.type === 'practice' ? 'Practice — your long-term schedule is unchanged' : 'FSRS rating applied' }, `${gradeName}${ev.type === 'practice' ? ' · practice' : ''}`) : null));
 
     // Correct answer
-    const answerEl = h('div', { class: 'answer rich' });
+    const answerEl = h('div', { class: ['answer', 'rich', cur.inkAnswer && 'ink-sheet'] });
+    if (cur.inkAnswer) parts.push(h('div', { class: 'faint tiny' }, 'Handwritten answer'));
     if (cur.content.kind === 'cloze') answerEl.innerHTML = markdownToHtml(cur.content.reveal, {});
     else answerEl.innerHTML = answerHtml(cur.content.answerDisplay, mode);
     parts.push(answerEl);
@@ -972,7 +994,7 @@ class StudyScreen {
     }
     const reinforce = !pending && !correct && !overridden && store.global.requireRetype !== false;
     if (reinforce && cur.ink) parts.push(h('div', { class: 'faint small' }, 'Write the correct answer once. This is not counted as recall.'));
-    else if ((this.phase === 'retype' || reinforce) && !this.inkMode) parts.push(h('div', { class: 'faint small' }, 'Type the correct answer once to reinforce it (this is not counted as recall).'));
+    else if ((this.phase === 'retype' || reinforce) && !this.usingInk()) parts.push(h('div', { class: 'faint small' }, 'Type the correct answer once to reinforce it (this is not counted as recall).'));
     replace(this.feedbackEl, h('section', { class: ['feedback', cur.ink && pending ? 'pending' : correct || overridden ? 'correct' : 'incorrect'], 'aria-label': 'Feedback' }, parts));
     resolveMedia(this.feedbackEl, mediaFetcher);
     const why = ev?.grading && store.global.showWhy !== false && !pending && ev.grading.mode !== 'manual' ? ev.grading.explanation : '';
@@ -997,7 +1019,7 @@ class StudyScreen {
       return b;
     };
     if (p === 'question' && cur) {
-      left.push(act(this.inkMode ? 'Type' : 'Write', this.inkMode ? 'keyboard' : 'pen', () => this.toggleInk(), '⌥D'));
+      if (!cur.inkAnswer) left.push(act(this.inkMode ? 'Type' : 'Write', this.inkMode ? 'keyboard' : 'pen', () => this.toggleInk(), '⌥D'));
       if (cur.card.hint) left.push(act('Hint', 'hint', () => this.showHint(), '⌥H'));
       left.push(act('Reveal', 'eye', () => this.revealAnswer(), '⌥R'));
       if (cur.card.explanation) left.push(act('Solution', 'book', () => this.toggleSolution(), '⌥W'));
@@ -1028,8 +1050,8 @@ class StudyScreen {
     }
     replace(this.actionsEl, h('div', { class: 'left' }, left), h('div', { class: 'right' }, right));
     this.submitBtn.hidden = !['question', 'retype', 'feedback', 'error'].includes(p);
-    const inkCheck = p === 'question' && this.inkMode;
-    const inkDone = p === 'retype' && this.inkMode && !!cur?.ink;
+    const inkCheck = p === 'question' && this.usingInk();
+    const inkDone = p === 'retype' && this.usingInk() && !!cur?.ink;
     this.submitBtn.setAttribute('aria-label', p === 'feedback' ? 'Continue to the next card (Enter)' : inkDone ? 'Done' : p === 'retype' ? 'Check retyped answer' : inkCheck ? 'Check your handwritten answer' : 'Submit answer');
     if (p === 'feedback') replace(this.submitBtn, h('span', {}, 'Continue'), icon('chevronRight'));
     else if (inkDone) replace(this.submitBtn, h('span', {}, 'Done'), icon('check'));
@@ -1040,9 +1062,13 @@ class StudyScreen {
   /** Switch between typing and the handwriting pad; remembered on this device. */
   toggleInk() {
     if (this.phase !== 'question') return;
+    if (this.current?.inkAnswer) {
+      announce('This card’s answer is handwriting. You grade it yourself.');
+      return;
+    }
     this.inkMode = !this.inkMode;
     local.set('axon-ink-mode', this.inkMode ? '1' : '0');
-    this.root.classList.toggle('ink-mode', this.inkMode);
+    this.root.classList.toggle('ink-mode', this.usingInk());
     this.ink.clear();
     this.renderActions();
     if (this.inkMode) {
@@ -1248,6 +1274,10 @@ class StudyScreen {
     if (this.phase !== 'question' || !cur) return;
     this.trial.assistance.revealed = true;
     store.addEvents([exposureEvent({ id: uuid(), type: 'reveal', now: Date.now(), deviceId: store.deviceId, seq: null, unit: cur.unit, card: cur.card, sessionId: this.session.id, studyDay: store.today(), data: { presentationId: cur.eventId } })]).catch(() => {});
+    if (cur.inkAnswer) {
+      this.submitInk({ revealed: true });
+      return;
+    }
     this.submit({ revealed: true });
   }
 

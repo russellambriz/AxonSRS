@@ -10,7 +10,7 @@ import { app } from '../../app.js';
 import { store } from '../../data/store.js';
 import { VirtualList, select, toast, confirmDialog, promptDialog, sheet, errorToast, menu } from '../components.js';
 import { cardStatusChips, plainFront, plainBack, deckOptions, leechActions } from './common.js';
-import { markdownToHtml, answerHtml, ensureMath } from '../render.js';
+import { markdownToHtml, answerHtml, ensureMath, resolveMedia } from '../render.js';
 import { effectiveCardSettings } from '../../core/model.js';
 import { clozeFilled } from '../../core/cloze.js';
 import { cardSearchText, TASK_TYPE_LABELS, ANSWER_MODE_LABELS } from '../../core/model.js';
@@ -92,6 +92,7 @@ export function cardBrowser({ deckId = null, initialQuery = '' } = {}) {
       back,
       h('div', { class: 'badges' }, card.kind !== 'basic' ? h('span', { class: 'chip' }, card.kind === 'cloze' ? 'Cloze' : 'Image') : null, cardStatusChips(card),
         app.cache.unitsOfCard(card.id).some((u) => u.leech) ? h('button', { class: 'btn small ghost icon', 'aria-label': `Fix leech: ${plainFront(card).slice(0, 40)}`, title: 'Fix this leech', onclick: (e) => { e.stopPropagation(); menu(e.currentTarget, leechActions(card, { toast })); } }, icon('more')) : null));
+    resolveMedia(r, async (id) => (await store.getMedia(id))?.blob || null).catch(() => {});
     return r;
   }
 
