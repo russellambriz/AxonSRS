@@ -125,6 +125,7 @@ export function planReview(ctx) {
     gradingMs: usesManual ? Math.round(trial.gradingMs || 0) : 0,
     flags,
     research,
+    selfJudged: !!trial.selfJudged,
     // Enough unit context to reverse this transition exactly (undo).
     prevUnitMeta: {
       lastScheduled: unit.lastScheduled || null,

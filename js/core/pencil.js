@@ -1,7 +1,10 @@
 /**
- * Pure rules for creating cards with Apple Pencil. Drawings are images.
- * The typed answer is the only part Axon grades. No DOM.
+ * Pure rules for creating cards with Apple Pencil. A typed answer is
+ * matched as text. A side that is only ink is the card itself and is
+ * self-graded. No DOM.
  */
+
+import { plainText } from './text.js';
 
 export const PAPER = '#f6f3ee';
 
@@ -46,22 +49,55 @@ function clean(text) {
   return String(text || '').replace(/\s+$/g, '').replace(/^\s+/g, '');
 }
 
+const IMAGE_MD = /!\[[^\]]*\]\([^)]*\)/g;
+
+/**
+ * True when this side is handwriting and nothing else: at least one image,
+ * and no text outside those images. Alt text inside the image does not count.
+ */
+export function isInkAnswer(markdown) {
+  const raw = String(markdown || '');
+  if (!/!\[[^\]]*\]\([^)]*\)/.test(raw)) return false;
+  return plainText(raw.replace(IMAGE_MD, ' ')) === '';
+}
+
+/** Every non-empty alternative on this side is ink, so nothing is matched. */
+export function isInkSide(parts) {
+  const list = (Array.isArray(parts) ? parts : [parts]).map((s) => String(s ?? '').trim()).filter(Boolean);
+  return list.length > 0 && list.every((part) => isInkAnswer(part));
+}
+
+function fail(error) {
+  return { ok: false, error, front: '', back: '', mediaIds: [], handwritten: false };
+}
+
 /**
  * Front and back markdown for one pencil card.
- * `answer` is the gradable text. Drawings are optional images and are
- * never treated as the answer. A prompt is required: typed text, a front
- * drawing, or both.
+ * `handwritten` prints the back drawing as the answer and stores no typed
+ * answer. Otherwise `answer` is required and is what gets matched; a back
+ * drawing is only a note beside that text.
  */
-export function composePencilCard({ prompt = '', answer = '', frontImage = null, backImage = null } = {}) {
+export function composePencilCard({ prompt = '', answer = '', frontImage = null, backImage = null, handwritten = false } = {}) {
   const typed = clean(answer);
   const promptText = clean(prompt);
-  if (!typed) return { ok: false, error: 'Type the answer Axon should check. A drawing is not graded.', front: '', back: '', mediaIds: [] };
-  if (!promptText && !frontImage) return { ok: false, error: 'Add a prompt: sketch it on the page, or type one.', front: '', back: '', mediaIds: [] };
   const frontParts = [];
   if (promptText) frontParts.push(promptText);
   if (frontImage?.id) frontParts.push(`![${frontImage.alt || 'Handwritten prompt'}](axon-media:${frontImage.id})`);
+  const mediaIds = [frontImage?.id, backImage?.id].filter(Boolean);
+  if (!promptText && !frontImage?.id) return fail('Add a prompt: sketch it on the page, or type one.');
+  if (handwritten) {
+    if (!backImage?.id) return fail('Write the answer on the back. That handwriting is the card.');
+    return {
+      ok: true,
+      error: null,
+      front: frontParts.join('\n\n'),
+      back: `![${backImage.alt || 'Handwritten answer'}](axon-media:${backImage.id})`,
+      mediaIds,
+      handwritten: true,
+    };
+  }
+  if (!typed) return fail('Type the answer Axon should check. A drawing is not graded.');
   const backParts = [typed];
   if (backImage?.id) backParts.push(`![${backImage.alt || 'Handwritten note'}](axon-media:${backImage.id})`);
-  const mediaIds = [frontImage?.id, backImage?.id].filter(Boolean);
-  return { ok: true, error: null, front: frontParts.join('\n\n'), back: backParts.join('\n\n'), mediaIds };
+  return { ok: true, error: null, front: frontParts.join('\n\n'), back: backParts.join('\n\n'), mediaIds, handwritten: false };
 }

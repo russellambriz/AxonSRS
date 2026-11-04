@@ -21,6 +21,7 @@ import { retrievability, STATE_NAMES, RATING_LABELS } from '../../core/scheduler
 import { occlusionEditor } from '../occlusion.js';
 import { percent } from '../dom.js';
 import { inkPad } from '../inkpad.js';
+import { PAPER, penColor } from '../../core/pencil.js';
 
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif'];
 const AUDIO_TYPES = /^audio\/(mpeg|mp4|ogg|webm|wav|x-wav|aac)$/;
@@ -127,7 +128,7 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
       frontLabel.textContent = 'Front';
       frontHint.textContent = 'In “Back → Front” or “Both” decks this side is also typed as an answer, and | separates accepted answers (type \\| for a literal pipe).';
       backLabel.textContent = 'Back';
-      backHint.textContent = 'Separate accepted answers with | (type \\| for a literal pipe).';
+      backHint.textContent = 'Separate accepted answers with | (type \\| for a literal pipe). A back that is only a drawing is the handwritten answer: you grade it yourself, and it is not matched.';
     }
   }
 
@@ -188,7 +189,7 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
   if (isNew && !embedded) {
     form.prepend(h('a', { class: 'pencil-launch', href: `#/pencil?deck=${encodeURIComponent(draft.deckId)}` },
       icon('pen'),
-      h('span', {}, h('strong', {}, 'Create with Pencil'), h('span', {}, 'Sketch the prompt on a full page. You still type the answer Axon checks.'))));
+      h('span', {}, h('strong', {}, 'Create with Pencil'), h('span', {}, 'Print your handwriting on the card, or type an answer Axon can check.'))));
   }
   container.append(h('div', { class: 'editor-grid' }, h('section', { class: 'panel' }, form), h('section', { class: 'panel', 'aria-label': 'Preview' }, h('h3', {}, 'Preview'), previewEl)));
   if (!embedded) outlet.append(pg.root);
@@ -232,10 +233,11 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
     let insertBtn;
     const pad = inkPad({ onChange: () => { if (insertBtn) insertBtn.disabled = pad.isEmpty(); } });
     pad.el.classList.add('sheet');
-    pad.setHint('Draw, then insert. It is stored with the card like any other image.');
+    pad.setHint('Draw, then insert. It is stored on the card as ink.');
+    pad.setPen({ color: penColor('graphite').hex, scale: 1 });
     pad.canvas.setAttribute('aria-label', 'Drawing canvas. Draw with Apple Pencil, a stylus or a finger.');
     insertBtn = h('button', { class: 'btn primary', type: 'button', disabled: true, onclick: async () => {
-      const snap = pad.snapshot();
+      const snap = pad.snapshot({ background: PAPER });
       if (!snap) return;
       const blob = dataUrlToBlob(snap.src);
       const file = new File([blob], 'drawing.png', { type: blob.type || 'image/png' });
