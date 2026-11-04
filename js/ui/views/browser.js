@@ -91,6 +91,16 @@ export function cardBrowser({ deckId = null, initialQuery = '' } = {}) {
       h('div', { class: 'front-wrap' }, front, sub),
       back,
       h('div', { class: 'badges' }, card.kind !== 'basic' ? h('span', { class: 'chip' }, card.kind === 'cloze' ? 'Cloze' : 'Image') : null, cardStatusChips(card),
+        h('button', { class: 'btn small ghost', type: 'button', 'aria-label': `Delete ${plainFront(card).slice(0, 40) || 'card'}`, onclick: async (e) => {
+          e.stopPropagation();
+          const ok = await confirmDialog({ title: 'Delete this card?', message: 'Its review history is kept. You can undo right after.', confirmLabel: 'Delete', danger: true });
+          if (!ok) return;
+          const trashId = await store.deleteCards([card.id]);
+          state.selected.delete(card.id);
+          await app.cache.load();
+          toast('Card deleted', { action: { label: 'Undo', run: async () => { await store.restoreTrash(trashId); await app.cache.load(); refresh(); } }, timeout: 10000 });
+          refresh();
+        } }, 'Delete'),
         app.cache.unitsOfCard(card.id).some((u) => u.leech) ? h('button', { class: 'btn small ghost icon', 'aria-label': `Fix leech: ${plainFront(card).slice(0, 40)}`, title: 'Fix this leech', onclick: (e) => { e.stopPropagation(); menu(e.currentTarget, leechActions(card, { toast })); } }, icon('more')) : null));
     resolveMedia(r, async (id) => (await store.getMedia(id))?.blob || null).catch(() => {});
     return r;

@@ -67,6 +67,21 @@ export function isInkSide(parts) {
   return list.length > 0 && list.every((part) => isInkAnswer(part));
 }
 
+/**
+ * Which editor control a Basic side starts in.
+ * What is already on the card wins, so opening a saved card never hides its
+ * text behind an empty pad or its ink behind the raw image markdown.
+ * A blank side uses the choice remembered on this device, then the device:
+ * a touch screen (where a pencil can be used) starts on ink; a mouse-only
+ * computer stays on the text box.
+ */
+export function chooseSideMode({ stored = null, touch = false, inkContent = false, hasText = false } = {}) {
+  if (inkContent) return 'ink';
+  if (hasText) return 'text';
+  if (stored === 'ink' || stored === 'text') return stored;
+  return touch ? 'ink' : 'text';
+}
+
 function fail(error) {
   return { ok: false, error, front: '', back: '', mediaIds: [], handwritten: false };
 }

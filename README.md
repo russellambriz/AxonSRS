@@ -255,6 +255,25 @@ import leaves no partial cards and appears on the Recovery screen.
   - In the card editor, **Draw** next to **Image** opens the same pad.
     **Insert** stores the sketch as a PNG with the same type and size checks
     as any other image, on the front or the back, and it works offline.
+  - **New card** (Basic) is handwriting-first when this device can take a
+    touch or a pencil. Front and Back each open as a large ink pad — the
+    same colours, widths, eraser, undo, redo and **Clear** as Create with
+    Pencil — so Apple Pencil stays ink instead of being turned into text by
+    Scribble. Each side has an **Ink / Type** switch. Type is the normal
+    text box, and Scribble still works there. The choice is remembered on
+    this device (`localStorage` key `axon-editor-sides`). A side that
+    already has typed text stays a text box, and a side that is already
+    only ink stays a pad, so opening a saved card does not hide what is on
+    it. A blank side with no remembered choice follows the device: a touch
+    screen starts on ink, because a browser cannot tell that an Apple Pencil
+    is attached until it touches the page; a mouse-only computer stays on
+    the text boxes, exactly as before. Saving a Basic side from the pad
+    stores the same self-graded ink card as Create with Pencil (the drawing
+    is the answer, you grade it yourself, and it is not matched). The
+    preview shows that ink. Cloze and image occlusion stay text. **Clear**
+    on a side wipes that pad. A saved card can be deleted from its row in
+    the card list (**Delete**, then confirm) or from the editor (**Delete
+    card**, then confirm). History is kept, and the toast can undo it.
   - **Create with Pencil** (a deck’s **Pencil** button, or the banner on a
     new card) is a full-screen studio meant for a 13-inch iPad. The page is
     a sheet of paper: sketch the front, flip to the back, and pick graphite,
@@ -756,8 +775,8 @@ Day-to-day reviews write one event each.
 ## Testing
 
 ```bash
-npm test               # 209 unit tests (node --test), ~4 s
-npm run test:browser   # 46 browser tests (Playwright + Chromium)
+npm test               # 210 unit tests (node --test), ~4 s
+npm run test:browser   # 47 browser tests (Playwright + Chromium)
 npm run check          # pre-cache list is current + unit tests
 ```
 
@@ -777,7 +796,8 @@ committed).
   encryption, compression, Gist client, chunking, backups, GitHub Pages paths,
   handwriting geometry (smoothing, pressure and tilt width, predicted
   samples, eraser hit-testing, undo and redo), and pencil-card composition
-  (a typed answer is matched; a side that is only ink is self-graded).
+  (a typed answer is matched; a side that is only ink is self-graded;
+  the card editor starts a blank Basic side on ink only for a touch device).
 - **Browser**: persistence across reloads; a synthetic v1→v2 schema
   migration with snapshot; a failing migration; refusal to open newer data;
   a failed review transaction (synthetic quota error) with no partial writes;
@@ -792,8 +812,11 @@ committed).
   and touch-target size; handwriting smoothing, hover, palm rejection,
   eraser, wide ink layout, the copy step after a missed ink answer, a
   sketch inserted from the card editor, the Create with Pencil studio
-  (draw, undo, redo, save and next, landscape and 320px), and an ink-only
-  card reviewed by self-grading; the 10,000-card performance run.
+  (draw, undo, redo, save and next, landscape and 320px), an ink-only
+  card reviewed by self-grading, and the regular New card editor (typed
+  on a mouse, ink pads on a touch device, remembered Type choice, cloze
+  stays text, delete from the card list and Delete card in the editor);
+  the 10,000-card performance run.
 
 **Device coverage, honestly:** everything ran in desktop Chromium.
 Tablet and phone sizes are **Chromium emulation** (viewport, touch,

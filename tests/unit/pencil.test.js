@@ -1,7 +1,7 @@
 // Pencil card composition: the typed answer is graded, drawings are images.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PEN_COLORS, PEN_WIDTHS, PAPER, composePencilCard, imageRejectReason, isInkAnswer, isInkSide, penColor, penWidth } from '../../js/core/pencil.js';
+import { PEN_COLORS, PEN_WIDTHS, PAPER, chooseSideMode, composePencilCard, imageRejectReason, isInkAnswer, isInkSide, penColor, penWidth } from '../../js/core/pencil.js';
 
 test('pen presets stay ordered and every colour is a dark ink for the paper', () => {
   assert.ok(penWidth('fine').scale < penWidth('medium').scale);
@@ -56,6 +56,16 @@ test('handwriting with no typed answer is an ink card, and text answers stay tex
   assert.equal(isInkAnswer(ink.back), true);
   assert.match(composePencilCard({ handwritten: true, frontImage: { id: 'front' } }).error, /back/);
   assert.match(composePencilCard({ handwritten: true, answer: 'ignored', backImage: { id: 'back' } }).error, /prompt/);
+});
+
+test('the editor starts on ink only for a blank side on a touch device', () => {
+  assert.equal(chooseSideMode({ touch: false }), 'text');
+  assert.equal(chooseSideMode({ touch: true }), 'ink');
+  assert.equal(chooseSideMode({ stored: 'text', touch: true }), 'text', 'a blank side uses the remembered choice');
+  assert.equal(chooseSideMode({ stored: 'ink', touch: false }), 'ink');
+  assert.equal(chooseSideMode({ stored: 'ink', touch: true, hasText: true }), 'text', 'an existing typed side stays text');
+  assert.equal(chooseSideMode({ stored: 'text', touch: false, inkContent: true }), 'ink', 'an existing ink side stays ink');
+  assert.equal(chooseSideMode({ stored: 'nope', touch: false }), 'text');
 });
 
 test('drawings use the same image type and size limits as other card images', () => {
