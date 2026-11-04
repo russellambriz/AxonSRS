@@ -55,8 +55,20 @@ export function strokeWidth(pressure, tilt = {}) {
   return width;
 }
 
+/** Width of one sample, including an optional per-point `scale` (pen size). */
+export function pointWidth(pt) {
+  const scale = finite(pt?.scale, 1);
+  return strokeWidth(pt?.p, pt || {}) * (scale > 0 ? scale : 1);
+}
+
 function widthOf(pt) {
-  return strokeWidth(pt?.p, pt || {});
+  return pointWidth(pt);
+}
+
+/** Point list, whether the stroke is a bare array or `{ pts }`. */
+export function strokePoints(stroke) {
+  if (Array.isArray(stroke)) return stroke;
+  return stroke?.pts || [];
 }
 
 function mid(a, b) {
@@ -198,8 +210,9 @@ function distToSegment(px, py, ax, ay, bx, by) {
  * segment between samples (not only the vertices). Stroke thickness counts.
  * The caller removes the whole stroke, so Undo can put it back.
  */
-export function strokeHits(points, x, y, radius = ERASER_RADIUS) {
-  if (!points?.length || !(radius >= 0) || !Number.isFinite(x) || !Number.isFinite(y)) return false;
+export function strokeHits(stroke, x, y, radius = ERASER_RADIUS) {
+  const points = strokePoints(stroke);
+  if (!points.length || !(radius >= 0) || !Number.isFinite(x) || !Number.isFinite(y)) return false;
   const reach = (pt) => radius + widthOf(pt) / 2;
   if (points.length === 1) return Math.hypot(points[0].x - x, points[0].y - y) <= reach(points[0]);
   for (let i = 1; i < points.length; i++) {
@@ -222,4 +235,43 @@ export function eraseStrokes(strokes, x, y, radius = ERASER_RADIUS) {
     else kept.push(stroke);
   });
   return { kept, removed };
+}
+
+/**
+ * Undo one history action. `add` drops that stroke object; `erase` puts
+ * the removed strokes back at the indexes they had. Does not mutate.
+ */
+export function undoInkAction(strokes, action) {
+  const next = (strokes || []).slice();
+  if (!action) return next;
+  if (action.kind === 'add') {
+    const i = next.lastIndexOf(action.stroke);
+    if (i >= 0) next.splice(i, 1);
+    return next;
+  }
+  if (action.kind === 'erase') {
+    for (let i = action.items.length - 1; i >= 0; i--) {
+      const item = action.items[i];
+      next.splice(Math.min(item.index, next.length), 0, item.stroke);
+    }
+  }
+  return next;
+}
+
+/**
+ * Redo one history action. `add` appends the stroke; `erase` removes those
+ * stroke objects again. Does not mutate.
+ */
+export function redoInkAction(strokes, action) {
+  const next = (strokes || []).slice();
+  if (!action) return next;
+  if (action.kind === 'add') {
+    if (!next.includes(action.stroke)) next.push(action.stroke);
+    return next;
+  }
+  if (action.kind === 'erase') {
+    const drop = new Set(action.items.map((item) => item.stroke));
+    return next.filter((stroke) => !drop.has(stroke));
+  }
+  return next;
 }

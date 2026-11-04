@@ -44,6 +44,7 @@ const PRECACHE = [
   './js/core/match/index.js',
   './js/core/match/math.js',
   './js/core/model.js',
+  './js/core/pencil.js',
   './js/core/planner.js',
   './js/core/queue.js',
   './js/core/research.js',

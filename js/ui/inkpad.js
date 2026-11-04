@@ -18,7 +18,7 @@
 import { h } from './dom.js';
 import { icon } from './icons.js';
 import { local } from './local.js';
-import { eraseStrokes, ERASER_RADIUS, paintSamples, splitPointerSamples, strokeWidth } from '../core/ink.js';
+import { eraseStrokes, ERASER_RADIUS, paintSamples, pointWidth, redoInkAction, splitPointerSamples, undoInkAction } from '../core/ink.js';
 
 const HINT = 'Write your answer, then check it';
 /** Set after a pen has touched a pad on this device. */
@@ -30,7 +30,7 @@ function pencilOnly() {
   return local.get(PENCIL_ONLY_KEY) === '1';
 }
 
-export function inkPad({ onStroke = () => {}, onChange = null } = {}) {
+export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = {}) {
   const canvas = h('canvas', { class: 'ink-canvas', role: 'img', 'aria-label': 'Handwriting pad. Write your answer with Apple Pencil, a stylus or a finger.', dataset: { strokes: '0', points: '0' } });
   const overlay = h('canvas', { class: 'ink-overlay', 'aria-hidden': 'true' });
   const ctx = canvas.getContext('2d');
@@ -38,8 +38,10 @@ export function inkPad({ onStroke = () => {}, onChange = null } = {}) {
   const stage = h('div', { class: 'ink-stage' }, canvas, overlay);
   const strokes = [];
   const history = [];
+  const redoStack = [];
   let current = null;
   let erasing = false;
+  let pen = { color: null, scale: 1 };
   let eraseLog = null;
   let eraserAt = null;
   let penSeen = local.get(PEN_SEEN_KEY) === '1';
@@ -49,11 +51,11 @@ export function inkPad({ onStroke = () => {}, onChange = null } = {}) {
   let hover = null;
   let rafId = 0;
 
-  const undoBtn = h('button', { class: 'btn small ghost', type: 'button', disabled: true, onclick: () => undo() }, icon('undo'), 'Undo stroke');
-  const eraserBtn = h('button', { class: 'btn small ghost', type: 'button', 'aria-pressed': 'false', onclick: () => toggleEraser() }, icon('eraser'), 'Eraser');
-  const clearBtn = h('button', { class: 'btn small ghost', type: 'button', disabled: true, onclick: () => clear() }, icon('trash'), 'Clear');
-  const hintEl = h('span', { class: 'faint small ink-hint' }, HINT);
-  const el = h('div', { class: 'ink-pad', dataset: { predicted: '0', hover: '0', penSeen: penSeen ? '1' : '0' } }, stage, h('div', { class: 'ink-tools' }, hintEl, h('div', { class: 'row tight' }, undoBtn, eraserBtn, clearBtn)));
+  const undoBtn = tools ? h('button', { class: 'btn small ghost', type: 'button', disabled: true, onclick: () => undo() }, icon('undo'), 'Undo stroke') : null;
+  const eraserBtn = tools ? h('button', { class: 'btn small ghost', type: 'button', 'aria-pressed': 'false', onclick: () => setEraser(!erasing) }, icon('eraser'), 'Eraser') : null;
+  const clearBtn = tools ? h('button', { class: 'btn small ghost', type: 'button', disabled: true, onclick: () => clear() }, icon('trash'), 'Clear') : null;
+  const hintEl = tools ? h('span', { class: 'faint small ink-hint' }, HINT) : null;
+  const el = h('div', { class: 'ink-pad', dataset: { predicted: '0', hover: '0', penSeen: penSeen ? '1' : '0' } }, stage, tools ? h('div', { class: 'ink-tools' }, hintEl, h('div', { class: 'row tight' }, undoBtn, eraserBtn, clearBtn)) : null);
 
   /** Touch is ignored after a pen has been used here, or whenever Pencil only is on. Any second pointer is ignored while a stroke — a pen stroke in particular — is active. */
   function ignored(e) {
@@ -83,6 +85,7 @@ export function inkPad({ onStroke = () => {}, onChange = null } = {}) {
       x: e.clientX - r.left,
       y: e.clientY - r.top,
       p: e.pointerType === 'pen' ? (e.pressure || 0.5) : 0.5,
+      scale: pen.scale,
     };
     // tilt / altitude / azimuth / twist are optional. A mouse reports the
     // upright defaults; strokeWidth ignores those.
@@ -94,9 +97,9 @@ export function inkPad({ onStroke = () => {}, onChange = null } = {}) {
     return pt;
   }
 
-  function style() {
+  function applyInk(color) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    ctx.strokeStyle = ctx.fillStyle = getComputedStyle(canvas).color;
+    ctx.strokeStyle = ctx.fillStyle = color || getComputedStyle(canvas).color;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
   }
@@ -126,16 +129,16 @@ export function inkPad({ onStroke = () => {}, onChange = null } = {}) {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (!canvas.width || !canvas.height) return;
-    style();
     for (const s of strokes) {
-      const pts = current && s === current.pts && predicted.length ? s.concat(predicted) : s;
-      drawPoints(pts);
+      const tail = current && s === current.stroke && predicted.length ? predicted : null;
+      applyInk(s.color);
+      drawPoints(tail ? s.pts.concat(tail) : s.pts);
     }
   }
 
   function applyQueued() {
-    if (current && queued.length) {
-      for (const p of queued) current.pts.push(p);
+    if (current?.stroke && queued.length) {
+      for (const p of queued) current.stroke.pts.push(p);
     }
     queued = [];
   }
@@ -165,37 +168,49 @@ export function inkPad({ onStroke = () => {}, onChange = null } = {}) {
 
   function update() {
     canvas.dataset.strokes = String(strokes.length);
-    canvas.dataset.points = String(strokes.reduce((n, s) => n + s.length, 0) + queued.length);
+    canvas.dataset.points = String(strokes.reduce((n, s) => n + s.pts.length, 0) + queued.length);
     const busy = !!current;
-    undoBtn.disabled = busy || !history.length;
-    clearBtn.disabled = !strokes.length && !busy;
+    if (undoBtn) undoBtn.disabled = busy || !history.length;
+    if (clearBtn) clearBtn.disabled = !strokes.length && !busy;
     onChange?.();
   }
 
-  function toggleEraser() {
-    erasing = !erasing;
-    eraserBtn.setAttribute('aria-pressed', erasing ? 'true' : 'false');
+  function replaceStrokes(next) {
+    strokes.length = 0;
+    for (const s of next) strokes.push(s);
+  }
+
+  function remember(action) {
+    history.push(action);
+    redoStack.length = 0;
+  }
+
+  function setEraser(on) {
+    erasing = !!on;
+    eraserBtn?.setAttribute('aria-pressed', erasing ? 'true' : 'false');
     el.classList.toggle('erasing', erasing);
     if (!erasing) eraserAt = null;
     drawOverlay();
   }
 
   function undo() {
-    if (current) return;
+    if (current || !history.length) return false;
     const action = history.pop();
-    if (!action) return;
-    if (action.kind === 'add') {
-      const i = strokes.lastIndexOf(action.stroke);
-      if (i >= 0) strokes.splice(i, 1);
-    } else {
-      // Reinsert from the last removal so earlier indexes still land.
-      for (let i = action.items.length - 1; i >= 0; i--) {
-        const item = action.items[i];
-        strokes.splice(Math.min(item.index, strokes.length), 0, item.stroke);
-      }
-    }
+    replaceStrokes(undoInkAction(strokes, action));
+    redoStack.push(action);
     redraw();
     update();
+    return true;
+  }
+
+  function redo() {
+    if (current || !redoStack.length) return false;
+    const action = redoStack.pop();
+    replaceStrokes(redoInkAction(strokes, action));
+    history.push(action);
+    redraw();
+    update();
+    return true;
   }
 
   function eraseWith(e) {
@@ -221,7 +236,7 @@ export function inkPad({ onStroke = () => {}, onChange = null } = {}) {
     octx.clearRect(0, 0, overlay.width, overlay.height);
     if (!overlay.width) return;
     octx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    octx.fillStyle = getComputedStyle(canvas).color;
+    octx.fillStyle = (erasing ? null : pen.color) || getComputedStyle(canvas).color;
     if (erasing && eraserAt) {
       octx.globalAlpha = 0.18;
       octx.beginPath();
@@ -234,7 +249,7 @@ export function inkPad({ onStroke = () => {}, onChange = null } = {}) {
     } else if (hover) {
       octx.globalAlpha = 0.55;
       octx.beginPath();
-      octx.arc(hover.x, hover.y, 4, 0, Math.PI * 2);
+      octx.arc(hover.x, hover.y, Math.max(3, 3.4 * pen.scale), 0, Math.PI * 2);
       octx.fill();
     }
     octx.globalAlpha = 1;
@@ -280,7 +295,7 @@ export function inkPad({ onStroke = () => {}, onChange = null } = {}) {
   }
 
   function ingest(e) {
-    const previous = queued.length ? queued[queued.length - 1] : current?.pts[current.pts.length - 1];
+    const previous = queued.length ? queued[queued.length - 1] : current?.stroke?.pts[current.stroke.pts.length - 1];
     return splitPointerSamples(previous, eventList(e, 'getCoalescedEvents').map(pointerFrom), eventList(e, 'getPredictedEvents').map(pointerFrom));
   }
 
@@ -306,9 +321,9 @@ export function inkPad({ onStroke = () => {}, onChange = null } = {}) {
       update();
       return;
     }
-    const pts = [pointerFrom(e)];
-    strokes.push(pts);
-    current = { id: e.pointerId, type: e.pointerType, pts };
+    const stroke = { pts: [pointerFrom(e)], color: pen.color };
+    strokes.push(stroke);
+    current = { id: e.pointerId, type: e.pointerType, stroke };
     queued = [];
     setPredicted([]);
     update();
@@ -348,7 +363,7 @@ export function inkPad({ onStroke = () => {}, onChange = null } = {}) {
     if (!current || e.pointerId !== current.id) return;
     if (current.erasing) {
       eraseWith(e);
-      if (eraseLog?.length) history.push({ kind: 'erase', items: eraseLog });
+      if (eraseLog?.length) remember({ kind: 'erase', items: eraseLog });
       eraseLog = null;
       eraserAt = null;
       current = null;
@@ -357,14 +372,14 @@ export function inkPad({ onStroke = () => {}, onChange = null } = {}) {
       update();
       return;
     }
-    const finished = current.pts;
+    const finished = current.stroke;
     const { real } = ingest(e);
     if (real.length) queued.push(...real);
     applyQueued();
     setPredicted([]);
     cancelFrame();
     current = null;
-    history.push({ kind: 'add', stroke: finished });
+    remember({ kind: 'add', stroke: finished });
     redraw();
     update();
   };
@@ -385,6 +400,7 @@ export function inkPad({ onStroke = () => {}, onChange = null } = {}) {
     cancelFrame();
     strokes.length = 0;
     history.length = 0;
+    redoStack.length = 0;
     queued = [];
     setPredicted([]);
     eraseLog = null;
@@ -404,10 +420,21 @@ export function inkPad({ onStroke = () => {}, onChange = null } = {}) {
     clear,
     /** Prompt under the pad, for example the retype instruction. */
     setHint(text) {
-      hintEl.textContent = text || HINT;
+      if (hintEl) hintEl.textContent = text || HINT;
     },
-    /** The ink cropped to what was written: PNG data URL and size in CSS px (or null). The predicted tail is not included. */
-    snapshot() {
+    setPen({ color, scale } = {}) {
+      if (color !== undefined) pen.color = color;
+      if (typeof scale === 'number' && scale > 0) pen.scale = scale;
+      if (erasing) setEraser(false);
+    },
+    setEraser,
+    eraserOn: () => erasing,
+    undo,
+    redo,
+    canUndo: () => !current && history.length > 0,
+    canRedo: () => !current && redoStack.length > 0,
+    /** The ink cropped to what was written: PNG data URL and size in CSS px (or null). The predicted tail is not included. `background` fills the crop (a paper sheet) so the PNG stays legible in either theme. */
+    snapshot({ background = null } = {}) {
       applyQueued();
       const saved = predicted;
       setPredicted([]);
@@ -417,8 +444,8 @@ export function inkPad({ onStroke = () => {}, onChange = null } = {}) {
         if (saved.length) setPredicted(saved);
         return null;
       }
-      const all = strokes.flat();
-      const pad = 8 + Math.max(...all.map((p) => strokeWidth(p.p, p)));
+      const all = strokes.flatMap((s) => s.pts);
+      const pad = 8 + Math.max(...all.map((p) => pointWidth(p)));
       const x0 = Math.max(0, Math.min(...all.map((p) => p.x)) - pad);
       const y0 = Math.max(0, Math.min(...all.map((p) => p.y)) - pad);
       const x1 = Math.max(...all.map((p) => p.x)) + pad;
@@ -426,7 +453,12 @@ export function inkPad({ onStroke = () => {}, onChange = null } = {}) {
       const out = document.createElement('canvas');
       out.width = Math.max(1, Math.round((x1 - x0) * dpr));
       out.height = Math.max(1, Math.round((y1 - y0) * dpr));
-      out.getContext('2d').drawImage(canvas, x0 * dpr, y0 * dpr, out.width, out.height, 0, 0, out.width, out.height);
+      const o = out.getContext('2d');
+      if (background) {
+        o.fillStyle = background;
+        o.fillRect(0, 0, out.width, out.height);
+      }
+      o.drawImage(canvas, x0 * dpr, y0 * dpr, out.width, out.height, 0, 0, out.width, out.height);
       if (current && saved.length) {
         setPredicted(saved);
         redraw();
