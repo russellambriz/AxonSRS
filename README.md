@@ -231,7 +231,13 @@ import leaves no partial cards and appears on the Recovery screen.
   - **Write** (Alt+D or D on the study screen) swaps the answer box for a
     handwriting pad. Nothing is recognised: after **Check**, your ink is shown
     next to the correct answer and you grade it (Again = wrong, otherwise
-    Hard, Good or Easy). Strokes are smoothed and follow pressure. When the
+    Hard, Good or Easy). Strokes are smoothed and follow pressure.
+    **Smoothing** (Off, Low, Medium, High) is on the pen row in Create with
+    Pencil and the card editor, and under Settings → Study. Medium is the
+    default. It steadies the line and the width when the ink is drawn. The
+    saved points stay as they were sampled, so older cards just draw more
+    steadily, and the tip still follows Pencil prediction. The choice is
+    remembered on this device. When the
     browser reports tilt (or altitude), a flatter pencil draws a wider line;
     twist only nudges that. A short predicted tail keeps the ink near the tip
     and is replaced as real samples arrive. It works with Apple Pencil,
@@ -286,6 +292,12 @@ import leaves no partial cards and appears on the Recovery screen.
     the drawing, with no typed text. **Typed answer** keeps the normal box
     (Scribble still works) and Axon matches that text; a drawing is then
     only a note. **Save & next** stores the card and clears the page.
+    **N saved** under the title opens this deck’s cards, newest first: a
+    strip of thumbnails (the front, with the back peeking out) and a
+    full-size viewer. Swipe or the arrows move between cards, and a tap
+    flips front and back. **Edit** loads that card back onto the page.
+    **Delete** asks you to confirm; the toast can undo it, and the review
+    history is kept. Thumbnails are built only for the ones on screen.
     Drawings go through the same image checks and the 5 MB limit, offline.
     In the card editor, a back that is only a drawing is the same kind of
     card. Reviewing one shows the handwriting, asks you to write your
@@ -314,6 +326,14 @@ import leaves no partial cards and appears on the Recovery screen.
 | **Interleaving** | Mixes decks and/or tags, alternating topics while respecting sibling spacing | No* |
 | **Catch-up** | A manageable slice of an overdue backlog (most overdue first, or the cards still most likely to be recalled first) | Yes |
 | **Exam practice** | Cards from an exam plan | No* |
+
+On the Study screen, **Reverse Recall** shows the back and asks for the
+front. **Normal** keeps the deck’s own direction (Front → Back, Back →
+Front, or Both). **Mixed** studies both directions in this session. None
+of these change the deck’s direction setting. A reverse card is the same
+Back → Front unit the deck already uses, with its own schedule. Typed
+answers are matched as usual. If the front is only handwriting, you write
+it in ink and grade it yourself.
 
 \* Practice is recorded as **exposure** (it counts for statistics and marks
 later tests as "affected by practice") but leaves the long-term schedule
@@ -775,8 +795,8 @@ Day-to-day reviews write one event each.
 ## Testing
 
 ```bash
-npm test               # 210 unit tests (node --test), ~4 s
-npm run test:browser   # 47 browser tests (Playwright + Chromium)
+npm test               # 213 unit tests (node --test), ~4 s
+npm run test:browser   # 49 browser tests (Playwright + Chromium)
 npm run check          # pre-cache list is current + unit tests
 ```
 
@@ -806,13 +826,16 @@ committed).
   IME composition; held Enter; toolbar insertion and calibration exclusion;
   one study tab at a time; image occlusion created and studied offline;
   leech actions; the import wizard; alias rescue and undo; cram; in-session
-  editing; plain and encrypted backup round trips through the UI; two-device
+  editing; plain and encrypted backup round trips through the UI; Reverse
+  Recall (back shown, front answered, ink self-graded, deck direction
+  unchanged); two-device
   sync through a mocked Gist API;   responsive layout at 1280, 834, 390 and
   320 px (light and dark) with checks for horizontal scroll, unnamed controls
   and touch-target size; handwriting smoothing, hover, palm rejection,
   eraser, wide ink layout, the copy step after a missed ink answer, a
   sketch inserted from the card editor, the Create with Pencil studio
-  (draw, undo, redo, save and next, landscape and 320px), an ink-only
+  (draw, undo, redo, save and next, landscape and 320px), saved cards
+  opened from the studio (thumbnails, flip, swipe, edit, delete and undo), an ink-only
   card reviewed by self-grading, and the regular New card editor (typed
   on a mouse, ink pads on a touch device, remembered Type choice, cloze
   stays text, delete from the card list and Delete card in the editor);
@@ -832,7 +855,7 @@ installation prompts, speech recognition and system TTS voices are
 
 | Component | Version | Notes |
 | --- | --- | --- |
-| App | 1.0.5 | cache `axon-v6` |
+| App | 1.0.8 | cache `axon-v9` |
 | Scheduler | ts-fsrs 5.4.2 (FSRS-6, default parameters) + `axon-fuzz@1` | reference-checked against py-fsrs 6.3.2 |
 | Grading rules | `axon-fluency@1.1.0` | thresholds above; recorded on every review |
 | Reading/warm-up heuristic | `axon-reading@2` | can be disabled |
@@ -894,7 +917,7 @@ service-worker registration and its cache list.
 Pages publishes):
 
 ```bash
-npm run release -- 1.0.5   # bumps CACHE_NAME (axon-vN → N+1) in sw.js and js/config.js,
+npm run release -- 1.0.8   # bumps CACHE_NAME (axon-vN → N+1) in sw.js and js/config.js,
                            # sets APP_VERSION, refreshes the pre-cache list
 npm run check              # pre-cache list current + unit tests
 ```

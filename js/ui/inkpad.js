@@ -18,13 +18,52 @@
 import { h } from './dom.js';
 import { icon } from './icons.js';
 import { local } from './local.js';
-import { eraseStrokes, ERASER_RADIUS, paintSamples, pointWidth, redoInkAction, splitPointerSamples, undoInkAction } from '../core/ink.js';
+import { eraseStrokes, ERASER_RADIUS, paintSamples, pointWidth, redoInkAction, ribbonPolygon, SMOOTHING_LEVELS, smoothingLevel, splitPointerSamples, undoInkAction } from '../core/ink.js';
 
 const HINT = 'Write your answer, then check it';
 /** Set after a pen has touched a pad on this device. */
 export const PEN_SEEN_KEY = 'axon-pen-seen';
 /** Settings → Study. When '1', the pad ignores all touch input. */
 export const PENCIL_ONLY_KEY = 'axon-pencil-only';
+/** Per device. Off, low, medium (default) or high. Render only. */
+export const SMOOTHING_KEY = 'axon-ink-smoothing';
+const SMOOTHING_EVENT = 'axon-ink-smoothing';
+
+export function inkSmoothing() {
+  return smoothingLevel(local.get(SMOOTHING_KEY)).id;
+}
+
+export function setInkSmoothing(id) {
+  const next = smoothingLevel(id).id;
+  local.set(SMOOTHING_KEY, next);
+  window.dispatchEvent(new CustomEvent(SMOOTHING_EVENT));
+  return next;
+}
+
+/** The Off / Low / Medium / High control used next to the pen colours. */
+export function smoothingButtons({ prefix = '' } = {}) {
+  const host = h('div', { class: 'pencil-choices pencil-smooth-group', role: 'group', 'aria-label': `${prefix}Smoothing`.trim() });
+  const paint = () => {
+    const current = inkSmoothing();
+    host.replaceChildren(...SMOOTHING_LEVELS.map((level) => h('button', {
+      type: 'button',
+      class: 'pencil-smooth',
+      'aria-label': `${prefix}Smoothing ${level.label}`.replace(/\s+/g, ' ').trim(),
+      'aria-pressed': String(level.id === current),
+      onclick: () => setInkSmoothing(level.id),
+    }, level.label)));
+  };
+  const onSmoothing = () => {
+    if (!host.isConnected) {
+      window.removeEventListener(SMOOTHING_EVENT, onSmoothing);
+      return;
+    }
+    paint();
+  };
+  paint();
+  window.addEventListener(SMOOTHING_EVENT, onSmoothing);
+  return host;
+}
 
 function pencilOnly() {
   return local.get(PENCIL_ONLY_KEY) === '1';
@@ -50,6 +89,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
   let predicted = [];
   let hover = null;
   let rafId = 0;
+  let smoothingId = inkSmoothing();
 
   const undoBtn = tools ? h('button', { class: 'btn small ghost', type: 'button', disabled: true, onclick: () => undo() }, icon('undo'), 'Undo stroke') : null;
   const eraserBtn = tools ? h('button', { class: 'btn small ghost', type: 'button', 'aria-pressed': 'false', onclick: () => setEraser(!erasing) }, icon('eraser'), 'Eraser') : null;
@@ -78,6 +118,16 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
       : 'Handwriting pad. Write your answer with Apple Pencil, a stylus or a finger.');
   }
   syncLabel();
+  const onSmoothing = () => {
+    if (!canvas.isConnected) {
+      window.removeEventListener(SMOOTHING_EVENT, onSmoothing);
+      return;
+    }
+    smoothingId = inkSmoothing();
+    redraw();
+    drawOverlay();
+  };
+  window.addEventListener(SMOOTHING_EVENT, onSmoothing);
 
   function pointerFrom(e) {
     const r = canvas.getBoundingClientRect();
@@ -104,31 +154,52 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     ctx.lineJoin = 'round';
   }
 
+  function fillDot(sample) {
+    ctx.beginPath();
+    ctx.arc(sample.x, sample.y, Math.max(0.6, sample.w / 2), 0, Math.PI * 2);
+    ctx.fill();
+  }
+
   function drawPoints(pts) {
-    const samples = paintSamples(pts);
+    const samples = paintSamples(pts, smoothingId);
+    if (!samples.length) return;
     if (samples.length === 1) {
-      const a = samples[0];
-      ctx.beginPath();
-      ctx.arc(a.x, a.y, Math.max(0.6, a.w / 2), 0, Math.PI * 2);
-      ctx.fill();
+      fillDot(samples[0]);
       return;
     }
-    for (let i = 1; i < samples.length; i++) {
-      const a = samples[i - 1];
-      const b = samples[i];
-      if (Math.hypot(b.x - a.x, b.y - a.y) < 0.01) continue;
-      ctx.lineWidth = Math.max(0.6, (a.w + b.w) / 2);
-      ctx.beginPath();
-      ctx.moveTo(a.x, a.y);
-      ctx.lineTo(b.x, b.y);
-      ctx.stroke();
-    }
+    const poly = ribbonPolygon(samples);
+    if (!poly) return;
+    ctx.beginPath();
+    ctx.moveTo(poly[0].x, poly[0].y);
+    for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
+    ctx.closePath();
+    ctx.fill();
+    fillDot(samples[0]);
+    fillDot(samples[samples.length - 1]);
+  }
+
+  let plate = null;
+  let plateMediaId = null;
+  let plateUrl = null;
+
+  function drawPlate() {
+    if (!plate) return;
+    const r = canvas.getBoundingClientRect();
+    const iw = plate.naturalWidth || plate.width;
+    const ih = plate.naturalHeight || plate.height;
+    if (!r.width || !r.height || !iw || !ih) return;
+    const scale = Math.min(r.width / iw, r.height / ih);
+    const w = iw * scale;
+    const h = ih * scale;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.drawImage(plate, (r.width - w) / 2, (r.height - h) / 2, w, h);
   }
 
   function redraw() {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (!canvas.width || !canvas.height) return;
+    drawPlate();
     for (const s of strokes) {
       const tail = current && s === current.stroke && predicted.length ? predicted : null;
       applyInk(s.color);
@@ -396,6 +467,14 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
   canvas.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
   if (typeof ResizeObserver === 'function') new ResizeObserver(resize).observe(stage);
 
+  function setPlate(image, id = null, url = null) {
+    if (plateUrl && plateUrl !== url) URL.revokeObjectURL(plateUrl);
+    plate = image || null;
+    plateMediaId = id || null;
+    plateUrl = url || null;
+    redraw();
+  }
+
   function clear() {
     cancelFrame();
     strokes.length = 0;
@@ -406,6 +485,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     eraseLog = null;
     eraserAt = null;
     current = null;
+    setPlate(null);
     redraw();
     drawOverlay();
     update();
@@ -416,6 +496,10 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     canvas,
     resize,
     isEmpty: () => !strokes.length && !queued.length,
+    hasPlate: () => !!plate,
+    plateId: () => plateMediaId,
+    /** Show a saved drawing under new strokes. `url` is revoked when replaced. */
+    setPlate,
     strokeCount: () => strokes.length,
     clear,
     /** Prompt under the pad, for example the retype instruction. */
@@ -440,6 +524,23 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
       setPredicted([]);
       cancelFrame();
       redraw();
+      if (plate && strokes.length) {
+        const out = document.createElement('canvas');
+        out.width = canvas.width;
+        out.height = canvas.height;
+        const o = out.getContext('2d');
+        if (background) {
+          o.fillStyle = background;
+          o.fillRect(0, 0, out.width, out.height);
+        }
+        o.drawImage(canvas, 0, 0);
+        if (current && saved.length) {
+          setPredicted(saved);
+          redraw();
+        }
+        const r = canvas.getBoundingClientRect();
+        return { src: out.toDataURL('image/png'), width: Math.round(r.width), height: Math.round(r.height) };
+      }
       if (!strokes.length) {
         if (saved.length) setPredicted(saved);
         return null;

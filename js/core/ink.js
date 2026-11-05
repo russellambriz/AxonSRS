@@ -1,7 +1,9 @@
 /**
- * Pure geometry for the handwriting pad: pressure/tilt width, midpoint
- * quadratic smoothing, and separating real pointer samples from the
- * predicted tail, and stroke-level eraser hit-testing. No DOM.
+ * Pure geometry for the handwriting pad: pressure/tilt width, a light
+ * streamline on the points used to draw, midpoint quadratic curves, and
+ * separating real pointer samples from the predicted tail, and
+ * stroke-level eraser hit-testing. No DOM. Stored points are never
+ * rewritten; smoothing is a render step.
  */
 
 /** Eraser disc radius in CSS pixels. A hit removes the whole stroke. */
@@ -73,6 +75,83 @@ export function strokePoints(stroke) {
 
 function mid(a, b) {
   return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+}
+
+/**
+ * How hard the rendered ink chases the raw samples.
+ * `follow` and `pressure` are the share of each new sample kept by the
+ * running average (1 = no change). The last sample is always kept, so a
+ * predicted tail still ends on the predicted tip.
+ */
+export const SMOOTHING_LEVELS = Object.freeze([
+  { id: 'off', label: 'Off', follow: 1, pressure: 1 },
+  { id: 'low', label: 'Low', follow: 0.72, pressure: 0.68 },
+  { id: 'medium', label: 'Medium', follow: 0.48, pressure: 0.4 },
+  { id: 'high', label: 'High', follow: 0.3, pressure: 0.24 },
+]);
+
+export function smoothingLevel(id) {
+  return SMOOTHING_LEVELS.find((level) => level.id === id) || SMOOTHING_LEVELS[2];
+}
+
+/**
+ * Streamline a stroke for drawing. Interior points move toward an
+ * exponential average (a light lazy brush). The first point and the last
+ * point stay put, and the last few points ease back onto the raw samples
+ * so the tip does not lag a Pencil prediction. Pressure is averaged the
+ * same way. The input array and its points are not modified.
+ */
+export function stabilizeStroke(points, level = 'medium') {
+  const pts = points || [];
+  const spec = smoothingLevel(typeof level === 'string' ? level : level?.id);
+  if (pts.length < 3 || spec.follow >= 1) return pts;
+  const out = pts.map((p) => ({ ...p }));
+  let x = out[0].x;
+  let y = out[0].y;
+  let pressure = finite(out[0].p, 0.5);
+  for (let i = 1; i < out.length - 1; i++) {
+    const rawP = finite(out[i].p, 0.5);
+    x += spec.follow * (out[i].x - x);
+    y += spec.follow * (out[i].y - y);
+    pressure += spec.pressure * (rawP - pressure);
+    out[i] = { ...out[i], x, y, p: pressure };
+  }
+  const tail = Math.min(4, out.length - 2);
+  for (let k = 1; k <= tail; k++) {
+    const i = out.length - 1 - k;
+    const raw = pts[i];
+    const towardRaw = (tail - k + 1) / (tail + 1);
+    out[i] = {
+      ...out[i],
+      x: out[i].x + (raw.x - out[i].x) * towardRaw,
+      y: out[i].y + (raw.y - out[i].y) * towardRaw,
+      p: out[i].p + (finite(raw.p, 0.5) - finite(out[i].p, 0.5)) * towardRaw,
+    };
+  }
+  return out;
+}
+
+/** Filled outline of a variable-width centerline. Null when there is nothing to fill. */
+export function ribbonPolygon(samples) {
+  if (!samples || samples.length < 2) return null;
+  const left = [];
+  const right = [];
+  for (let i = 0; i < samples.length; i++) {
+    const prev = samples[Math.max(0, i - 1)];
+    const next = samples[Math.min(samples.length - 1, i + 1)];
+    let dx = next.x - prev.x;
+    let dy = next.y - prev.y;
+    const len = Math.hypot(dx, dy);
+    if (len < 0.001) continue;
+    dx /= len;
+    dy /= len;
+    const hw = Math.max(0.45, samples[i].w / 2);
+    left.push({ x: samples[i].x + -dy * hw, y: samples[i].y + dx * hw });
+    right.push({ x: samples[i].x - -dy * hw, y: samples[i].y - dx * hw });
+  }
+  if (left.length < 2) return null;
+  right.reverse();
+  return left.concat(right);
 }
 
 /**
@@ -159,10 +238,15 @@ export function segmentSamples(seg) {
   return out;
 }
 
-/** Samples for a whole stroke, in order. Empty input → []. */
-export function paintSamples(points) {
+/**
+ * Samples for a whole stroke, in order. Empty input → [].
+ * `smoothing` steadies the points used to draw. Stored points are unchanged.
+ * The default is Medium.
+ */
+export function paintSamples(points, smoothing = 'medium') {
+  const stable = stabilizeStroke(points, smoothing);
   const out = [];
-  for (const seg of smoothStroke(points)) out.push(...segmentSamples(seg));
+  for (const seg of smoothStroke(stable)) out.push(...segmentSamples(seg));
   return out;
 }
 

@@ -61,6 +61,21 @@ export function isInkAnswer(markdown) {
   return plainText(raw.replace(IMAGE_MD, ' ')) === '';
 }
 
+const SIDE_IMAGE = /!\[([^\]]*)\]\(axon-media:([^)\s]+)\)/g;
+
+/**
+ * Split one side of a pencil card into typed text and its ink images.
+ * Image alt text is not part of the typed text.
+ */
+export function splitPencilSide(markdown) {
+  const images = [];
+  const text = String(markdown || '').replace(SIDE_IMAGE, (_, alt, id) => {
+    images.push({ alt, id });
+    return '\n';
+  }).replace(/[ \t]+\n/g, '\n').replace(/\n{3,}/g, '\n\n').trim();
+  return { text, images };
+}
+
 /** Every non-empty alternative on this side is ink, so nothing is matched. */
 export function isInkSide(parts) {
   const list = (Array.isArray(parts) ? parts : [parts]).map((s) => String(s ?? '').trim()).filter(Boolean);

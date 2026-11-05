@@ -36,6 +36,9 @@ export const tests = [
       await page.evaluate((id) => { location.hash = `#/pencil?deck=${id}`; }, deckId);
       await page.getByRole('heading', { name: 'Create with Pencil' }).waitFor();
       await page.waitForFunction(() => [...document.querySelectorAll('.pencil-paper .ink-canvas')].some((c) => c.width > 0));
+      assert.equal(await page.getAttribute('button[aria-label="Smoothing Medium"]', 'aria-pressed'), 'true');
+      await page.getByRole('button', { name: 'Smoothing High' }).click();
+      assert.equal(await page.evaluate(() => localStorage.getItem('axon-ink-smoothing')), 'high');
       assert.equal(await page.locator('textarea.pencil-answer').evaluate((el) => el.tagName), 'TEXTAREA', 'the graded answer is a normal field, so Scribble still works');
       const layout = await page.evaluate(() => {
         const paper = document.querySelector('.pencil-paper').getBoundingClientRect();
@@ -69,6 +72,7 @@ export const tests = [
       assert.equal(await visibleStrokes(page), '0', 'the back page starts blank');
       await stroke(page, { y: 80, id: 8 });
       assert.equal(await visibleStrokes(page), '1');
+      await stroke(page, { x: 80, y: 140, id: 9 });
       await page.getByRole('button', { name: 'Front' }).click();
       await page.waitForFunction(() => document.querySelector('.pencil-studio')?.dataset.side === 'front');
       assert.equal(await visibleStrokes(page), '1', 'the front sketch is still there');
@@ -174,6 +178,85 @@ export const tests = [
       assert.equal(review.rating, 3);
       const baselines = await idbAll(page, 'baselines');
       assert.ok(baselines.every((b) => !(b.samples || []).length), 'an ink card never calibrates timing');
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
+  {
+    name: 'saved cards open from the studio: thumbnails, flip, swipe, edit and delete',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser, { viewport: { width: 1366, height: 1024 }, hasTouch: true });
+      const page = await openApp(ctx, url);
+      const deckId = await seedDeck(page, { name: 'Pencil deck', cards: [] });
+      await page.evaluate((id) => { location.hash = `#/pencil?deck=${id}`; }, deckId);
+      await page.getByRole('heading', { name: 'Create with Pencil' }).waitFor();
+      await page.getByRole('button', { name: 'Typed answer' }).click();
+      await page.getByRole('textbox', { name: 'Prompt text' }).fill('Alpha');
+      await page.getByRole('textbox', { name: 'Graded answer' }).fill('One');
+      await page.getByRole('button', { name: 'Save & next' }).click();
+      await page.getByText('1 saved').waitFor();
+
+      await page.getByRole('button', { name: 'Handwritten answer' }).click();
+      await page.getByRole('textbox', { name: 'Prompt text' }).fill('Beta');
+      await page.waitForFunction(() => [...document.querySelectorAll('.pencil-paper .ink-canvas')].some((c) => c.width > 0));
+      await page.getByRole('button', { name: 'Back' }).click();
+      await page.waitForFunction(() => document.querySelector('.pencil-studio')?.dataset.side === 'back');
+      await stroke(page, { y: 90, id: 15 });
+      await page.getByRole('button', { name: 'Save & next' }).click();
+      await page.getByRole('button', { name: 'Show 2 saved' }).click();
+      const beta = page.getByRole('button', { name: 'Beta', exact: true });
+      await beta.waitFor();
+      await page.waitForFunction(() => document.querySelector('.pencil-thumb img')?.naturalWidth > 0);
+      await beta.click();
+      await page.locator('.pencil-card').getByText('Beta').waitFor();
+      await page.locator('.pencil-card').click();
+      await page.locator('.pencil-card').getByText('Back').waitFor();
+      await page.locator('.pencil-card img').waitFor();
+      await page.locator('.pencil-card').evaluate((el) => {
+        const r = el.getBoundingClientRect();
+        const fire = (name, x) => el.dispatchEvent(new PointerEvent(name, {
+          pointerType: 'touch', pointerId: 3, clientX: x, clientY: r.top + r.height / 2,
+          buttons: name === 'pointerup' ? 0 : 1, bubbles: true, cancelable: true,
+        }));
+        fire('pointerdown', r.right - 24);
+        fire('pointerup', r.left + 16);
+      });
+      await page.locator('.pencil-card').getByText('Alpha').waitFor();
+      await page.getByRole('button', { name: 'Previous card' }).click();
+      await page.locator('.pencil-card').getByText('Beta').waitFor();
+      await page.getByRole('button', { name: 'Edit' }).click();
+      await page.locator('.pencil-viewer').waitFor({ state: 'hidden' });
+      assert.equal(await page.locator('.pencil-prompt').inputValue(), 'Beta');
+      await page.getByRole('button', { name: 'Back' }).click();
+      await page.waitForFunction(() => {
+        const c = [...document.querySelectorAll('.pencil-paper .ink-canvas')].find((el) => el.getBoundingClientRect().width > 0);
+        if (!c?.width) return false;
+        const data = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        for (let i = 3; i < data.length; i += 32) if (data[i] > 12) return true;
+        return false;
+      });
+
+      await page.getByRole('button', { name: 'Show 2 saved' }).click();
+      await page.getByRole('button', { name: 'Beta', exact: true }).click();
+      await page.getByRole('button', { name: 'Delete' }).click();
+      await page.locator('dialog[open]').getByRole('button', { name: 'Delete' }).click();
+      await page.getByText('Card deleted').waitFor();
+      assert.equal((await idbAll(page, 'cards')).length, 1);
+      await page.getByRole('button', { name: 'Undo', exact: true }).click();
+      await page.getByRole('button', { name: 'Show 2 saved' }).waitFor();
+      assert.equal((await idbAll(page, 'cards')).length, 2);
+
+      await page.setViewportSize({ width: 320, height: 640 });
+      await page.waitForTimeout(50);
+      const fit = await page.evaluate(() => {
+        const wide = [...document.querySelectorAll('body *')].filter((el) => {
+          const box = el.getBoundingClientRect();
+          const s = getComputedStyle(el);
+          return box.width > 0 && box.height > 0 && s.display !== 'none' && box.right > window.innerWidth + 1 && !el.closest('.pencil-strip');
+        }).slice(0, 4).map((el) => `${el.tagName.toLowerCase()}.${[...el.classList].join('.')}`);
+        return { doc: document.documentElement.scrollWidth <= window.innerWidth + 1, wide };
+      });
+      assert.equal(fit.doc, true, fit.wide.join(', '));
       assertNoErrors(page);
       await ctx.close();
     },

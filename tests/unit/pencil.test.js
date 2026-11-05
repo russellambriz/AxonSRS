@@ -1,7 +1,7 @@
 // Pencil card composition: the typed answer is graded, drawings are images.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { PEN_COLORS, PEN_WIDTHS, PAPER, chooseSideMode, composePencilCard, imageRejectReason, isInkAnswer, isInkSide, penColor, penWidth } from '../../js/core/pencil.js';
+import { PEN_COLORS, PEN_WIDTHS, PAPER, chooseSideMode, composePencilCard, imageRejectReason, isInkAnswer, isInkSide, penColor, penWidth, splitPencilSide } from '../../js/core/pencil.js';
 
 test('pen presets stay ordered and every colour is a dark ink for the paper', () => {
   assert.ok(penWidth('fine').scale < penWidth('medium').scale);
@@ -56,6 +56,15 @@ test('handwriting with no typed answer is an ink card, and text answers stay tex
   assert.equal(isInkAnswer(ink.back), true);
   assert.match(composePencilCard({ handwritten: true, frontImage: { id: 'front' } }).error, /back/);
   assert.match(composePencilCard({ handwritten: true, answer: 'ignored', backImage: { id: 'back' } }).error, /prompt/);
+});
+
+test('a saved pencil side splits into typed text and ink images', () => {
+  assert.deepEqual(splitPencilSide('Beta'), { text: 'Beta', images: [] });
+  assert.deepEqual(splitPencilSide('![Handwritten answer](axon-media:sha256-abc)'), { text: '', images: [{ alt: 'Handwritten answer', id: 'sha256-abc' }] });
+  const both = splitPencilSide('Lima | Lima, Peru\n\n![Handwritten note](axon-media:note)');
+  assert.equal(both.text, 'Lima | Lima, Peru');
+  assert.deepEqual(both.images, [{ alt: 'Handwritten note', id: 'note' }]);
+  assert.equal(splitPencilSide('![Handwritten prompt](axon-media:front)').text, '');
 });
 
 test('the editor starts on ink only for a blank side on a touch device', () => {

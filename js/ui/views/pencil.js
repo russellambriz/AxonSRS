@@ -11,9 +11,10 @@ import { store } from '../../data/store.js';
 import { button } from './common.js';
 import { select, confirmDialog, errorToast } from '../components.js';
 import { announce } from '../appearance.js';
-import { inkPad } from '../inkpad.js';
+import { inkPad, smoothingButtons } from '../inkpad.js';
 import { createCard } from '../../core/model.js';
-import { PAPER, PEN_COLORS, PEN_WIDTHS, composePencilCard, imageRejectReason, penColor, penWidth } from '../../core/pencil.js';
+import { PAPER, PEN_COLORS, PEN_WIDTHS, composePencilCard, imageRejectReason, penColor, penWidth, splitPencilSide } from '../../core/pencil.js';
+import { pencilLibrary } from '../pencilreel.js';
 
 export async function view(outlet, _params, query) {
   await app.cache.ensure();
@@ -31,7 +32,7 @@ export async function view(outlet, _params, query) {
   let handwritten = true;
   let colorId = 'graphite';
   let widthId = 'medium';
-  let savedCount = 0;
+  let editingId = null;
   let saving = false;
 
   document.body.classList.add('penciling');
@@ -62,7 +63,11 @@ export async function view(outlet, _params, query) {
     }
   });
 
-  const savedEl = h('span', { class: 'pencil-saved', 'aria-live': 'polite' }, '');
+  const library = pencilLibrary({
+    getDeckId: () => deckId,
+    onEdit: (card) => loadCard(card),
+    onDeleted: (id) => { if (editingId === id) resetForm(); },
+  });
   const noteEl = h('p', { class: 'pencil-note' }, '');
   const statusEl = h('p', { class: 'pencil-status', role: 'status' }, '');
   const ghostEl = h('p', { class: 'pencil-ghost', 'aria-hidden': 'true' }, 'Sketch the prompt');
@@ -130,7 +135,7 @@ export async function view(outlet, _params, query) {
   }
 
   function isDirty() {
-    return !!(promptInput.value.trim() || answerInput.value.trim() || !frontPad.isEmpty() || !backPad.isEmpty());
+    return !!(promptInput.value.trim() || answerInput.value.trim() || !frontPad.isEmpty() || !backPad.isEmpty() || frontPad.hasPlate() || backPad.hasPlate());
   }
 
   function refresh() {
@@ -139,7 +144,7 @@ export async function view(outlet, _params, query) {
     redoBtn.disabled = !pad.canRedo();
     clearBtn.disabled = pad.isEmpty();
     eraserBtn.setAttribute('aria-pressed', pad.eraserOn() ? 'true' : 'false');
-    ghostEl.hidden = !pad.isEmpty();
+    ghostEl.hidden = !pad.isEmpty() || pad.hasPlate();
     const preview = composePencilCard(draftPreview());
     if (!isDirty()) statusEl.textContent = '';
     else if (!preview.ok) statusEl.textContent = preview.error;
@@ -150,8 +155,8 @@ export async function view(outlet, _params, query) {
     return {
       prompt: promptInput.value,
       answer: handwritten ? '' : answerInput.value,
-      frontImage: frontPad.isEmpty() ? null : { id: 'pending', alt: 'Handwritten prompt' },
-      backImage: backPad.isEmpty() ? null : { id: 'pending', alt: handwritten ? 'Handwritten answer' : 'Handwritten note' },
+      frontImage: frontPad.isEmpty() && !frontPad.plateId() ? null : { id: frontPad.plateId() || 'pending', alt: 'Handwritten prompt' },
+      backImage: backPad.isEmpty() && !backPad.plateId() ? null : { id: backPad.plateId() || 'pending', alt: handwritten ? 'Handwritten answer' : 'Handwritten note' },
       handwritten,
     };
   }
@@ -167,6 +172,7 @@ export async function view(outlet, _params, query) {
   }
 
   function resetForm() {
+    editingId = null;
     promptInput.value = '';
     answerInput.value = '';
     frontPad.clear();
@@ -175,8 +181,49 @@ export async function view(outlet, _params, query) {
     statusEl.textContent = '';
   }
 
+  async function loadPlate(pad, id) {
+    if (!id) {
+      pad.setPlate(null);
+      return;
+    }
+    const rec = await store.getMedia(id);
+    if (!rec?.blob) {
+      pad.setPlate(null);
+      return;
+    }
+    const url = URL.createObjectURL(rec.blob);
+    const img = new Image();
+    img.src = url;
+    try {
+      await img.decode();
+    } catch {
+      /* a broken image still should not block the rest of the card */
+    }
+    pad.setPlate(img, id, url);
+  }
+
+  async function loadCard(card) {
+    if (editingId !== card.id && isDirty()) {
+      const ok = await confirmDialog({ title: 'Discard this page?', message: 'The card you are writing has not been saved.', confirmLabel: 'Discard', danger: true });
+      if (!ok) return false;
+    }
+    const front = splitPencilSide((card.front || []).join('\n\n'));
+    const back = splitPencilSide((card.back || []).join('\n\n'));
+    const ink = !back.text && back.images.length > 0;
+    editingId = card.id;
+    promptInput.value = front.text;
+    answerInput.value = ink ? '' : back.text;
+    frontPad.clear();
+    backPad.clear();
+    setAnswerKind(ink);
+    await Promise.all([loadPlate(frontPad, front.images[0]?.id || null), loadPlate(backPad, back.images[0]?.id || null)]);
+    showSide('front');
+    announce('Card loaded. Change it, then save.');
+    return true;
+  }
+
   async function storeDrawing(pad, filename, alt) {
-    if (pad.isEmpty()) return null;
+    if (pad.isEmpty()) return pad.plateId() ? { id: pad.plateId(), alt } : null;
     const snap = pad.snapshot({ background: PAPER });
     if (!snap) return null;
     const blob = dataUrlToBlob(snap.src);
@@ -219,14 +266,25 @@ export async function view(outlet, _params, query) {
         handwritten,
       });
       if (!ready.ok) throw new Error(ready.error);
-      const card = createCard({ deckId, front: ready.front, back: ready.back, media: ready.mediaIds }, store.deviceId);
+      const previous = editingId ? app.cache.cards.get(editingId) : null;
+      const updating = !!previous;
+      const card = createCard({
+        ...(previous || {}),
+        id: previous?.id,
+        createdAt: previous?.createdAt,
+        version: previous?.version || null,
+        deckId,
+        front: ready.front,
+        back: ready.back,
+        media: [...new Set([...(previous?.media || []), ...ready.mediaIds])],
+      }, store.deviceId);
       await store.saveCard(card);
       await app.cache.load();
-      savedCount += 1;
-      savedEl.textContent = savedCount === 1 ? '1 saved' : `${savedCount} saved`;
+      library.refresh();
+      const n = [...app.cache.cards.values()].filter((c) => c.deckId === deckId).length;
       if (andNext) {
         resetForm();
-        announce(`Card saved. ${savedCount === 1 ? 'One card' : `${savedCount} cards`} this session. The page is clear for the next one.`);
+        announce(updating ? 'Card updated. The page is clear for the next one.' : `Card saved. ${n === 1 ? 'One card' : `${n} cards`} in this deck. The page is clear for the next one.`);
       } else {
         announce('Card saved.');
         app.leaveGuard = null;
@@ -257,7 +315,7 @@ export async function view(outlet, _params, query) {
     label: 'Deck',
     options: decks.map((d) => ({ value: d.id, label: d.name })),
     value: deckId,
-    onchange: (v) => { deckId = v; },
+    onchange: (v) => { deckId = v; library.refresh(); },
   });
 
   const root = h('div', { class: 'pencil-studio', role: 'region', 'aria-label': 'Create with Pencil' },
@@ -265,20 +323,22 @@ export async function view(outlet, _params, query) {
       h('button', { type: 'button', class: 'btn ghost icon', 'aria-label': 'Close', onclick: () => app.navigate(`/deck/${deckId}`) }, icon('x')),
       h('div', { class: 'pencil-heading' },
         h('h1', {}, 'Create with Pencil'),
-        savedEl),
+        library.button),
       h('div', { class: 'pencil-sides', role: 'group', 'aria-label': 'Card side' }, frontBtn, backBtn),
       h('div', { class: 'pencil-deck' }, deckSelect)),
     h('div', { class: 'pencil-body' },
       h('div', { class: 'pencil-stage' },
         h('div', { class: 'pencil-paper' }, frontPad.el, backPad.el, ghostEl),
         noteEl,
-        h('div', { class: 'pencil-tools' }, colorHost, widthHost, h('span', { class: 'pencil-tool-gap' }), eraserBtn, undoBtn, redoBtn, clearBtn)),
+        h('div', { class: 'pencil-tools' }, colorHost, widthHost, smoothingButtons(), h('span', { class: 'pencil-tool-gap' }), eraserBtn, undoBtn, redoBtn, clearBtn)),
       h('aside', { class: 'pencil-panel', 'aria-label': 'Text' },
         h('div', { class: 'pencil-kinds', role: 'group', 'aria-label': 'How the answer is stored' }, handBtn, typeBtn),
         h('label', { class: 'pencil-field' }, h('span', {}, 'Prompt text ', h('span', { class: 'faint' }, 'optional')), promptInput),
         h('div', { class: 'pencil-graded' }, typedBlock, inkBlock),
         statusEl,
-        h('div', { class: 'pencil-actions' }, nextBtn, doneBtn))));
+        h('div', { class: 'pencil-actions' }, nextBtn, doneBtn))),
+    library.tray,
+    library.viewer);
 
   outlet.append(root);
   applyPen();
@@ -290,6 +350,7 @@ export async function view(outlet, _params, query) {
     destroy() {
       document.body.classList.remove('penciling');
       app.leaveGuard = null;
+      library.destroy();
     },
   };
 }
