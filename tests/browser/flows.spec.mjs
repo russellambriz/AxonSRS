@@ -47,7 +47,7 @@ export const tests = [
     },
   },
   {
-    name: 'study screen: “Mark correct & save as alias” replaces the failure once; Undo reverses the review but keeps the alias',
+    name: 'study screen: “My answer is correct” replaces the failure once; accepting the answer for next time is separate; Undo keeps the exposure',
     async run({ browser, url }) {
       const ctx = await newContext(browser);
       const page = await openApp(ctx, url);
@@ -56,30 +56,50 @@ export const tests = [
       const isLargest = (await promptText(page)).includes('Largest');
       const typed = isLargest ? 'Iuppiter' : 'Hermes';
       assert.equal(await answer(page, typed), 'retype');
-      await page.keyboard.press('Alt+KeyA');
+      await page.keyboard.press('Alt+KeyC');
       assert.equal(await waitPhase(page, ['feedback']), 'feedback', 'retyping bypassed');
+      await page.getByText('Your answer was accepted', { exact: true }).waitFor();
       let [card] = (await idbAll(page, 'cards')).filter((c) => c.front[0].startsWith(isLargest ? 'Largest' : 'Smallest'));
-      assert.ok(card.back.includes(typed), 'alias saved on the card');
+      assert.ok(!card.back.includes(typed), 'correcting this review does not change the card');
       const events = await idbAll(page, 'events');
       const review = events.find((e) => e.type === 'review');
       const correction = events.find((e) => e.type === 'correction');
       assert.equal(review.rating, 1, 'the original failure is kept in the audit history');
+      assert.equal(review.outcome.class, 'failed');
       assert.equal(correction.kind, 'override');
-      assert.equal(correction.reason, 'alias');
+      assert.equal(correction.reason, 'correct');
       assert.equal(correction.targetId, review.id);
+      assert.equal(correction.outcome.reason, 'CORRECTED');
+      assert.equal(events.filter((e) => e.type === 'review').length, 1, 'no second review');
       let unit = (await idbAll(page, 'units')).find((u) => u.id === review.unitId);
       assert.equal(unit.state.lapses, 0);
-      assert.equal(unit.lastScheduled.correct, true, 'the next review’s Easy check sees a correct answer');
+      assert.equal(unit.lastScheduled.correct, true);
       assert.equal(unit.lastScheduled.grade, correction.newRating);
-      assert.deepEqual(unit.perf.recent.map((r) => r.c), [true], 'recent performance counts the rescue as a success');
+      assert.deepEqual(unit.perf.recent.map((r) => r.c), [true], 'recent performance counts the accepted answer as a success');
       const session = (await idbAll(page, 'sessions'))[0];
       assert.equal(session.queue.filter((id) => id === review.unitId).length, 1, 'obsolete failure requeue removed');
-      // Undo the (rescued) review.
+      // Accepting it for future reviews is a separate, explicit change to the card.
+      await page.getByRole('button', { name: 'Also accept this answer next time' }).click();
+      await page.waitForFunction(async ({ id, t }) => {
+        const { app } = await import(new URL('./js/app.js', location.href).href);
+        return app.cache.cards.get(id)?.back.includes(t);
+      }, { id: card.id, t: typed });
+      [card] = (await idbAll(page, 'cards')).filter((c) => c.id === card.id);
+      assert.ok(card.back.includes(typed), 'alias saved on the card');
+      assert.equal((await idbAll(page, 'events')).filter((e) => e.type === 'correction').length, 1, 'the alias is not a second correction');
+      // Undo the (accepted) review: the schedule goes back, the exposure stays.
       await page.keyboard.press('Alt+KeyZ');
       await waitPhase(page, ['question']);
       unit = (await idbAll(page, 'units')).find((u) => u.id === review.unitId);
       assert.equal(unit.state, null, 'schedule back to before the review');
       assert.ok((await idbAll(page, 'events')).some((e) => e.type === 'correction' && e.kind === 'void' && e.targetId === review.id), 'undo is a linked correction, not a deletion');
+      await page.getByText('Practice · answer seen').waitFor();
+      assert.equal(await answer(page, isLargest ? 'Jupiter' : 'Mercury'), 'feedback');
+      const retry = (await idbAll(page, 'events')).filter((e) => e.unitId === review.unitId && (e.type === 'review' || e.type === 'practice')).sort((a, b) => a.ts - b.ts).at(-1);
+      assert.equal(retry.type, 'practice', 'after seeing the answer the retry is practice, not a fresh test');
+      assert.equal(retry.assistance.priorExposure, true);
+      assert.equal(retry.outcome.independent, false);
+      assert.equal((await idbAll(page, 'units')).find((u) => u.id === review.unitId).state, null, 'the practice retry leaves the schedule alone');
       [card] = (await idbAll(page, 'cards')).filter((c) => c.id === card.id);
       assert.ok(card.back.includes(typed), 'alias removal is separate from undo');
       assertNoErrors(page);

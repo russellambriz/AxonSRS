@@ -37,7 +37,7 @@ export const tests = [
           });
           await page.getByRole('button', { name: 'Check your handwritten answer' }).click();
           assert.equal(await waitPhase(page, ['grading']), 'grading');
-          await page.getByRole('button', { name: /^Good/ }).click();
+          await page.getByRole('button', { name: /^Correct on my own/ }).click();
           assert.equal(await waitPhase(page, ['feedback']), 'feedback');
           seen.push('ink');
         } else {

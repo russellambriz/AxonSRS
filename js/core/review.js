@@ -57,7 +57,7 @@ export function planReview(ctx) {
     eventId, now, deviceId, seq, sessionId, mode, live, unit, card, deck, trial, match,
     gradeMode = 'auto', manualRating = null, gradingConfig = DEFAULT_GRADING_CONFIG, baseline,
     params, studyDay, timeZone, research = null, firstAttempt = true, appVersion = APP_VERSION,
-    policy = POLICIES.standard, confidence = null, dontKnow = false, selfHelp = false,
+    policy = POLICIES.standard, confidence = null, dontKnow = false, selfHelp = false, guessed = false,
   } = ctx;
   const enrichedTrial = {
     ...trial,
@@ -75,7 +75,7 @@ export function planReview(ctx) {
   const evidence = {
     correct: match.correct == null ? null : !!match.correct && !(usesManual && manualRating === 1),
     provenance: match.method === 'self' || (usesManual && manualRating === 1) ? 'self' : 'evaluator',
-    assistance: trial.assistance, confidence, dontKnow, selfHelp,
+    assistance: trial.assistance, confidence, dontKnow, selfHelp, guessed,
     typoTolerated: !!match.typoTolerated, phase, policy, timingGrade: grading.grade,
   };
   const proposed = assessOutcome(evidence);

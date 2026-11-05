@@ -290,6 +290,7 @@ export function adjustMeasurements(trial, config = DEFAULT_GRADING_CONFIG) {
   if ((raw.hiddenMs || 0) > 0 && raw.interruptedByHidden) flag('HIDDEN_INTERRUPTION');
   if ((raw.longestGapMs || 0) > config.idleCapMs || (Number.isFinite(latency) && latency > config.idleCapMs * 2)) flag('IDLE_INTERRUPTION');
   if (trial.editorOpened) flag('EDITOR_OPENED');
+  if (trial.notationRepaired) flag('NOTATION_REPAIRED');
   if (trial.clockAnomaly) flag('CLOCK_ANOMALY');
   const modality = trial.modality || { kind: 'unknown', confidence: 0 };
   if (modality.kind === 'unknown') flag('MODALITY_UNKNOWN', 'modality');
@@ -495,6 +496,7 @@ export const REASON_TEXT = Object.freeze({
   HIDDEN_INTERRUPTION: 'The app was in the background during this card.',
   IDLE_INTERRUPTION: 'There was a long idle gap, likely an interruption.',
   EDITOR_OPENED: 'The card editor was opened during this review.',
+  NOTATION_REPAIRED: 'The answer was edited after Axon could not read it, so its timing is not used.',
   CLOCK_ANOMALY: 'The device clock changed unexpectedly.',
   MODALITY_UNKNOWN: 'The input method could not be identified.',
   LOW_MODALITY_CONFIDENCE: 'The input method was uncertain.',

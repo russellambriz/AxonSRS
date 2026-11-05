@@ -131,7 +131,7 @@ function greeting() {
 function onboarding() {
   return h('section', { class: 'hero', 'aria-labelledby': 'welcome' },
     h('h1', { id: 'welcome' }, 'Welcome to Axon'),
-    h('p', {}, 'Type your answers. Axon checks them — including maths and chemistry notation — and uses how quickly and fluently you recall to schedule each card with FSRS. No Again/Hard/Good/Easy buttons needed.'),
+    h('p', {}, 'Practice recalling answers by typing or writing. Axon checks supported typed answers, including maths and chemistry notation. For handwritten work, compare your response with the solution and assess it yourself. Reviews are scheduled with FSRS to help you remember over time.'),
     h('p', { class: 'small' }, 'Everything is stored on this device and works offline. Sync and backups are optional.'),
     h('div', { class: 'onboard-options' },
       h('button', { class: 'option-card', onclick: async () => {

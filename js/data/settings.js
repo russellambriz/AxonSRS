@@ -8,6 +8,7 @@ export const DEFAULT_GLOBAL_SETTINGS = Object.freeze({
   desiredRetention: 0.9,
   maximumInterval: 36500,
   gradingMode: 'auto', // 'auto' | 'manual' | 'research'
+  gradingPolicy: 'standard', // 'standard' | 'timing' (experimental response-time grades)
   gradingOverrides: {},
   showWhy: true,
   confidencePrompt: true,

@@ -148,14 +148,14 @@ export const tests = [
       assert.equal(await page.getAttribute('.ink-canvas', 'data-strokes'), '1', 'a palm touch after the pen is ignored');
       await check.click();
       assert.equal(await waitPhase(page, ['grading']), 'grading');
-      await page.getByText('Check your answer', { exact: true }).waitFor();
+      await page.getByText('Needs your check', { exact: true }).waitFor();
       await page.getByRole('img', { name: 'Your handwritten answer' }).waitFor();
       assert.ok((await page.textContent('.feedback .answer')).trim().length > 0, 'the correct answer is shown to compare');
-      await page.getByRole('button', { name: /^Again/ }).click();
+      await page.getByRole('button', { name: /^Not correct/ }).click();
       assert.equal(await waitPhase(page, ['retype']), 'retype', 'a wrong handwritten answer is written once');
       await page.getByText('Write the correct answer once').first().waitFor();
-      await page.getByText('You marked it wrong').waitFor();
-      assert.equal(await page.getByRole('button', { name: 'Mark correct' }).count(), 0, 'no overrides on a self-graded answer');
+      await page.getByText('Not correct (you checked it)').waitFor();
+      assert.equal(await page.getByRole('button', { name: 'My answer is correct' }).count(), 0, 'no overrides on a self-graded answer');
       let reviews = (await idbAll(page, 'events')).filter((e) => e.type === 'review');
       assert.equal(reviews.length, 1);
       assert.equal(reviews[0].rating, 1);
@@ -176,9 +176,9 @@ export const tests = [
       await stroke(page);
       await page.keyboard.press('Enter');
       await waitPhase(page, ['grading']);
-      await page.getByRole('button', { name: /^Good/ }).click();
+      await page.getByRole('button', { name: /^Correct on my own/ }).click();
       await waitPhase(page, ['feedback']);
-      await page.getByText('You marked it right').waitFor();
+      await page.getByText('Correct (you checked it)').waitFor();
       reviews = (await idbAll(page, 'events')).filter((e) => e.type === 'review').sort((x, y) => x.ts - y.ts);
       assert.equal(reviews[1].rating, 3);
       assert.equal(reviews[1].response.correct, true);
@@ -447,7 +447,7 @@ export const tests = [
       await stroke(page);
       await page.getByRole('button', { name: 'Check your handwritten answer' }).click();
       await waitPhase(page, ['grading']);
-      await page.getByRole('button', { name: /^Again/ }).click();
+      await page.getByRole('button', { name: /^Not correct/ }).click();
       assert.equal(await waitPhase(page, ['retype']), 'retype');
       await page.getByRole('button', { name: 'Skip retyping' }).click();
       assert.equal(await waitPhase(page, ['feedback']), 'feedback');
@@ -474,7 +474,7 @@ export const tests = [
       await stroke(page);
       await page.getByRole('button', { name: 'Check your handwritten answer' }).click();
       await waitPhase(page, ['grading']);
-      await page.getByRole('button', { name: /^Again/ }).click();
+      await page.getByRole('button', { name: /^Not correct/ }).click();
       assert.equal(await waitPhase(page, ['feedback']), 'feedback');
       assert.equal(await page.locator('.ink-canvas').isVisible(), false);
       const events = await idbAll(page, 'events');

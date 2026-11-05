@@ -1240,6 +1240,17 @@ body.studying, body.penciling { overflow: hidden; }
 .submit-btn { height: 60px; min-width: 68px; padding: 0 18px; border-radius: 16px; font-size: 1.1rem; font-weight: 700; gap: 8px; }
 .submit-btn svg { width: 26px; height: 26px; }
 .study[data-phase='feedback'] .submit-btn { min-width: min(11rem, 42vw); }
+/* Optional confidence before checking (Guessing / Unsure / Confident) */
+.confidence-pick { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.confidence-pick .chip { min-height: 32px; padding: 2px 12px; font-size: 0.82rem; }
+@media (max-width: 480px) {
+  .confidence-pick { flex-wrap: nowrap; }
+  .confidence-pick > span { display: none; }
+  .confidence-pick .chip { flex: 1; justify-content: center; }
+}
+.confidence-pick .chip[aria-pressed='true'] { background: var(--accent); color: var(--accent-contrast); border-color: transparent; }
+.study:not([data-phase='question']) .confidence-pick { display: none; }
+.self-check .btn kbd { margin-left: 6px; }
 /* Handwriting pad (ink answers are self-graded, never recognised) */
 .ink-pad { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .ink-stage { position: relative; width: 100%; height: clamp(150px, 32dvh, 420px); min-width: 0; }
@@ -1270,6 +1281,10 @@ body.studying, body.penciling { overflow: hidden; }
 .ink-pad[data-hover='1'] .ink-canvas { cursor: none; }
 .ink-pad.erasing .ink-canvas { cursor: cell; }
 .ink-pad.sheet .ink-stage { height: min(52dvh, 480px); }
+/* Short phone screens: a shorter pad so the prompt stays in view. */
+@media (max-height: 720px) and (max-width: 899px) {
+  .ink-pad:not(.sheet) .ink-stage { height: clamp(120px, 24dvh, 260px); }
+}
 .ink-tools { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
 .study:not(.ink-mode) .ink-pad,
 .study.ink-mode:not([data-phase='question']):not([data-phase='retype']) .ink-pad { display: none; }

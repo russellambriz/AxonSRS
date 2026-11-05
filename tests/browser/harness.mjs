@@ -139,7 +139,7 @@ export async function answer(page, text, { delay = 25 } = {}) {
   await input.fill('');
   await input.pressSequentially(text, { delay });
   await page.keyboard.press('Enter');
-  return waitPhase(page, ['feedback', 'retype', 'error', 'done']);
+  return waitPhase(page, ['feedback', 'retype', 'error', 'done', 'unresolved', 'grading']);
 }
 
 /** Answer whatever card is showing using a prompt → answer map. */

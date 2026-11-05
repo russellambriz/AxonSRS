@@ -22,15 +22,24 @@ Update this list in the same commit as the work.
       planReview now takes `policy`, `confidence`, `dontKnow`, `selfHelp`;
       the study screen does not pass them yet (step 3), so today it uses
       the standard policy with no confidence.
-- [ ] 3. Study screen: pre-submission confidence, "I don't know", outcome
-      labels, self-assessment panel (ink, manual, unresolved), unresolved
-      phase, effort buttons, alias split, timing under a disclosure.
-- [ ] 4. Exposure integrity: a card whose answer was shown but not yet
-      graded, or whose review was undone, comes back as practice; persisted
-      across reloads.
-- [ ] 5. Settings and onboarding copy (policy switch, remove hint-ceiling and
-      "I guessed" settings, accurate welcome text, plain-language grade
-      meanings).
+- [x] 3. Study screen: pre-submission confidence chips (`renderConfidence`),
+      "I don't know" / "Show answer" (new cards), outcome labels
+      (`verdictText`), self-check panel (`selfCheckPanel`/`selfAssess`) for
+      ink, unresolved compare and manual mode, unresolved phase
+      (`showUnresolved`/`editAnswer`/`compareAnswer`), "Took effort" / "It
+      was easy" / "I guessed without remembering", "My answer is correct"
+      then "Also accept this answer next time" (`acceptAlias`), timing inside
+      the "Why this grade?" disclosure, post-feedback 1–5 rating removed.
+      Tests: `tests/browser/grading.spec.mjs` (5), updated flows/session/
+      pencil/recall specs.
+- [x] 4. Exposure integrity: `session.exposed[unitId]` is saved before an
+      answer is shown without a grade (`markExposed`) and on undo; such a
+      card comes back as practice with `assistance.priorExposure`
+      ("Practice · answer seen"); cleared when the review commits.
+- [x] 5. Settings and copy: "Grades from response time (experimental)"
+      switch (`gradingPolicy`), hint-ceiling and "I guessed" settings
+      removed, confidence setting reworded, grading-mode text, welcome text
+      (home.js), shortcut labels, plain meanings on self-check buttons.
 - [ ] 6. Statistics consistency: shared outcome rule reads the new evidence;
       unaided recall with an explicit denominator; new vs delayed; pre- vs
       post-feedback confidence; session summary; research policy notice.

@@ -27,8 +27,9 @@ import { startViewport, keyboardLikelyOpen, viewportState } from '../viewport.js
 import { TrialRecorder, ScreenClock } from '../../study/trial.js';
 import { MODES } from '../../study/session.js';
 import { unitContent, effectiveCardSettings, TASK_TYPE_LABELS } from '../../core/model.js';
-import { evaluateAnswer, planReview, planOverride, planUndo, exposureEvent, knewThatGrade } from '../../core/review.js';
-import { classifyModality, promptStats, mergeGradingConfig, baselineKey, REASON_TEXT, MODALITY_LABELS } from '../../core/fluency.js';
+import { evaluateAnswer, planReview, planOverride, planUndo, exposureEvent } from '../../core/review.js';
+import { assessOutcome, OUTCOME_LABELS, POLICIES } from '../../core/outcome.js';
+import { classifyModality, promptStats, mergeGradingConfig, baselineKey, MODALITY_LABELS } from '../../core/fluency.js';
 import { matchAnswer, answerDiff, DIAGNOSTIC_LABELS, WARNING_LABELS } from '../../core/match/index.js';
 import { addAlias } from '../../core/aliases.js';
 import { addClozeAlias } from '../../core/cloze.js';
@@ -210,7 +211,8 @@ class StudyScreen {
       this.trial.onInkStroke();
       this.cancelAutoAdvance();
     } });
-    this.composer = h('div', { class: 'composer' }, h('div', { class: 'composer-inner' }, this.liveEl, this.symbolsEl, this.ink.el, h('div', { class: 'answer-row' }, this.input, this.voiceBtn, this.submitBtn), this.actionsEl));
+    this.confEl = h('div', { class: 'confidence-pick', role: 'group', 'aria-label': 'How sure are you? Optional' });
+    this.composer = h('div', { class: 'composer' }, h('div', { class: 'composer-inner' }, this.liveEl, this.symbolsEl, this.ink.el, this.confEl, h('div', { class: 'answer-row' }, this.input, this.voiceBtn, this.submitBtn), this.actionsEl));
     this.root = h('div', { class: ['study', this.inkMode && 'ink-mode'], role: 'region', 'aria-label': 'Study session' }, top, this.stage, this.composer);
     // Keep focus in the input when tapping composer controls.
     for (const el of [this.submitBtn, this.voiceBtn]) el.addEventListener('pointerdown', (e) => e.preventDefault());
@@ -262,9 +264,9 @@ class StudyScreen {
     on('study.reveal', () => this.revealAnswer());
     on('study.skip', () => this.skip());
     on('study.undo', () => this.undo());
-    on('study.alias', () => this.override('alias'));
+    on('study.alias', () => this.acceptAlias());
     on('study.correct', () => this.override('correct'));
-    on('study.knew', () => this.override('knew'));
+    on('study.knew', () => this.override('effort', 4));
     on('study.guessed', () => this.override('guessed'));
     on('study.bypass', () => this.bypassRetype());
     on('study.solution', () => this.toggleSolution());
@@ -416,7 +418,10 @@ class StudyScreen {
     const isLearning = unit.state && (unit.state.state === State.Learning || unit.state.state === State.Relearning);
     // A requeued attempt is a scheduling review only when the card is due
     // (learning steps within the learn-ahead window); otherwise it is practice.
-    const live = sessionLive && (attempts === 0 || (isLearning && unit.state.due <= now + LEARN_AHEAD_MS));
+    // A card whose answer was already shown in this session (graded later,
+    // undone, or interrupted by a reload) can only come back as practice.
+    const exposed = !!this.session.exposed?.[unit.id];
+    const live = !exposed && sessionLive && (attempts === 0 || (isLearning && unit.state.due <= now + LEARN_AHEAD_MS));
     this.current = {
       unit, card, deck, content, settings, live,
       eventId: uuid(),
@@ -424,7 +429,10 @@ class StudyScreen {
       isWarmup: !!this.session.warmupPending,
       grade: this.gradeMode(card),
       retypeDone: false,
+      priorExposure: exposed,
+      confidence: null,
     };
+    this.renderConfidence();
     this.input.value = '';
     this.ink.clear();
     this.ink.setHint('Write your answer, then check it');
@@ -444,7 +452,8 @@ class StudyScreen {
     // Meta chips
     const chips = [];
     chips.push(h('span', { class: 'chip' }, h('span', { class: 'deck-dot', style: { background: deck?.color || '#888' } }), deck?.name || ''));
-    if (!this.current.live) chips.push(h('span', { class: 'chip', title: 'Recorded as exposure; your long-term schedule is unchanged' }, this.session.live ? 'Practice retry' : 'Practice'));
+    if (exposed) chips.push(h('span', { class: 'chip', title: 'You have already seen the answer to this card in this session, so this is practice; your long-term schedule is unchanged' }, 'Practice · answer seen'));
+    else if (!this.current.live) chips.push(h('span', { class: 'chip', title: 'Recorded as exposure; your long-term schedule is unchanged' }, this.session.live ? 'Practice retry' : 'Practice'));
     if (!unit.state) chips.push(h('span', { class: 'chip accent' }, 'New'));
     if (card.taskType && card.taskType !== 'recall') chips.push(h('span', { class: 'chip' }, TASK_TYPE_LABELS[card.taskType]));
     if (unit.key === 'rev') chips.push(h('span', { class: 'chip' }, 'Back → Front'));
@@ -618,14 +627,14 @@ class StudyScreen {
     if (this.phase === 'question') {
       if (this.usingInk()) {
         if (this.ink.isEmpty()) {
-          announce('Write an answer first, or use Reveal.', { assertive: true });
+          announce('Write an answer first, or choose I don’t know.', { assertive: true });
           return;
         }
         this.submitInk();
         return;
       }
       if (!this.input.value.trim()) {
-        announce('Type an answer first, or use Reveal.', { assertive: true });
+        announce('Type an answer first, or choose I don’t know.', { assertive: true });
         this.shake();
         return;
       }
@@ -639,7 +648,74 @@ class StudyScreen {
       else this.checkRetype();
     } else if (this.phase === 'error') {
       this.retrySave();
+    } else if (this.phase === 'unresolved') {
+      this.editAnswer();
     }
+  }
+
+  /** Optional pre-submission confidence; unset is a valid answer, never "confident". */
+  renderConfidence() {
+    const cur = this.current;
+    this.confEl.hidden = store.global.confidencePrompt === false || !cur;
+    if (this.confEl.hidden) return;
+    const opts = [
+      ['guessing', 'Guessing', 'I’m choosing an answer without remembering it.'],
+      ['unsure', 'Unsure', 'I recalled an answer but I doubt it.'],
+      ['confident', 'Confident', 'I’m sure of my answer.'],
+    ];
+    replace(this.confEl, h('span', { class: 'faint small' }, 'How sure? (optional)'), opts.map(([value, label, desc]) => {
+      const b = h('button', { type: 'button', class: 'chip button', title: desc, 'aria-pressed': String(cur.confidence === value), onclick: () => {
+        if (this.phase !== 'question') return;
+        cur.confidence = cur.confidence === value ? null : value;
+        this.renderConfidence();
+        if (cur.confidence === 'guessing') announce('Guessing: it will not count as recall, even if it is right.');
+      } }, label);
+      b.addEventListener('pointerdown', (e) => e.preventDefault());
+      return b;
+    }));
+  }
+
+  /** The answer is about to be shown without a committed grade: remember that across reloads. */
+  markExposed() {
+    const id = this.current.unit.id;
+    this.session = { ...this.session, exposed: { ...(this.session.exposed || {}), [id]: Date.now() } };
+    store.saveSession(this.session).catch(() => {});
+  }
+
+  /** The evaluator could not read the answer: nothing is graded and the answer stays hidden. */
+  showUnresolved() {
+    const cur = this.current;
+    this.setPhase('unresolved');
+    const diags = (cur.match.diagnostics || []).filter((d) => DIAGNOSTIC_LABELS[d] && d !== 'empty');
+    replace(this.feedbackEl, h('section', { class: 'feedback neutral', 'aria-label': 'Feedback' },
+      h('div', { class: 'verdict' }, icon('alert'), h('span', {}, 'Needs your check')),
+      h('p', {}, 'I couldn’t check this form reliably. Edit the notation, or compare your answer with the correct one and check it yourself.'),
+      diags.length ? h('div', { class: 'row tight' }, diags.map((d) => h('span', { class: 'chip warning' }, DIAGNOSTIC_LABELS[d]))) : null,
+      h('div', { class: 'row' },
+        button('Edit answer', { kind: 'primary', onclick: () => this.editAnswer() }),
+        button('Compare with the answer', { onclick: () => this.compareAnswer() }))));
+    announce('Needs your check. I couldn’t check this form reliably. Edit the notation, or compare your answer with the correct one.', { assertive: true });
+  }
+
+  /** Fix the notation; the answer was never shown, so this is still the first attempt. */
+  editAnswer() {
+    if (this.phase !== 'unresolved') return;
+    this.current.notationRepaired = true;
+    clear(this.feedbackEl);
+    this.input.className = 'answer-input';
+    this.setPhase('question');
+    this.focusInput(true);
+  }
+
+  compareAnswer() {
+    if (this.phase !== 'unresolved') return;
+    const cur = this.current;
+    cur.selfKind = 'compare';
+    cur.match = { ...cur.match, correct: null, method: 'self' };
+    this.markExposed();
+    this.renderFeedback({ pending: true });
+    this.setPhase('grading');
+    this.gradingStartedAt = performance.now();
   }
 
   /* =========================================================== submit */
@@ -656,17 +732,25 @@ class StudyScreen {
     cur.trial = this.trialRecord(raw, text, modality, assistance);
     cur.match = match;
     cur.raw = raw;
-    if (cur.grade.mode === 'manual' && match.correct) {
+    cur.dontKnow = revealed;
+    if (match.unresolved && !revealed) {
+      this.showUnresolved();
+      return;
+    }
+    const preliminary = assessOutcome({ correct: !!match.correct, assistance: cur.trial.assistance, confidence: cur.confidence, dontKnow: revealed, phase: cur.unit.state ? 'review' : 'new' });
+    if (cur.grade.mode === 'manual' && preliminary.independent) {
+      cur.selfKind = 'effort';
+      this.markExposed();
       this.renderFeedback({ pending: true });
       this.setPhase('grading');
       this.gradingStartedAt = performance.now();
       return;
     }
     // Show the verdict at once; the full feedback replaces it when saved.
-    const ok = match.correct;
-    this.input.className = `answer-input ${ok ? 'correct' : 'incorrect'}`;
+    const ok = preliminary.independent;
+    this.input.className = `answer-input ${match.correct ? 'correct' : 'incorrect'}`;
     replace(this.feedbackEl, h('section', { class: ['feedback', ok ? 'correct' : 'incorrect'], 'aria-hidden': 'true' },
-      h('div', { class: 'verdict' }, icon(ok ? 'check' : 'x'), h('span', {}, ok ? 'Correct' : revealed ? 'Answer revealed' : 'Not quite')),
+      h('div', { class: 'verdict' }, icon(ok ? 'check' : 'x'), h('span', {}, OUTCOME_LABELS[preliminary.class])),
       h('div', { class: 'faint small' }, 'Saving…')));
     await this.commit();
   }
@@ -678,9 +762,10 @@ class StudyScreen {
       responseText: text,
       modality,
       prompt: promptStats(cur.content.prompt + (cur.content.occlusion ? ' ![](x)' : '')),
-      assistance,
+      assistance: { ...assistance, priorExposure: !!cur.priorExposure },
       isWarmup: cur.isWarmup,
       editorOpened: this.trial.editorOpened,
+      notationRepaired: !!cur.notationRepaired,
       clockAnomaly: !!raw.clockAnomaly,
       taskType: cur.card.taskType || cur.settings.taskType,
     };
@@ -698,29 +783,66 @@ class StudyScreen {
     cur.trial = { ...this.trialRecord(raw, '', { kind: 'handwriting', confidence: 0.95, source: 'ink', evidence: ['written on the handwriting pad'] }, { ...this.trial.assistance }), selfJudged: true };
     cur.raw = raw;
     if (revealed) {
+      cur.dontKnow = true;
       cur.match = { correct: false, method: 'self', diagnostics: ['revealed'], warnings: [] };
       cur.trial.gradingMs = 0;
+      cur.trial.assistance = { ...cur.trial.assistance, revealed: true };
       this.gradingStartedAt = performance.now();
       this.setPhase('submitting');
       await this.commit(1);
       return;
     }
-    cur.match = { correct: true, method: 'self', diagnostics: [], warnings: [] };
+    // The ink is frozen (snapshot above) before the answer is shown.
+    cur.selfKind = 'ink';
+    cur.match = { correct: null, method: 'self', diagnostics: [], warnings: [] };
+    this.markExposed();
     this.renderFeedback({ pending: true });
     this.setPhase('grading');
     this.gradingStartedAt = performance.now();
   }
 
-  async manualGrade(rating) {
-    if (this.phase !== 'grading') return;
-    this.setPhase('submitting');
-    if (this.current.ink) this.current.match = { ...this.current.match, correct: rating > 1 };
-    // Capped so a card left open while away does not inflate study time.
-    this.current.trial.gradingMs = Math.min(120000, performance.now() - (this.gradingStartedAt || performance.now()));
-    await this.commit(rating);
+  /** Keyboard 1–4 in the self-check: 1 = not correct (or a guess), 2–4 = correct with that effort. */
+  manualGrade(r) {
+    const cur = this.current;
+    if (this.phase !== 'grading' || !cur) return;
+    if (cur.selfKind === 'effort') return r === 1 ? this.selfAssess('guessed') : this.selfAssess('correct', r);
+    if (r === 1) return this.selfAssess('incorrect');
+    return this.selfAssess('correct', cur.grade.mode === 'manual' && !this.helped() ? r : 3);
   }
 
-  async commit(manualRating = null) {
+  /** Help recorded before the answer was committed (hint, solution, answer seen). */
+  helped() {
+    const a = this.current?.trial?.assistance || {};
+    return !!(a.hintShown || a.solutionViewed || a.priorExposure);
+  }
+
+  /**
+   * The learner's check of a handwritten, uncheckable or manually graded
+   * answer. choice: 'correct' | 'incorrect' | 'help' | 'guessed'.
+   */
+  async selfAssess(choice, rating = 3) {
+    const cur = this.current;
+    if (this.phase !== 'grading' || !cur) return;
+    this.setPhase('submitting');
+    // Capped so a card left open while away does not inflate study time.
+    cur.trial.gradingMs = Math.min(120000, performance.now() - (this.gradingStartedAt || performance.now()));
+    if (cur.selfKind === 'effort') {
+      await this.commit(choice === 'guessed' ? null : rating, { guessed: choice === 'guessed' });
+      return;
+    }
+    if (choice === 'incorrect') cur.match = { ...cur.match, correct: false };
+    else if (choice === 'help') cur.match = { ...cur.match, correct: null };
+    else cur.match = { ...cur.match, correct: true };
+    await this.commit(choice === 'correct' ? rating : 1, { selfHelp: choice === 'help' });
+  }
+
+  /** Which outcome policy grades this review (see js/core/outcome.js). */
+  policy() {
+    if (this.current?.grade.arm) return POLICIES.timing;
+    return store.global.gradingPolicy === 'timing' ? POLICIES.timing : POLICIES.standard;
+  }
+
+  async commit(manualRating = null, { guessed = false, selfHelp = false } = {}) {
     const cur = this.current;
     const key = baselineKey(cur.trial.modality.kind, cur.trial.taskType);
     const baseline = await store.getBaseline(key);
@@ -742,8 +864,13 @@ class StudyScreen {
         deck: cur.deck,
         trial: cur.trial,
         match: cur.match,
-        gradeMode: manualRating ? 'manual' : 'auto',
+        gradeMode: manualRating != null || cur.selfKind ? 'manual' : 'auto',
         manualRating,
+        policy: this.policy(),
+        confidence: cur.confidence,
+        dontKnow: !!cur.dontKnow,
+        selfHelp,
+        guessed,
         gradingConfig: this.gradingConfig,
         baseline,
         params,
@@ -786,14 +913,17 @@ class StudyScreen {
         queue.splice(requeuedAt, 0, cur.unit.id);
       }
     }
+    const exposed = { ...(s.exposed || {}) };
+    delete exposed[cur.unit.id];
     return {
       ...s,
       queue,
+      exposed,
       index: s.index + 1,
       attempts,
       warmupPending: false,
       activeMs: (s.activeMs || 0) + (plan.event.activeMs || 0),
-      results: [...(s.results || []), { unitId: cur.unit.id, eventId: plan.event.id, type: plan.event.type, correct: plan.event.response.correct, firstAttempt: cur.firstAttempt, rating: plan.event.rating, requeuedAt, activeMs: plan.event.activeMs }],
+      results: [...(s.results || []), { unitId: cur.unit.id, eventId: plan.event.id, type: plan.event.type, correct: plan.event.response.correct, independent: plan.outcome.independent, cls: plan.outcome.class, phase: plan.outcome.phase, firstAttempt: cur.firstAttempt, rating: plan.event.rating, requeuedAt, activeMs: plan.event.activeMs }],
     };
   }
 
@@ -911,9 +1041,11 @@ class StudyScreen {
     const overridden = cur.override;
     const mode = cur.settings.answerMode;
     const parts = [];
-    const verdict = cur.ink ? (pending ? 'Check your answer' : correct ? 'You marked it right' : 'You marked it wrong') : overridden ? 'Marked correct' : correct ? (m.typoTolerated ? 'Correct — typo accepted' : 'Correct') : cur.trial?.assistance?.revealed ? 'Answer revealed' : 'Not quite';
+    const o = cur.effectiveOutcome || ev?.outcome || null;
+    const verdict = this.verdictText(pending, o);
+    const good = pending ? cur.selfKind === 'effort' : !!o?.independent;
     const gradeName = ev ? RATING_LABELS[cur.effectiveRating || ev.rating] : null;
-    parts.push(h('div', { class: 'verdict' }, icon(cur.ink && pending ? 'pen' : correct || overridden ? 'check' : 'x'), h('span', {}, verdict),
+    parts.push(h('div', { class: 'verdict' }, icon(pending && cur.selfKind !== 'effort' ? 'pen' : good ? 'check' : o?.class === 'failed' ? 'x' : 'alert'), h('span', {}, verdict),
       gradeName && !pending ? h('span', { class: 'chip grade', title: ev.type === 'practice' ? 'Practice — your long-term schedule is unchanged' : 'FSRS rating applied' }, `${gradeName}${ev.type === 'practice' ? ' · practice' : ''}`) : null));
 
     // Correct answer
@@ -937,7 +1069,8 @@ class StudyScreen {
       extra.innerHTML = markdownToHtml(cur.content.extra);
       parts.push(extra);
     }
-    if (!correct && !overridden && cur.trial?.responseText && !cur.trial.assistance.revealed) {
+    if (cur.selfKind === 'compare' && cur.trial?.responseText) parts.push(h('div', { class: 'stack', style: { gap: '4px' } }, h('div', { class: 'faint tiny' }, 'Your answer'), h('div', { class: 'diff' }, cur.trial.responseText)));
+    else if (!correct && !overridden && cur.trial?.responseText && !cur.trial.assistance.revealed) {
       const expected = cur.content.answerGroups.length > 1 ? cur.content.answerGroups.map((g) => g[0]).join('; ') : cur.content.answerGroups[0][m.closestIndex ?? 0] || cur.content.answerDisplay;
       const diff = answerDiff(cur.trial.responseText, expected);
       parts.push(h('div', { class: 'stack', style: { gap: '4px' } }, h('div', { class: 'faint tiny' }, 'Your answer'), h('div', { class: 'diff', 'aria-label': `You typed ${cur.trial.responseText}` }, diff.map((seg) => h('span', { class: seg.type === 'same' ? '' : seg.type }, seg.text)))));
@@ -949,10 +1082,11 @@ class StudyScreen {
     if (warns.length) parts.push(h('div', { class: 'row tight' }, warns.map((w) => h('span', { class: 'chip warning' }, WARNING_LABELS[w]))));
     if (m.probabilistic) parts.push(h('div', { class: 'faint tiny' }, 'Accepted as algebraically equivalent after checking at several random points (probabilistic, not a proof).'));
 
-    // Timing
+    // Timing (inside the details disclosure)
     const raw = cur.raw;
+    let timingEl = null;
     if (raw) {
-      parts.push(h('div', { class: 'timing', 'aria-label': 'Timing' },
+      timingEl = (h('div', { class: 'timing', 'aria-label': 'Timing' },
         h('span', {}, cur.ink ? 'First stroke ' : 'First key ', h('b', {}, raw.latencyMs != null ? formatDuration(raw.latencyMs) : '—')),
         h('span', {}, cur.ink ? 'Writing ' : 'Typing ', h('b', {}, raw.typingMs != null ? formatDuration(raw.typingMs) : '—')),
         h('span', {}, 'Total ', h('b', {}, formatDuration(raw.totalMs))),
@@ -965,31 +1099,14 @@ class StudyScreen {
       const g = ev.grading;
       const conf = `${g.confidenceLabel} heuristic confidence (${Math.round(g.confidence * 100)}%, not a calibrated probability)`;
       parts.push(h('details', { class: 'why', ontoggle: (e) => { if (e.currentTarget.open) announce(e.currentTarget.querySelector('.stack').innerText); } }, h('summary', {}, 'Why this grade?'), h('div', { class: 'stack', style: { gap: '4px', marginTop: '6px' } },
-        h('p', {}, ev.response?.method === 'self' ? `You graded this ${RATING_LABELS[ev.rating]} from your handwritten answer.` : ev.grading.mode === 'manual' ? `You graded this ${RATING_LABELS[ev.rating]}. Axon’s automatic grade would have been ${RATING_LABELS[g.grade]}.` : g.explanation),
-        cur.overrideReasons ? h('p', {}, cur.overrideReasons.map((r) => REASON_TEXT[r]).join(' ')) : null,
-        h('p', { class: 'faint tiny' }, `${conf} · ${MODALITY_LABELS[ev.modality?.kind || 'unknown']}${ev.modality?.source === 'override' ? ' (your setting)' : ''} · calibration ${g.calibration.level} (${g.calibration.n} samples) · ${g.ruleVersion}`),
+        h('p', {}, cur.correctionExplanation || g.explanation),
+        ev.outcome?.confidence ? h('p', { class: 'faint small' }, `Before checking you said: ${ev.outcome.confidence}.`) : null,
+        timingEl,
+        h('p', { class: 'faint tiny' }, `${conf} · ${MODALITY_LABELS[ev.modality?.kind || 'unknown']}${ev.modality?.source === 'override' ? ' (your setting)' : ''} · calibration ${g.calibration.level} (${g.calibration.n} samples) · ${g.ruleVersion} · ${g.policy || 'legacy policy'}`),
         g.measurements.excluded?.length ? h('p', { class: 'faint tiny' }, `Excluded from timing: ${[...new Set(g.measurements.excluded.map((x) => x.reason))].join(', ')}`) : null)));
     }
 
-    // Confidence self-rating (optional, skippable)
-    if (store.global.confidencePrompt !== false && ev && !pending) {
-      const wrap = h('div', { class: 'confidence', role: 'group', 'aria-label': 'How confident were you? Optional' }, h('span', {}, 'Confidence (optional):'));
-      for (let v = 1; v <= 5; v++) {
-        const b = h('button', { type: 'button', 'aria-pressed': 'false', 'aria-label': `Confidence ${v} of 5`, onpointerdown: (e) => e.preventDefault(), onclick: () => {
-          wrap.querySelectorAll('button').forEach((x) => x.setAttribute('aria-pressed', 'false'));
-          b.setAttribute('aria-pressed', 'true');
-          store.addEvents([exposureEvent({ id: uuid(), type: 'self-rating', now: Date.now(), deviceId: store.deviceId, seq: null, unit: cur.unit, card: cur.card, sessionId: this.session.id, studyDay: store.today(), data: { targetId: ev.id, value: v } })]).catch(() => {});
-        } }, String(v));
-        wrap.append(b);
-      }
-      parts.push(wrap);
-    }
-
-    // Manual grading buttons
-    if (pending) {
-      const preview = previewRatings(cur.unit.state, Date.now(), store.paramsFor(cur.deck));
-      parts.push(h('div', { class: 'stack', style: { gap: '6px' } }, h('div', { class: 'faint small' }, cur.ink ? 'Compare with the answer. Choose Again if it was wrong, otherwise how easily you knew it.' : 'How well did you know it?'), h('div', { class: 'row tight' }, [1, 2, 3, 4].map((r) => h('button', { class: ['btn', r === 3 && 'primary'], type: 'button', onpointerdown: (e) => e.preventDefault(), onclick: () => this.manualGrade(r) }, `${RATING_LABELS[r]} · ${formatInterval(preview[r].days)}`, h('kbd', {}, `⌥${r}`))))));
-    }
+    if (pending) parts.push(this.selfCheckPanel());
 
     // Worked solution
     if (cur.card.explanation) {
@@ -1000,13 +1117,62 @@ class StudyScreen {
       parts.push(sol);
     }
     const reinforce = !pending && !correct && !overridden && store.global.requireRetype !== false;
-    if (reinforce && cur.ink) parts.push(h('div', { class: 'faint small' }, 'Write the correct answer once. This is not counted as recall.'));
-    else if ((this.phase === 'retype' || reinforce) && !this.usingInk()) parts.push(h('div', { class: 'faint small' }, 'Type the correct answer once to reinforce it (this is not counted as recall).'));
-    replace(this.feedbackEl, h('section', { class: ['feedback', cur.ink && pending ? 'pending' : correct || overridden ? 'correct' : 'incorrect'], 'aria-label': 'Feedback' }, parts));
+    if (reinforce && cur.ink) parts.push(h('div', { class: 'faint small' }, 'Write the correct answer once. This helps you review it; it does not count as independent recall.'));
+    else if ((this.phase === 'retype' || reinforce) && !this.usingInk()) parts.push(h('div', { class: 'faint small' }, 'Type the correct answer once. This helps you review it; it does not count as independent recall.'));
+    replace(this.feedbackEl, h('section', { class: ['feedback', pending ? 'pending' : good ? 'correct' : o?.class === 'failed' ? 'incorrect' : 'neutral'], 'aria-label': 'Feedback' }, parts));
     resolveMedia(this.feedbackEl, mediaFetcher);
-    const why = ev?.grading && store.global.showWhy !== false && !pending && ev.grading.mode !== 'manual' ? ev.grading.explanation : '';
-    announce(`${verdict}. ${correct && !(cur.ink && pending) ? '' : `The answer is ${plainText(cur.content.answerDisplay)}.`} ${gradeName && !pending ? `Graded ${gradeName}.` : ''} ${why}`.trim(), { assertive: !correct });
+    const why = ev?.grading && store.global.showWhy !== false && !pending ? (cur.correctionExplanation || ev.grading.explanation) : '';
+    announce(`${verdict}. ${good && !pending ? '' : `The answer is ${plainText(cur.content.answerDisplay)}.`} ${gradeName && !pending ? `Graded ${gradeName}.` : ''} ${why}`.trim(), { assertive: !good });
     requestAnimationFrame(() => this.feedbackEl.scrollIntoView({ block: 'nearest', behavior: reducedMotion() ? 'auto' : 'smooth' }));
+  }
+
+  verdictText(pending, o) {
+    const cur = this.current;
+    if (pending) return cur.selfKind === 'effort' ? 'Correct' : 'Needs your check';
+    if (!o) return cur.match?.correct ? 'Correct' : 'Not quite';
+    if (o.provenance === 'user-correction') return o.independent ? 'Your answer was accepted' : 'Accepted, answered with help';
+    if (o.class === 'success') return o.provenance === 'self' ? 'Correct (you checked it)' : cur.match?.typoTolerated ? 'Correct — typo accepted' : 'Correct';
+    if (o.class === 'failed') return o.provenance === 'self' ? 'Not correct (you checked it)' : 'Not quite';
+    if ((o.class === 'dont-know' || o.class === 'revealed') && o.phase === 'new') return 'New card — study the answer';
+    return OUTCOME_LABELS[o.class] || 'Not quite';
+  }
+
+  /**
+   * Self-check after comparing: a simple first decision, effort only in
+   * manual mode, and no success choice when help was already used.
+   */
+  selfCheckPanel() {
+    const cur = this.current;
+    const choice = (label, desc, fn, key, primary = false) => {
+      const b = h('button', { class: ['btn', primary && 'primary'], type: 'button', title: desc, onclick: fn }, label, key ? h('kbd', {}, `⌥${key}`) : null);
+      b.addEventListener('pointerdown', (e) => e.preventDefault());
+      return b;
+    };
+    const buttons = [];
+    let note;
+    if (cur.selfKind === 'effort') {
+      note = 'How did it feel?';
+      buttons.push(choice('Took effort', 'I remembered it correctly, but it took effort. (Hard)', () => this.selfAssess('correct', 2), 2));
+      buttons.push(choice('Remembered', 'I remembered it. (Good)', () => this.selfAssess('correct', 3), 3, true));
+      if (!cur.match?.typoTolerated) buttons.push(choice('Easy', 'It came easily. (Easy)', () => this.selfAssess('correct', 4), 4));
+      buttons.push(choice('I guessed without remembering', 'I didn’t recall it; the answer was a guess. (Again)', () => this.selfAssess('guessed'), 1));
+    } else if (this.helped()) {
+      note = 'You used help on this card before answering, so it counts as practice with help.';
+      buttons.push(choice('Not correct', 'My answer was wrong or incomplete.', () => this.selfAssess('incorrect'), 1));
+      buttons.push(choice('Correct with help', 'My answer was right, with the help I used. (Again: independent recall is checked again.)', () => this.selfAssess('correct', 3), 3, true));
+    } else {
+      note = 'Compare your answer with the correct one.';
+      buttons.push(choice('Not correct', 'Wrong or only partly correct. I couldn’t recall it correctly on my own. (Again)', () => this.selfAssess('incorrect'), 1));
+      if (cur.grade.mode === 'manual') {
+        buttons.push(choice('Correct, took effort', 'I remembered it correctly, but it took effort. (Hard)', () => this.selfAssess('correct', 2), 2));
+        buttons.push(choice('Correct on my own', 'I remembered it. (Good)', () => this.selfAssess('correct', 3), 3, true));
+        buttons.push(choice('Correct and easy', 'It came easily. (Easy)', () => this.selfAssess('correct', 4), 4));
+      } else {
+        buttons.push(choice('Correct on my own', 'I recalled it correctly without help. (Good)', () => this.selfAssess('correct', 3), 3, true));
+      }
+      buttons.push(choice('I needed help or saw the answer', 'Counts as practice with help. (Again)', () => this.selfAssess('help')));
+    }
+    return h('div', { class: 'stack self-check', style: { gap: '6px' } }, h('div', { class: 'faint small' }, note), h('div', { class: 'row tight' }, buttons));
   }
 
   /** Brief horizontal shake of the answer field (skipped for reduced motion). */
@@ -1028,7 +1194,7 @@ class StudyScreen {
     if (p === 'question' && cur) {
       if (!cur.inkAnswer) left.push(act(this.inkMode ? 'Type' : 'Write', this.inkMode ? 'keyboard' : 'pen', () => this.toggleInk(), '⌥D'));
       if (cur.card.hint) left.push(act('Hint', 'hint', () => this.showHint(), '⌥H'));
-      left.push(act('Reveal', 'eye', () => this.revealAnswer(), '⌥R'));
+      left.push(act(cur.unit.state ? 'I don’t know' : 'Show answer', 'eye', () => this.revealAnswer(), '⌥R'));
       if (cur.card.explanation) left.push(act('Solution', 'book', () => this.toggleSolution(), '⌥W'));
       right.push(act('Skip', 'skip', () => this.skip(), '⌥S'));
       right.push(act('Edit', 'edit', () => this.edit(), '⌥E'));
@@ -1036,20 +1202,23 @@ class StudyScreen {
       if (this.undoStack.length) right.push(act('Undo', 'undo', () => this.undo(), '⌥Z'));
     }
     if ((p === 'feedback' || p === 'retype') && cur) {
-      const correct = cur.match?.correct || cur.override;
-      if (cur.ink) {
-        // Self-graded: the grade is already the learner's own judgement.
-        // A miss still offers the same retype bypass as a typed answer.
+      const o = cur.event?.outcome;
+      if (cur.ink || cur.selfKind) {
+        // Self-checked: the outcome is already the learner's own judgement.
         if (p === 'retype') left.push(act('Skip retyping', 'skip', () => this.bypassRetype(), '⌥B'));
-      } else if (!correct) {
-        const revealed = cur.trial?.assistance.revealed || cur.trial?.assistance.solutionViewed;
-        if (cur.trial?.responseText && !revealed) left.push(act('Correct & save alias', 'check', () => this.override('alias'), '⌥A', { kind: '' }));
-        if (!revealed) left.push(act('Mark correct', null, () => this.override('correct'), '⌥C'));
+      } else if (cur.override) {
+        if (cur.offerAlias) left.push(act('Also accept this answer next time', 'plus', () => this.acceptAlias(), '⌥A'));
+      } else if (!cur.match?.correct) {
+        const revealed = cur.dontKnow || cur.trial?.assistance.revealed || cur.trial?.assistance.solutionViewed;
+        if (cur.trial?.responseText?.trim() && !revealed) left.push(act('My answer is correct', 'check', () => this.override('correct'), '⌥C', { kind: '' }));
         if (p === 'retype') left.push(act('Skip retyping', 'skip', () => this.bypassRetype(), '⌥B'));
-      } else if (!cur.override && cur.event?.type) {
-        const g = cur.effectiveRating || cur.event.rating;
-        if (knewThatGrade(cur.event, this.gradingConfig) > g) left.push(act('I knew that', 'zap', () => this.override('knew'), '⌥K'));
-        if (g > 1) left.push(act('I guessed', null, () => this.override('guessed'), '⌥G'));
+      } else if (o?.independent && !cur.effectiveOutcome && cur.event?.type) {
+        const g = cur.event.rating;
+        if (cur.grade.mode !== 'manual') {
+          if (g !== 2) left.push(act('Took effort', null, () => this.override('effort', 2), null));
+          if (g !== 4 && !cur.match.typoTolerated) left.push(act('It was easy', 'zap', () => this.override('effort', 4), '⌥K'));
+        }
+        left.push(act('I guessed without remembering', null, () => this.override('guessed'), '⌥G'));
       }
       right.push(act('Undo', 'undo', () => this.undo(), '⌥Z'));
       right.push(act('Edit', 'edit', () => this.edit(), '⌥E'));
@@ -1165,54 +1334,78 @@ class StudyScreen {
 
   /* ======================================================= overrides */
 
-  async override(kind) {
+  /**
+   * Corrections of this review (one active correction each):
+   * 'correct' = "My answer is correct" (the evaluator was wrong; the help
+   * that really happened is kept), 'guessed' = "I guessed without
+   * remembering", 'effort' = Hard/Easy for an answer recalled on its own.
+   */
+  async override(kind, rating = null) {
     const cur = this.current;
-    if (cur?.ink) return;
-    if (!cur?.event || !['feedback', 'retype'].includes(this.phase)) return;
-    const correct = cur.match.correct || cur.override;
-    if ((kind === 'alias' || kind === 'correct') && correct) return;
-    if ((kind === 'knew' || kind === 'guessed') && !correct) return;
-    if ((kind === 'alias' || kind === 'correct') && (cur.trial.assistance.revealed || cur.trial.assistance.solutionViewed)) return;
-    if (kind === 'alias' && !cur.trial.responseText.trim()) return;
-    if (kind === 'knew' && knewThatGrade(cur.event, this.gradingConfig) <= (cur.effectiveRating || cur.event.rating)) return;
+    if (cur?.ink || cur?.selfKind) return;
+    if (!cur?.event || !['feedback', 'retype'].includes(this.phase) || cur.override || cur.effectiveOutcome) return;
+    const independent = !!cur.event.outcome?.independent;
+    if (kind === 'correct' && (cur.match.correct || cur.dontKnow || cur.trial.assistance.revealed || cur.trial.assistance.solutionViewed || !cur.trial.responseText.trim())) return;
+    if ((kind === 'guessed' || kind === 'effort') && !independent) return;
     try {
       const target = cur.event;
       const unitEvents = await store.eventsForUnit(cur.unit.id);
       const unit = app.cache.units.get(cur.unit.id);
-      let cardUpdate = null;
-      let alias = null;
-      if (kind === 'alias') {
-        alias = cur.trial.responseText.trim();
-        cardUpdate = this.cardWithAlias(app.cache.cards.get(cur.card.id), cur, alias);
-      }
       const baseline = await store.getBaseline(baselineKey(target.modality?.kind || 'unknown', target.taskType || 'recall'));
-      const plan = planOverride({ eventId: uuid(), now: Date.now(), deviceId: store.deviceId, seq: null, target, kind, unit, unitEvents, alias, studyDay: store.today(), gradingConfig: this.gradingConfig, baseline, deck: cur.deck });
-      // Remove the failure requeue; the rescued answer counts once.
+      const plan = planOverride({ eventId: uuid(), now: Date.now(), deviceId: store.deviceId, seq: null, target, kind: kind === 'effort' ? 'manual' : kind, manualRating: rating, unit, unitEvents, studyDay: store.today(), gradingConfig: this.gradingConfig, baseline, deck: cur.deck });
+      const accepted = kind === 'correct' && !!plan.event.outcome?.independent;
+      // An accepted answer counts once: its failure requeue goes.
       let session = this.session;
-      if (kind === 'alias' || kind === 'correct') {
-        const res = session.results[session.results.length - 1];
-        if (res?.eventId === target.id && res.requeuedAt != null && session.queue[res.requeuedAt] === cur.unit.id) {
-          const queue = session.queue.slice();
-          queue.splice(res.requeuedAt, 1);
-          session = { ...session, queue, results: [...session.results.slice(0, -1), { ...res, requeuedAt: null, correct: true, overridden: kind }] };
+      const res = session.results[session.results.length - 1];
+      if (res?.eventId === target.id) {
+        const queue = session.queue.slice();
+        let requeuedAt = res.requeuedAt;
+        if (accepted && requeuedAt != null && queue[requeuedAt] === cur.unit.id) {
+          queue.splice(requeuedAt, 1);
+          requeuedAt = null;
         }
+        session = { ...session, queue, results: [...session.results.slice(0, -1), { ...res, requeuedAt, correct: kind === 'correct' ? true : res.correct, independent: !!plan.event.outcome?.independent, cls: plan.event.outcome?.class || res.cls, overridden: kind }] };
       }
-      await store.commitCorrection(plan, { session, expectedHead: unit.headEventId, card: cardUpdate });
+      await store.commitCorrection(plan, { session, expectedHead: unit.headEventId });
       this.session = session;
       app.cache.units.set(unit.id, { ...unit, ...plan.unit });
-      if (cardUpdate) await app.cache.load();
       cur.unit = app.cache.units.get(unit.id);
       cur.effectiveRating = plan.event.newRating;
-      cur.overrideReasons = plan.event.reasons;
-      if (kind === 'alias' || kind === 'correct') cur.override = kind;
+      cur.effectiveOutcome = plan.event.outcome;
+      cur.correctionExplanation = plan.event.explanation;
+      if (kind === 'correct') {
+        cur.override = kind;
+        cur.offerAlias = ['back', 'front', 'cloze', 'mask'].includes(cur.content.answerSide);
+      }
       this.renderFeedback({});
       this.setPhase('feedback');
-      this.input.className = 'answer-input correct';
+      this.input.className = `answer-input ${kind === 'correct' ? 'correct' : ''}`;
       this.input.placeholder = 'Press Enter to continue';
       this.input.value = '';
       this.enterArmed = true;
-      toast(kind === 'alias' ? `Saved “${alias}” as an accepted answer` : kind === 'knew' ? 'Recorded as known (your override)' : kind === 'guessed' ? 'Recorded as a guess' : 'Marked correct', { timeout: 2500 });
+      toast({
+        correct: accepted ? 'Your original answer was accepted. This review was updated.' : 'Accepted. You used help, so it still counts as practice with help.',
+        guessed: 'Recorded as a guess: not counted as recall.',
+        effort: rating === 2 ? 'Updated: you remembered it, with effort (Hard).' : 'Updated: it came easily (Easy).',
+      }[kind], { timeout: 3000 });
       this.focusInput();
+    } catch (err) {
+      errorToast(err);
+    }
+  }
+
+  /** Add the typed answer to the card's accepted answers (future reviews only). */
+  async acceptAlias() {
+    const cur = this.current;
+    if (!cur?.offerAlias || !['feedback', 'retype'].includes(this.phase)) return;
+    const alias = cur.trial.responseText.trim();
+    if (!alias) return;
+    try {
+      await store.saveCard(this.cardWithAlias(app.cache.cards.get(cur.card.id), cur, alias), { sessionId: this.session.id });
+      await app.cache.load();
+      cur.offerAlias = false;
+      this.renderActions();
+      toast(`“${alias}” will be accepted next time. Past reviews are unchanged.`, { timeout: 3000 });
     } catch (err) {
       errorToast(err);
     }
@@ -1250,12 +1443,13 @@ class StudyScreen {
       if (!target) throw new Error('That review is no longer available');
       const unit = app.cache.units.get(entry.unitId) || (await store.get('units', entry.unitId));
       const plan = planUndo({ eventId: uuid(), now: Date.now(), deviceId: store.deviceId, seq: null, target, unit, unitEvents: events, studyDay: store.today() });
-      const restored = { ...entry.sessionBefore, status: 'active', warmupPending: false };
+      // The answer was seen: the card comes back as practice, never as an unseen test.
+      const restored = { ...entry.sessionBefore, status: 'active', warmupPending: false, exposed: { ...(entry.sessionBefore.exposed || {}), [entry.unitId]: Date.now() } };
       await store.commitCorrection(plan, { session: restored, expectedHead: unit.headEventId, removeCalibration: entry.calibrationKey ? { key: entry.calibrationKey, eventId: entry.eventId } : null });
       this.undoStack.pop();
       app.cache.units.set(unit.id, { ...unit, ...plan.unit });
       this.session = restored;
-      toast('Review undone — schedule restored', { timeout: 2500 });
+      toast('Review undone, schedule restored. You have seen the answer, so the retry is practice.', { timeout: 3500 });
       this.current = null;
       await this.next();
     } catch (err) {
@@ -1272,7 +1466,7 @@ class StudyScreen {
     this.hintEl.hidden = false;
     renderInto(this.hintEl, cur.card.hint, { media: mediaFetcher });
     store.addEvents([exposureEvent({ id: uuid(), type: 'hint', now: Date.now(), deviceId: store.deviceId, seq: null, unit: cur.unit, card: cur.card, sessionId: this.session.id, studyDay: store.today(), data: { presentationId: cur.eventId } })]).catch(() => {});
-    announce('Hint shown. A hint caps the grade for this card.');
+    announce('Hint shown. This card will count as practice with help.');
     this.focusInput();
   }
 
@@ -1297,7 +1491,7 @@ class StudyScreen {
       this.solutionEl.hidden = false;
       renderInto(this.solutionEl, cur.card.explanation, { media: mediaFetcher });
       store.addEvents([exposureEvent({ id: uuid(), type: 'reveal', now: Date.now(), deviceId: store.deviceId, seq: null, unit: cur.unit, card: cur.card, sessionId: this.session.id, studyDay: store.today(), data: { presentationId: cur.eventId, what: 'worked-solution' } })]).catch(() => {});
-      announce('Worked solution shown. This counts as revealing the answer.');
+      announce('Worked solution shown. This card will count as practice with help.');
     } else {
       const d = this.feedbackEl.querySelector('details.disclosure');
       if (d) d.open = !d.open;
@@ -1524,7 +1718,9 @@ class StudyScreen {
     this.renderProgress();
     const res = this.session.results || [];
     const first = res.filter((r) => r.firstAttempt);
-    const correctFirst = first.filter((r) => r.correct).length;
+    // Same rule as statistics: only answers recalled on their own count.
+    const correctFirst = first.filter((r) => r.independent ?? r.correct).length;
+    const withHelp = first.filter((r) => r.cls === 'assisted').length;
     const reviews = res.filter((r) => r.type === 'review').length;
     const practice = res.filter((r) => r.type === 'practice').length;
     const time = res.reduce((s, r) => s + (r.activeMs || 0), 0);
@@ -1535,10 +1731,11 @@ class StudyScreen {
       h('p', { class: 'muted' }, mode?.practice && !this.session.live ? 'This was practice: it is recorded for your statistics, and your long-term schedule is unchanged.' : 'Your schedule has been updated.'),
       h('div', { class: 'summary-grid' },
         h('div', { class: 'stat' }, h('div', { class: 'value' }, String(first.length)), h('div', { class: 'label' }, 'cards')),
-        h('div', { class: 'stat' }, h('div', { class: 'value' }, first.length ? `${Math.round((correctFirst / first.length) * 100)}%` : '—'), h('div', { class: 'label' }, 'first-try correct')),
+        h('div', { class: 'stat' }, h('div', { class: 'value' }, first.length ? `${Math.round((correctFirst / first.length) * 100)}%` : '—'), h('div', { class: 'label' }, 'recalled on your own')),
         h('div', { class: 'stat' }, h('div', { class: 'value' }, formatDuration(time).replace(/ \d+ s$/, '')), h('div', { class: 'label' }, 'active time'))),
       h('p', { class: 'faint small' }, [
         reviews ? pluralize(reviews, 'scheduling review') : null,
+        withHelp ? `${withHelp} answered with help` : null,
         practice ? pluralize(practice, 'practice retrieval') : null,
         (this.session.skipped || []).length ? `${this.session.skipped.length} skipped (not counted)` : null,
         (this.session.deferred || []).length ? `${this.session.deferred.length} related card${this.session.deferred.length === 1 ? '' : 's'} deferred to another day by sibling spacing` : null,
