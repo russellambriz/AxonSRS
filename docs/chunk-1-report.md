@@ -1,7 +1,7 @@
 # Chunk 1 report — trustworthy answers, learning evidence and grading
 
-Branch `claude/axonsrs-github-pages-setup-43lha6` (not merged to `main`, not
-deployed). Plan, audit and design: [`chunk-1-plan.md`](chunk-1-plan.md).
+Branch `claude/axonsrs-github-pages-setup-43lha6`, released as 1.0.9
+(`axon-v10`) on that branch and on `main`. Plan, audit and design: [`chunk-1-plan.md`](chunk-1-plan.md).
 
 ## 1. What changed and why
 
@@ -126,6 +126,10 @@ Final run on the last commit of this chunk:
 
 ## 9. Review location
 
-Commits on `claude/axonsrs-github-pages-setup-43lha6` after `83242d8`. No
-preview or production deployment was made; `main` (the live site) is
-unchanged.
+Commits on `claude/axonsrs-github-pages-setup-43lha6` after `83242d8`,
+released as 1.0.9 (`a633ed0`, also pushed to `main`). Correction: GitHub
+Pages publishes this branch (since 4 November 2026), so each Chunk 1 commit
+went live when it was pushed (each was tested first), not only at the
+release as this report first said. The live URL could not be opened from
+the build environment; the Pages builds were checked through the GitHub
+API.

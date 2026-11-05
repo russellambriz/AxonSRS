@@ -6,9 +6,9 @@ Working plan and handoff for the Chunk 1 prompt
 the first unchecked item under **Status**.
 
 **Branch:** `claude/axonsrs-github-pages-setup-43lha6`. Push there only.
-**Do not push to `main`**: `main` is the live GitHub Pages site. Do not bump
-the version or cache name (`tools/bump-version.mjs`) in this chunk; that
-happens at release time, on request.
+**GitHub Pages publishes this branch** (since 4 November 2026), so every
+push here goes live: push only tested work. `main` is updated only at a
+release, on request (`tools/bump-version.mjs`, then push to both).
 
 ## Status
 
@@ -56,7 +56,8 @@ Update this list in the same commit as the work.
       (Chunk 1 table T01–T45), `docs/chunk-1-report.md` (section 17
       handoff).
 
-Chunk 1 is complete on this branch. Not merged to `main`, not deployed.
+Chunk 1 is complete and released as 1.0.9 (`axon-v10`) on this branch, which
+Pages publishes, and on `main`.
 Remaining: a real-device pass on iPad with Apple Pencil (see the report).
 
 ### Merged since the plan was first written

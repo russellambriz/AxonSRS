@@ -958,23 +958,20 @@ explicit, reversible migration is offered.
 The repository root *is* the site; there is no build step. Pages publishes
 one branch. It does not follow the default branch on its own.
 
-The live site was still the 29 October 2026 release because **Settings →
-Pages → Build and deployment** is **Deploy from a branch**, and that branch
-is `main` / `(root)`. `main` is the 1.0.4 release (`axon-v5`). The default
-branch `claude/axonsrs-github-pages-setup-43lha6` has the merged work, and
-no Pages build has run for it. The last successful Pages deployment is
-Actions run 40807122488, branch `main`, 2026-10-29. Changing this source is
-a repository setting. A pull request cannot do it, and the token used here
-gets 403 from the Pages API.
+Since 4 November 2026 **Settings → Pages → Build and deployment** is
+**Deploy from a branch → `claude/axonsrs-github-pages-setup-43lha6` /
+`(root)`** (every Pages build since then names that branch). So every push
+to that branch goes live within about a minute; push only tested work, and
+bump the version (below) whenever shipped files change. `main` is kept at
+the same commit at each release (1.0.9, `axon-v10`, 5 November 2026).
 
-To publish the default branch:
+To change which branch is published (for example back to `main`):
 
 1. On GitHub: **Settings → Pages → Build and deployment → Source: Deploy
-   from a branch → Branch: `claude/axonsrs-github-pages-setup-43lha6` /
-   `(root)` → Save.**
+   from a branch → Branch: `<branch>` / `(root)` → Save.**
 2. Wait about a minute. The site is
-   <https://russellambriz.github.io/AxonSRS/>. `sw.js` should then say a
-   cache name newer than `axon-v5`.
+   <https://russellambriz.github.io/AxonSRS/>; `sw.js` shows the cache name
+   of the published version.
 
 `.nojekyll` makes Pages serve every file as-is. All URLs are relative
 (`./…`), including `manifest.json` (`start_url` and `scope` are `./`), icons,
