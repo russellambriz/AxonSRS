@@ -87,9 +87,9 @@ function mid(a, b) {
  */
 export const SMOOTHING_LEVELS = Object.freeze([
   { id: 'off', label: 'Off', follow: 1, pressure: 1 },
-  { id: 'low', label: 'Low', follow: 0.72, pressure: 0.68 },
-  { id: 'medium', label: 'Medium', follow: 0.48, pressure: 0.4 },
-  { id: 'high', label: 'High', follow: 0.3, pressure: 0.24 },
+  { id: 'low', label: 'Low', follow: 0.62, pressure: 0.55 },
+  { id: 'medium', label: 'Medium', follow: 0.34, pressure: 0.28 },
+  { id: 'high', label: 'High', follow: 0.2, pressure: 0.16 },
 ]);
 
 export function smoothingLevel(id) {
@@ -137,6 +137,75 @@ function halfWidth(w) {
   return Math.max(0.8, w / 2);
 }
 
+function unitTangent(dx, dy, fallback) {
+  const len = Math.hypot(dx, dy);
+  if (len < 1e-4) return fallback || { dx: 1, dy: 0 };
+  return { dx: dx / len, dy: dy / len };
+}
+
+/** Tangents that do not flip, then a short average so the edge does not sawtooth. */
+function smoothTangents(samples) {
+  const raw = [];
+  let prev = { dx: 1, dy: 0 };
+  for (let i = 0; i < samples.length; i++) {
+    const a = samples[Math.max(0, i - 1)];
+    const b = samples[Math.min(samples.length - 1, i + 1)];
+    let t = unitTangent(b.x - a.x, b.y - a.y, prev);
+    if (prev.dx * t.dx + prev.dy * t.dy < 0) t = { dx: -t.dx, dy: -t.dy };
+    raw.push(t);
+    prev = t;
+  }
+  return raw.map((t, i) => {
+    if (i === 0 || i === raw.length - 1) return t;
+    const p = raw[i - 1];
+    const n = raw[i + 1];
+    return unitTangent(p.dx * 0.25 + t.dx * 0.5 + n.dx * 0.25, p.dy * 0.25 + t.dy * 0.5 + n.dy * 0.25, t);
+  });
+}
+
+function relaxEdge(points) {
+  if (points.length < 4) return points;
+  return points.map((p, i) => {
+    if (i === 0 || i === points.length - 1) return p;
+    return {
+      x: p.x * 0.5 + (points[i - 1].x + points[i + 1].x) * 0.25,
+      y: p.y * 0.5 + (points[i - 1].y + points[i + 1].y) * 0.25,
+    };
+  });
+}
+
+/**
+ * Left and right edges of the ink. Normals stay continuous so a curve
+ * does not kink into a stair-step. Endpoints are kept for the round caps.
+ */
+export function ribbonEdges(samples) {
+  if (!samples || samples.length < 2) return null;
+  const tangents = smoothTangents(samples);
+  const left = [];
+  const right = [];
+  let prevN = null;
+  for (let i = 0; i < samples.length; i++) {
+    const t = tangents[i];
+    let nx = -t.dy;
+    let ny = t.dx;
+    if (prevN && prevN.x * nx + prevN.y * ny < 0) {
+      nx = -nx;
+      ny = -ny;
+    }
+    prevN = { x: nx, y: ny };
+    const hw = halfWidth(samples[i].w);
+    left.push({ x: samples[i].x + nx * hw, y: samples[i].y + ny * hw });
+    right.push({ x: samples[i].x - nx * hw, y: samples[i].y - ny * hw });
+  }
+  return {
+    left: relaxEdge(left),
+    right: relaxEdge(right),
+    tangents,
+    start: samples[0],
+    end: samples[samples.length - 1],
+  };
+}
+
 /** Semicircle from the left edge, through `dir`, to the right edge. */
 function outwardCap(cx, cy, dirX, dirY, hw) {
   const len = Math.hypot(dirX, dirY) || 1;
@@ -161,38 +230,14 @@ function outwardCap(cx, cy, dirX, dirY, hw) {
  * Null when there is nothing to fill.
  */
 export function ribbonPolygon(samples) {
-  if (!samples || samples.length < 2) return null;
-  const left = [];
-  const right = [];
-  const tangents = [];
-  for (let i = 0; i < samples.length; i++) {
-    const prev = samples[Math.max(0, i - 1)];
-    const next = samples[Math.min(samples.length - 1, i + 1)];
-    let dx = next.x - prev.x;
-    let dy = next.y - prev.y;
-    const len = Math.hypot(dx, dy);
-    if (len < 0.001) {
-      const prevT = tangents[tangents.length - 1] || { dx: 1, dy: 0 };
-      dx = prevT.dx;
-      dy = prevT.dy;
-    } else {
-      dx /= len;
-      dy /= len;
-    }
-    tangents.push({ dx, dy });
-    const hw = halfWidth(samples[i].w);
-    left.push({ x: samples[i].x - dy * hw, y: samples[i].y + dx * hw });
-    right.push({ x: samples[i].x + dy * hw, y: samples[i].y - dx * hw });
-  }
-  if (left.length < 2) return null;
-  const start = samples[0];
-  const end = samples[samples.length - 1];
-  const startT = tangents[0];
+  const edges = ribbonEdges(samples);
+  if (!edges || edges.left.length < 2) return null;
+  const { left, right, tangents, start, end } = edges;
   const endT = tangents[tangents.length - 1];
-  right.reverse();
+  const startT = tangents[0];
   return left.concat(
     outwardCap(end.x, end.y, endT.dx, endT.dy, halfWidth(end.w)),
-    right,
+    right.slice().reverse(),
     outwardCap(start.x, start.y, -startT.dx, -startT.dy, halfWidth(start.w)),
   );
 }
@@ -261,13 +306,21 @@ export function segmentSamples(seg) {
   if (!seg) return [];
   if (seg.type === 'dot') return [{ x: seg.x, y: seg.y, w: seg.w }];
   if (seg.type === 'line') {
-    return [
-      { x: seg.x0, y: seg.y0, w: seg.w0 },
-      { x: seg.x1, y: seg.y1, w: seg.w1 },
-    ];
+    const dist = Math.hypot(seg.x1 - seg.x0, seg.y1 - seg.y0);
+    const steps = Math.max(1, Math.min(64, Math.ceil(dist / 0.8)));
+    const out = [];
+    for (let s = 0; s <= steps; s++) {
+      const t = s / steps;
+      out.push({
+        x: seg.x0 + (seg.x1 - seg.x0) * t,
+        y: seg.y0 + (seg.y1 - seg.y0) * t,
+        w: seg.w0 + (seg.w1 - seg.w0) * t,
+      });
+    }
+    return out;
   }
   const dist = Math.hypot(seg.x1 - seg.x0, seg.y1 - seg.y0) + Math.hypot(seg.cx - seg.x0, seg.cy - seg.y0);
-  const steps = Math.max(2, Math.min(48, Math.ceil(dist / 1.5)));
+  const steps = Math.max(4, Math.min(64, Math.ceil(dist / 0.8)));
   const out = [];
   for (let s = 0; s <= steps; s++) {
     const t = s / steps;
@@ -289,7 +342,13 @@ export function segmentSamples(seg) {
 export function paintSamples(points, smoothing = 'medium') {
   const stable = stabilizeStroke(points, smoothing);
   const out = [];
-  for (const seg of smoothStroke(stable)) out.push(...segmentSamples(seg));
+  for (const seg of smoothStroke(stable)) {
+    for (const p of segmentSamples(seg)) {
+      const prev = out[out.length - 1];
+      if (prev && Math.hypot(prev.x - p.x, prev.y - p.y) < 0.05) continue;
+      out.push(p);
+    }
+  }
   return out;
 }
 

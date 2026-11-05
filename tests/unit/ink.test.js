@@ -1,7 +1,7 @@
 // Handwriting geometry: smoothing, pressure/tilt width, predicted samples, eraser hits.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { strokeWidth, pencilFlatness, smoothStroke, paintSamples, stabilizeStroke, ribbonPolygon, smoothingLevel, splitPointerSamples, strokeHits, eraseStrokes, ERASER_RADIUS, pointWidth, undoInkAction, redoInkAction } from '../../js/core/ink.js';
+import { strokeWidth, pencilFlatness, smoothStroke, paintSamples, stabilizeStroke, ribbonPolygon, ribbonEdges, smoothingLevel, splitPointerSamples, strokeHits, eraseStrokes, ERASER_RADIUS, pointWidth, undoInkAction, redoInkAction } from '../../js/core/ink.js';
 
 const pt = (x, y, p = 0.5, extra = {}) => ({ x, y, p, ...extra });
 
@@ -105,6 +105,34 @@ test('the stabilizer calms a jittery stroke without moving its ends or the saved
   assert.ok(ribbon.length >= 4);
   const widest = Math.max(...flat.map((s) => s.w));
   assert.ok(ribbon.every((p) => Math.abs(p.y) <= widest / 2 + 0.6));
+});
+
+test('a pencil curve is sampled finely and its edge does not kink', () => {
+  const raw = [];
+  for (let i = 0; i <= 12; i++) {
+    const a = (i / 12) * Math.PI;
+    raw.push(pt(Math.cos(a) * 70, Math.sin(a) * 70, i % 2 ? 0.85 : 0.35));
+  }
+  const samples = paintSamples(raw, 'medium');
+  let maxStep = 0;
+  for (let i = 1; i < samples.length; i++) {
+    maxStep = Math.max(maxStep, Math.hypot(samples[i].x - samples[i - 1].x, samples[i].y - samples[i - 1].y));
+  }
+  assert.ok(maxStep <= 1.7, `sample step ${maxStep.toFixed(2)}px is coarse enough to look faceted`);
+  const edges = ribbonEdges(samples);
+  let maxTurn = 0;
+  for (let i = 2; i < edges.left.length; i++) {
+    const ax = edges.left[i - 1].x - edges.left[i - 2].x;
+    const ay = edges.left[i - 1].y - edges.left[i - 2].y;
+    const bx = edges.left[i].x - edges.left[i - 1].x;
+    const by = edges.left[i].y - edges.left[i - 1].y;
+    const la = Math.hypot(ax, ay) || 1;
+    const lb = Math.hypot(bx, by) || 1;
+    const dot = Math.min(1, Math.max(-1, (ax / la) * (bx / lb) + (ay / la) * (by / lb)));
+    maxTurn = Math.max(maxTurn, Math.acos(dot));
+  }
+  assert.ok(maxTurn < Math.PI / 3, `edge kink of ${maxTurn.toFixed(2)} rad`);
+  assert.notEqual(JSON.stringify(raw[3]), JSON.stringify(stabilizeStroke(raw, 'medium')[3] || raw[3]));
 });
 
 test('predicted samples are a tail and coalesced movement is kept', () => {
