@@ -435,6 +435,7 @@ class StudyScreen {
     this.renderConfidence();
     this.input.value = '';
     this.ink.clear();
+    this.ink.setGhost(null);
     this.ink.setHint('Write your answer, then check it');
     this.input.className = 'answer-input';
     this.current.inkAnswer = isInkSide((content.answerGroups || []).flat());
@@ -993,7 +994,10 @@ class StudyScreen {
       this.setPhase('retype');
       if (cur.ink) {
         this.ink.clear();
-        this.ink.setHint('Write the correct answer once');
+        this.ink.setGhost(null);
+        const traceId = cur.inkAnswer ? inkMediaId(cur.content) : null;
+        this.ink.setHint(traceId ? 'Trace the correct answer once' : 'Write the correct answer once');
+        if (traceId) void this.loadInkTrace(traceId);
         requestAnimationFrame(() => this.ink.resize());
       } else {
         this.input.value = '';
@@ -1300,6 +1304,16 @@ class StudyScreen {
     this.advance();
   }
 
+  /** Faint correct handwriting to trace. The paper in the saved PNG is dropped so only the ink shows. */
+  async loadInkTrace(id) {
+    const blob = await mediaFetcher(id);
+    if (!blob || this.phase !== 'retype') return;
+    const img = await traceImage(blob);
+    if (this.phase !== 'retype') return;
+    this.ink.setGhost(img);
+    announce('The correct handwriting is faintly on the page. Trace it once. This is not another review.');
+  }
+
   /** The pad is not recognised, so Done records the copy and moves on. It is never a second review. */
   finishInkCopy() {
     if (this.phase !== 'retype' || !this.current?.ink) return;
@@ -1309,6 +1323,7 @@ class StudyScreen {
     }
     this.recordCopy(false, '');
     this.ink.clear();
+    this.ink.setGhost(null);
     this.ink.setHint('Write your answer, then check it');
     this.enterArmed = false;
     this.setPhase('feedback');
@@ -1319,6 +1334,7 @@ class StudyScreen {
     if (this.phase !== 'retype') return;
     this.recordCopy(true, '');
     this.ink.clear();
+    this.ink.setGhost(null);
     this.ink.setHint('Write your answer, then check it');
     this.setPhase('feedback');
     this.input.className = 'answer-input incorrect';
@@ -1749,4 +1765,42 @@ class StudyScreen {
 
 function speechRecognitionCtor() {
   return globalThis.SpeechRecognition || globalThis.webkitSpeechRecognition || null;
+}
+
+function inkMediaId(content) {
+  const text = (content?.answerGroups || []).flat().join('\n');
+  return /axon-media:([^)\s]+)/.exec(text)?.[1] || null;
+}
+
+/** Paper-backed handwriting PNG → graphite with a transparent page, so the pad shows only the trace. */
+function traceImage(blob) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(blob);
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = img.naturalWidth || img.width;
+      c.height = img.naturalHeight || img.height;
+      const g = c.getContext('2d');
+      g.drawImage(img, 0, 0);
+      const frame = g.getImageData(0, 0, c.width, c.height);
+      const d = frame.data;
+      for (let i = 0; i < d.length; i += 4) {
+        const lum = (d[i] + d[i + 1] + d[i + 2]) / 3;
+        const ink = Math.max(0, Math.min(1, (236 - lum) / 150));
+        d[i] = 28;
+        d[i + 1] = 25;
+        d[i + 2] = 23;
+        d[i + 3] = Math.round(ink * 210);
+      }
+      g.putImageData(frame, 0, 0);
+      URL.revokeObjectURL(url);
+      resolve(c);
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error('trace'));
+    };
+    img.src = url;
+  });
 }

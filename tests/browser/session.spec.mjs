@@ -484,4 +484,61 @@ export const tests = [
       await ctx.close();
     },
   },
+  {
+    name: 'a missed ink card traces the correct handwriting on the pad, and that trace is not a second review',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser, { viewport: { width: 820, height: 1180 }, hasTouch: true });
+      const page = await openApp(ctx, url);
+      await inApp(page, async ({ store, app, model }) => {
+        const c = document.createElement('canvas');
+        c.width = 120;
+        c.height = 48;
+        const g = c.getContext('2d');
+        g.fillStyle = '#f6f3ee';
+        g.fillRect(0, 0, 120, 48);
+        g.strokeStyle = '#1c1917';
+        g.lineWidth = 6;
+        g.lineCap = 'round';
+        g.beginPath();
+        g.moveTo(12, 34);
+        g.quadraticCurveTo(60, 4, 108, 34);
+        g.stroke();
+        const blob = await new Promise((resolve) => c.toBlob(resolve, 'image/png'));
+        const id = await store.putMedia(blob, { name: 'handwritten-answer.png' });
+        const deck = await store.createDeck({ name: 'Ink recall' });
+        await store.saveCard(model.createCard({
+          deckId: deck.id,
+          front: 'Name this curve',
+          back: `![Handwritten answer](axon-media:${id})`,
+          media: [id],
+        }, store.deviceId));
+        await app.cache.load();
+      });
+      await startReview(page);
+      await page.locator('.ink-canvas').waitFor();
+      await stroke(page);
+      await page.getByRole('button', { name: 'Check your handwritten answer' }).click();
+      await waitPhase(page, ['grading']);
+      await page.getByRole('button', { name: /^Not correct/ }).click();
+      assert.equal(await waitPhase(page, ['retype']), 'retype');
+      await page.getByText('Trace the correct answer once').first().waitFor();
+      await page.waitForFunction(() => {
+        const c = document.querySelector('.ink-canvas');
+        if (!c?.width) return false;
+        const data = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+        let m = 0;
+        for (let i = 3; i < data.length; i += 8) if (data[i] > m) m = data[i];
+        return m > 24 && c.dataset.strokes === '0';
+      });
+      await stroke(page, { id: 8, dy: 20 });
+      await page.getByRole('button', { name: 'Done' }).click();
+      assert.equal(await waitPhase(page, ['question', 'done']), 'question', 'a miss comes back later; the trace was not a second review');
+      const events = await idbAll(page, 'events');
+      assert.equal(events.filter((e) => e.type === 'review').length, 1);
+      assert.equal(events.filter((e) => e.type === 'copy' && !e.bypassed).length, 1);
+      assert.equal(events.find((e) => e.type === 'review').response.method, 'self');
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
 ];

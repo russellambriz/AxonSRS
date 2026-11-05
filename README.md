@@ -279,7 +279,9 @@ import leaves no partial cards and appears on the Recovery screen.
     the right; portrait and phones keep the stacked layout. Latency runs to
     the first stroke. These answers are self-judged, so they never calibrate
     timing and are left out of research comparisons. A wrong one asks you to
-    **write the correct answer once** (or **Skip retyping**); that is the
+    **write the correct answer once** (or **Skip retyping**). When the answer
+    itself is handwriting, that writing appears faintly on the pad so you
+    can trace it. That is the
     same copy event as retyping, never a second review, and it follows
     Settings → Study → Retype after a mistake. The review ink is shown only
     during feedback and is not saved or synced. **Type** switches back; the
@@ -868,7 +870,7 @@ Day-to-day reviews write one event each.
 
 ```bash
 npm test               # 237 unit tests (node --test), ~5 s
-npm run test:browser   # 55 browser tests (Playwright + Chromium)
+npm run test:browser   # 56 browser tests (Playwright + Chromium)
 npm run check          # pre-cache list is current + unit tests
 ```
 
@@ -927,7 +929,7 @@ installation prompts, speech recognition and system TTS voices are
 
 | Component | Version | Notes |
 | --- | --- | --- |
-| App | 1.0.13 | cache `axon-v14` |
+| App | 1.0.14 | cache `axon-v15` |
 | Scheduler | ts-fsrs 5.4.2 (FSRS-6, default parameters) + `axon-fuzz@1` | reference-checked against py-fsrs 6.3.2 |
 | Grading rules | `axon-fluency@1.1.0` | thresholds above; recorded on every review |
 | Reading/warm-up heuristic | `axon-reading@2` | can be disabled |
