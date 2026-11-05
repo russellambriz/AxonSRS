@@ -6,6 +6,7 @@ import {
   answerClass, correctionIndex, dailyActivity, currentStreak, longestStreak, accuracySeries,
   summary, eventualSuccess, retentionCalibration, forecast, exposureBreakdown, unitHistory, heatmapLevels, isLeech,
   outcome, effectiveRetrievals, retractActivity, latencySeries, selfRatingAnalysis, recentWeeks, deckTrends,
+  assessmentBreakdown, confidenceAnalysis,
 } from '../../js/core/stats.js';
 import {
   durationModel, estimateSessionMinutes, catchUpPlan, analyzeExamPlan, PROVISIONAL_SECONDS, MIN_SAMPLES_FOR_ESTIMATE,
@@ -231,7 +232,8 @@ test('a rescued answer counts as correct in every accuracy figure; a guess, a hi
     corrOf('c1', rescued.id, 'override', 'alias', T0 + DAY), corrOf('c2', guessed.id, 'override', 'guessed', T0 + DAY),
     corrOf('c3', revealed.id, 'override', 'correct', T0 + DAY), corrOf('c4', hinted.id, 'override', 'alias', T0 + DAY)];
   const corr = correctionIndex(events);
-  assert.deepEqual(outcome(rescued, corr), { cls: 'overridden', correct: true, independent: true, rescued: true });
+  const o = outcome(rescued, corr);
+  assert.deepEqual([o.cls, o.correct, o.independent, o.rescued, o.legacy], ['overridden', true, true, true, true]);
   assert.equal(outcome(guessed, corr).independent, false, '“I guessed” is not recall');
   assert.equal(outcome(revealed, corr).correct, false, 'a revealed answer marked correct is still not recalled');
   assert.deepEqual([outcome(hinted, corr).correct, outcome(hinted, corr).independent], [true, false]);
@@ -614,4 +616,49 @@ test('a wall-clock jump during a presentation is flagged without affecting durat
   const m = r.finish('a');
   assert.equal(m.totalMs, 1500);
   assert.equal(m.clockAnomaly, 'backward');
+});
+
+const out = (cls, extra = {}) => ({ v: 'axon-outcomes@2', class: cls, independent: cls === 'success', provenance: 'evaluator', phase: 'review', confidence: null, ...extra });
+
+test('T42/T43 the recall figure keeps help, reveals and guesses in its denominator; new cards and delayed reviews are reported apart', () => {
+  const evs = [
+    ev({ unitId: 'a1', outcome: out('success') }),
+    ev({ unitId: 'a2', outcome: out('assisted'), assistance: { hintShown: true } }),
+    ev({ unitId: 'a3', outcome: out('dont-know'), response: { correct: false }, assistance: { revealed: true } }),
+    ev({ unitId: 'a4', outcome: out('guessed', { confidence: 'guessing' }) }),
+    ev({ unitId: 'a5', outcome: out('failed'), response: { correct: false } }),
+    ev({ unitId: 'a6', outcome: out('success', { phase: 'new' }), wasNew: true }),
+    ev({ unitId: 'a7', outcome: out('success', { provenance: 'self' }), response: { correct: true, method: 'self' } }),
+    ev({ unitId: 'a1', firstAttempt: false, outcome: out('success') }),
+    { id: 'sk', type: 'skip', ts: T0, unitId: 'a8', studyDay: '2026-01-05' },
+    { id: 'ab', type: 'abandon', ts: T0, unitId: 'a9', studyDay: '2026-01-05' },
+  ];
+  const a = assessmentBreakdown(evs);
+  assert.equal(a.opportunities, 7, 'first attempts only; skips and abandons are not assessments');
+  assert.deepEqual([a.independent, a.assisted, a.revealed, a.guessed, a.failed], [3, 1, 1, 1, 1]);
+  assert.equal(a.recall.p, 3 / 7, 'help, reveals and guesses stay in the denominator');
+  assert.equal(a.unaidedAccuracy.p, 3 / 4, 'the conditional figure excludes them, and is labelled so');
+  assert.deepEqual([a.newCards.n, a.newCards.independent, a.delayed.n], [1, 1, 6]);
+  assert.equal(a.selfChecked, 1);
+  assert.deepEqual([a.skipped, a.abandoned], [1, 1]);
+  assert.equal(summary(evs, [], { today: '2026-01-05', now: T0, params }).assessment.opportunities, 7);
+});
+
+test('T27/T31 statistics follow corrections; legacy post-feedback ratings stay apart from pre-feedback confidence', () => {
+  const failed = ev({ unitId: 'b1', outcome: out('failed'), response: { correct: false } });
+  const hinted = ev({ unitId: 'b2', outcome: out('assisted'), response: { correct: false }, assistance: { hintShown: true } });
+  const sure = ev({ unitId: 'b3', outcome: out('success', { confidence: 'confident' }) });
+  const guess = ev({ unitId: 'b4', outcome: out('guessed', { confidence: 'guessing' }) });
+  const legacyRating = { id: 'sr', type: 'self-rating', targetId: sure.id, value: 5, ts: T0 + 5000, seq: 1 };
+  const events = [failed, hinted, sure, guess, legacyRating,
+    { id: 'k1', type: 'correction', kind: 'override', reason: 'correct', targetId: failed.id, newRating: 3, outcome: { class: 'success', independent: true, reason: 'CORRECTED', provenance: 'user-correction' }, ts: T0 + 9000, deviceId: 'dev', seq: 90 },
+    { id: 'k2', type: 'correction', kind: 'override', reason: 'correct', targetId: hinted.id, newRating: 1, outcome: { class: 'assisted', independent: false, reason: 'CORRECTED', provenance: 'user-correction' }, ts: T0 + 9000, deviceId: 'dev', seq: 91 }];
+  const corr = correctionIndex(events);
+  assert.equal(outcome(failed, corr).independent, true, 'an evaluator error, once corrected, counts as recalled');
+  assert.deepEqual([outcome(hinted, corr).correct, outcome(hinted, corr).independent], [true, false], 'correct, but still with help');
+  const c = confidenceAnalysis(events, corr);
+  assert.equal(c.levels.confident.n, 1);
+  assert.equal(c.levels.guessing.independent, 0, 'a guess is never recall');
+  assert.equal(c.unset, 2, 'no confidence given stays unknown');
+  assert.equal(selfRatingAnalysis(events, { corr }).n, 1, 'the older 1–5 rating is reported separately, as before');
 });

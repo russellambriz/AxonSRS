@@ -6,7 +6,7 @@ import { app } from '../../app.js';
 import { store } from '../../data/store.js';
 import { page, button, kpi, plainFront, leechActions } from './common.js';
 import { lineChart, barChart, calibrationChart, chartWithTable, dataTable, menu, toast, callout, errorToast } from '../components.js';
-import { summary, accuracySeries, dailyActivity, currentStreak, longestStreak, heatmapLevels, retentionCalibration, forecast, strongestWeakest, deckTrends, recentWeeks, exposureBreakdown, correctionIndex, answerClass, isLeech, latencySeries, selfRatingAnalysis } from '../../core/stats.js';
+import { summary, accuracySeries, dailyActivity, currentStreak, longestStreak, heatmapLevels, retentionCalibration, forecast, strongestWeakest, deckTrends, recentWeeks, exposureBreakdown, correctionIndex, answerClass, isLeech, latencySeries, selfRatingAnalysis, confidenceAnalysis } from '../../core/stats.js';
 import { comparisonReport, deidentifiedRows, toCsv } from '../../core/research.js';
 import { baselineStats, calibrationLevel, MODALITY_LABELS } from '../../core/fluency.js';
 import { formatDuration, formatInterval, pluralize } from '../../core/util.js';
@@ -46,9 +46,9 @@ export async function view(outlet) {
   // Observed vs predicted
   blocks.push(h('div', { class: 'grid-2' },
     h('section', { class: 'panel stack' }, h('h3', {}, 'Observed recall'),
-      h('div', { class: 'stat' }, h('div', { class: 'value' }, Number.isFinite(sum.firstAttemptAccuracy.p) ? percent(sum.firstAttemptAccuracy.p) : '—'), h('div', { class: 'label' }, 'First-attempt accuracy on scheduled reviews, independent answers only'), Number.isFinite(sum.firstAttemptAccuracy.p) ? h('div', { class: 'note' }, `95% interval ${percent(sum.firstAttemptAccuracy.low)}–${percent(sum.firstAttemptAccuracy.high)} · n = ${sum.firstAttemptAccuracy.n}`) : null),
-      h('div', { class: 'faint small' }, `Within sessions: ${percent(sum.eventualSuccess.firstAttempt)} correct on the first try, ${percent(sum.eventualSuccess.eventual)} eventually (after retries).`),
-      h('div', { class: 'faint tiny' }, 'Answers you rescued (accepted alias or Mark correct) count as correct everywhere; undone reviews count nowhere.')),
+      ...observedRecall(sum),
+      h('div', { class: 'faint small' }, `Within sessions: ${percent(sum.eventualSuccess.firstAttempt)} correct on the first try, ${percent(sum.eventualSuccess.eventual)} eventually (after retries). Getting a card right later in a session is not the same as recalling it on the first try.`),
+      h('div', { class: 'faint tiny' }, 'Answers accepted with “My answer is correct” count as correct; help that was used still counts as help. Undone reviews count nowhere.')),
     h('section', { class: 'panel stack' }, h('h3', {}, 'Predicted recall'),
       h('div', { class: 'stat' }, h('div', { class: 'value' }, sum.predictedRecall != null ? percent(sum.predictedRecall) : '—'), h('div', { class: 'label' }, `FSRS estimate of retrievability right now, averaged over ${sum.predictedRecallUnits} learned units`), h('div', { class: 'note' }, 'A model estimate, not an observation.')),
       sum.practicedUnits ? h('div', { class: 'faint small' }, `${sum.practicedUnits} of these units had optional practice since their last scheduled review. Practice is not fed into the memory model by default, so the estimate may be incomplete for them (it may under-count recent exposure).`) : null)));
@@ -160,11 +160,19 @@ export async function view(outlet) {
       h('p', { class: 'faint tiny' }, 'Independent first-attempt accuracy of scheduled reviews, by week (columns start on Monday); n = reviews. Weeks with few reviews are noisy.')));
   }
 
-  // Confidence self-ratings
+  // Confidence before checking (pre-feedback)
+  const ca = confidenceAnalysis(events, corr);
+  if (ca.n) {
+    blocks.push(h('section', { class: 'panel stack' }, h('h3', {}, 'Confidence before checking'),
+      dataTable(['You said', 'Answers', 'Literally correct', 'Recalled on your own'], [['guessing', 'Guessing'], ['unsure', 'Unsure'], ['confident', 'Confident']].filter(([k]) => ca.levels[k].n).map(([k, label]) => [label, String(ca.levels[k].n), percent(ca.levels[k].literalRate.p), percent(ca.levels[k].independentRate.p)]), { caption: 'Outcome by the confidence you gave before seeing the answer' }),
+      h('p', { class: 'faint tiny' }, `${pluralize(ca.unset, 'answer')} had no confidence set (unknown, not “confident”). A guess is never counted as recall, even when it matches.`)));
+  }
+
+  // Confidence self-ratings (older versions asked after feedback)
   const sr = selfRatingAnalysis(events, { corr });
   if (sr.n) {
     const avg = (v, digits = 1) => (v != null ? v.toFixed(digits) : '—');
-    blocks.push(h('section', { class: 'panel stack' }, h('h3', {}, 'Confidence self-ratings'),
+    blocks.push(h('section', { class: 'panel stack' }, h('h3', {}, 'Confidence after feedback (older versions)'),
       h('p', { class: 'faint small' }, [`${pluralize(sr.n, 'answer')} rated.`, sr.meanRatingCorrect != null ? `Mean rating ${avg(sr.meanRatingCorrect)} when the answer was correct.` : null, sr.meanRatingIncorrect != null ? `Mean rating ${avg(sr.meanRatingIncorrect)} when it was not.` : null].filter(Boolean).join(' ')),
       h('div', { class: 'stack' },
         dataTable(['Your rating', 'Answers', 'Correct', '95% interval', 'Mean automatic grade', 'Mean heuristic grading confidence'], sr.levels.filter((l) => l.n).map((l) => [`${l.value} of 5`, String(l.n), percent(l.accuracy.p), `${percent(l.accuracy.low)}–${percent(l.accuracy.high)}`, l.meanGrade != null ? `${avg(l.meanGrade)} (${RATING_LABELS[Math.round(l.meanGrade)]})` : '—', l.meanConfidence != null ? percent(l.meanConfidence) : '—']), { caption: 'Correctness and automatic grade by confidence self-rating' }),
@@ -181,6 +189,7 @@ export async function view(outlet) {
   if (study) {
     const rep = comparisonReport(events, study);
     blocks.push(h('section', { class: 'panel stack' }, h('h3', {}, 'Research comparison'), callout('info', rep.caution),
+      rep.mixedPolicies ? callout('warning', `This study includes reviews graded under different policies (${Object.entries(rep.policies).map(([k, v]) => `${k}: ${v}`).join(', ')}). Grading changed during the study; start a new study for a clean comparison.`) : null,
       dataTable(['Arm', 'Delayed tests', 'Recall', '95% interval', 'Predicted', 'Median interval', 'Study time', 'Minutes per card', 'Seconds per review', 'Excluded (exposure)'], Object.entries(rep.arms).map(([arm, a]) => [arm === 'axon' ? 'Axon automatic grading' : 'Standard FSRS self-grading', String(a.delayedTests), percent(a.recall.p), `${percent(a.recall.low)}–${percent(a.recall.high)}`, a.meanPredictedRecall != null ? percent(a.meanPredictedRecall) : '—', Number.isFinite(a.medianElapsedDays) ? formatInterval(a.medianElapsedDays) : '—', `${Math.round(a.studyMinutes)} min`, a.minutesPerCard != null ? a.minutesPerCard.toFixed(1) : '—', a.medianSecondsPerReview != null ? a.medianSecondsPerReview.toFixed(1) : '—', String(a.excludedAffectedByExposure)])),
       rep.arms.standard.selfRatings ? h('p', { class: 'faint small' }, `Self-grades agreed with Axon’s automatic grade ${percent(rep.arms.standard.selfRatingAgreement)} of the time (${rep.arms.standard.selfRatings} self-graded reviews). Study time includes the time spent choosing a self-grade.`) : null,
       h('p', { class: 'faint tiny' }, `Study ${study.id.slice(0, 8)} · started ${study.startDay} · ${study.design} assignment by card · ${study.gradingVersion} · ${study.schedulerVersion}`)));
@@ -199,3 +208,16 @@ export async function view(outlet) {
 }
 
 export { formatDate };
+
+/** Observed recall with its denominator spelled out. */
+function observedRecall(sum) {
+  const a = sum.assessment;
+  const ci = a.recall;
+  const pct = (w) => (Number.isFinite(w.p) ? `${percent(w.p)} (n = ${w.n})` : '—');
+  return [
+    h('div', { class: 'stat' }, h('div', { class: 'value' }, Number.isFinite(ci.p) ? percent(ci.p) : '—'), h('div', { class: 'label' }, 'Recalled on your own, first attempt of each scheduled review'), Number.isFinite(ci.p) ? h('div', { class: 'note' }, `95% interval ${percent(ci.low)}–${percent(ci.high)} · n = ${ci.n}`) : null),
+    a.opportunities ? h('div', { class: 'faint small' }, `Of ${pluralize(a.opportunities, 'first attempt')}: ${a.independent} on your own, ${a.assisted} with help, ${a.revealed} answer shown or “I don’t know”, ${a.guessed} guessed, ${a.failed} not correct.${a.selfChecked ? ` ${a.selfChecked} were checked by you (handwriting or uncheckable answers), not by Axon.` : ''} Skipped ${a.skipped} and left unanswered ${a.abandoned} are not counted.`) : null,
+    a.opportunities ? h('div', { class: 'faint small' }, `Delayed reviews: ${pct(a.delayedRecall)}. New cards, first test: ${pct(a.newCardRecall)} (learning, not retention). Accuracy among attempts made without help: ${pct(a.unaidedAccuracy)} (conditional, not overall retention).`) : null,
+    a.legacy ? h('div', { class: 'faint tiny' }, `${a.legacy} older reviews were recorded before confidence and guesses were captured; for them those facts are unknown.`) : null,
+  ];
+}

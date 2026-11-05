@@ -40,9 +40,14 @@ Update this list in the same commit as the work.
       switch (`gradingPolicy`), hint-ceiling and "I guessed" settings
       removed, confidence setting reworded, grading-mode text, welcome text
       (home.js), shortcut labels, plain meanings on self-check buttons.
-- [ ] 6. Statistics consistency: shared outcome rule reads the new evidence;
-      unaided recall with an explicit denominator; new vs delayed; pre- vs
-      post-feedback confidence; session summary; research policy notice.
+- [x] 6. Statistics consistency: `outcome()` reads `event.outcome` and the
+      correction's outcome (legacy rule for older events);
+      `assessmentBreakdown()` (denominator keeps help, reveals, guesses;
+      skips/abandons apart; new cards vs delayed; conditional unaided
+      accuracy labelled); `confidenceAnalysis()` (pre-feedback) with the old
+      1–5 ratings shown as "after feedback (older versions)"; session
+      summary counts "recalled on your own" and "answered with help";
+      research report warns when a study mixes grading policies.
 - [ ] 7. Persistence checks: double submit, reload during commit, storage
       failure, backup round trip of the new fields, legacy events stay
       "unknown".

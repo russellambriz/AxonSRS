@@ -34,8 +34,11 @@ export function createStudy({ id, startDay, design = 'randomized', schedulerVers
 export function comparisonReport(events, study, { minElapsedDays = 1 } = {}) {
   const corr = correctionIndex(events);
   const arms = Object.fromEntries(ARMS.map((a) => [a, { n: 0, recalled: 0, elapsed: [], studyMs: 0, retrievals: 0, cards: new Set(), affected: 0, perReview: [], predicted: [], selfRated: 0, agree: 0 }]));
+  // Reviews per grading policy: a study that spans a policy change is not a clean comparison.
+  const policies = {};
   for (const e of events) {
     if (!e.research || e.research.studyId !== study.id) continue;
+    if (e.type === 'review' || e.type === 'practice') policies[e.grading?.policy || 'legacy-fluency'] = (policies[e.grading?.policy || 'legacy-fluency'] || 0) + 1;
     const arm = arms[e.research.arm];
     if (!arm) continue;
     if (answerClass(e, corr) === 'voided') continue;
@@ -86,6 +89,8 @@ export function comparisonReport(events, study, { minElapsedDays = 1 } = {}) {
   return {
     study: { id: study.id, design: study.design, startDay: study.startDay, schedulerVersion: study.schedulerVersion, gradingVersion: study.gradingVersion },
     arms: out,
+    policies,
+    mixedPolicies: Object.keys(policies).length > 1,
     caution: enough
       ? 'Differences are descriptive for one learner and do not establish that either method is superior.'
       : 'Too few delayed tests for a meaningful comparison (aim for at least 100 per arm). Results are descriptive only.',

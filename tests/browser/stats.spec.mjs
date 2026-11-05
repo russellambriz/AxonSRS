@@ -131,7 +131,7 @@ export const tests = [
       assert.ok(await trends.locator('tbody td', { hasText: /%/ }).count() >= 4, 'weeks with reviews show their accuracy');
       await page.getByRole('heading', { name: 'Retrieval latency over time' }).waitFor();
       await page.getByText('Average (mean) first-keystroke latency').waitFor();
-      const ratings = page.locator('section', { has: page.getByRole('heading', { name: 'Confidence self-ratings' }) });
+      const ratings = page.locator('section', { has: page.getByRole('heading', { name: 'Confidence after feedback (older versions)' }) });
       assert.match(await ratings.textContent(), /1 answer rated\. Mean rating 4\.0 when the answer was correct\./);
       assert.match(await ratings.locator('tbody tr').first().textContent(), /^4 of 51100%.*3\.0 \(Good\)/, 'the rescue is compared with its re-grade');
       await page.screenshot({ path: join(SHOTS, 'stats-history.png'), fullPage: true });

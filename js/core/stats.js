@@ -60,10 +60,91 @@ export function outcome(e, corr) {
   const c = corr?.get(e.id);
   if (c?.voided) return null;
   const a = e.assistance || {};
-  const reason = c?.overrides?.length ? c.overrides[c.overrides.length - 1].reason : null;
+  const last = c?.overrides?.length ? c.overrides[c.overrides.length - 1] : null;
+  const reason = last?.reason || null;
   const rescued = RESCUE_REASONS.has(reason);
   const correct = !(a.revealed || a.solutionViewed) && (rescued || !!e.response?.correct);
-  return { cls: answerClass(e, corr), correct, independent: correct && !a.hintShown && reason !== 'guessed', rescued };
+  // Reviews and corrections recorded under axon-outcomes@2 carry their own
+  // verdict; older ones keep the rule they were recorded under.
+  let independent;
+  if (last?.outcome) independent = !!last.outcome.independent;
+  else if (e.outcome && !last) independent = !!e.outcome.independent;
+  else independent = correct && !a.hintShown && reason !== 'guessed';
+  const cls = last?.outcome?.class || e.outcome?.class || null;
+  return {
+    cls: answerClass(e, corr),
+    outcomeClass: cls,
+    correct,
+    independent,
+    rescued,
+    selfChecked: e.outcome?.provenance === 'self' || e.response?.method === 'self',
+    phase: e.outcome?.phase || (e.wasNew ? 'new' : e.prevState ? null : 'new'),
+    legacy: !e.outcome,
+  };
+}
+
+/**
+ * Every completed first assessment of a scheduled review, with an explicit
+ * denominator: answers given with help, after a reveal or "I don't know",
+ * and genuine guesses stay in it as not recalled on your own, so hard
+ * items do not disappear from the figure. Skips and abandoned attempts
+ * are counted separately and never as a success or a failure. New cards
+ * (their first test) are reported apart from delayed reviews.
+ */
+export function assessmentBreakdown(events, corr = correctionIndex(events)) {
+  const first = effectiveRetrievals(events, corr).filter((e) => isScheduled(e) && e.firstAttempt);
+  const out = { opportunities: 0, independent: 0, assisted: 0, revealed: 0, guessed: 0, failed: 0, selfChecked: 0, legacy: 0, skipped: 0, abandoned: 0, delayed: { n: 0, independent: 0 }, newCards: { n: 0, independent: 0 } };
+  for (const e of first) {
+    const o = outcome(e, corr);
+    out.opportunities++;
+    if (o.legacy) out.legacy++;
+    if (o.selfChecked) out.selfChecked++;
+    const a = e.assistance || {};
+    if (o.independent) out.independent++;
+    else if (o.outcomeClass === 'revealed' || o.outcomeClass === 'dont-know' || (!o.outcomeClass && (a.revealed || a.solutionViewed))) out.revealed++;
+    else if (o.outcomeClass === 'assisted' || (!o.outcomeClass && a.hintShown)) out.assisted++;
+    else if (o.outcomeClass === 'guessed') out.guessed++;
+    else out.failed++;
+    const bucket = o.phase === 'new' ? out.newCards : out.delayed;
+    bucket.n++;
+    if (o.independent) bucket.independent++;
+  }
+  for (const e of events) {
+    if (e.type === 'skip') out.skipped++;
+    else if (e.type === 'abandon') out.abandoned++;
+  }
+  const unaided = out.opportunities - out.assisted - out.revealed - out.guessed;
+  out.recall = wilson(out.independent, out.opportunities);
+  out.delayedRecall = wilson(out.delayed.independent, out.delayed.n);
+  out.newCardRecall = wilson(out.newCards.independent, out.newCards.n);
+  // Conditional: accuracy among attempts made without help. Not retention.
+  out.unaidedAccuracy = wilson(out.independent, unaided);
+  out.helpRate = out.opportunities ? out.assisted / out.opportunities : null;
+  out.revealRate = out.opportunities ? out.revealed / out.opportunities : null;
+  return out;
+}
+
+/** Pre-feedback confidence (Guessing / Unsure / Confident) against what happened. */
+export function confidenceAnalysis(events, corr = correctionIndex(events)) {
+  const levels = Object.fromEntries(['guessing', 'unsure', 'confident'].map((k) => [k, { n: 0, literal: 0, independent: 0 }]));
+  let unset = 0;
+  for (const e of effectiveRetrievals(events, corr)) {
+    if (!e.outcome) continue;
+    const o = outcome(e, corr);
+    const k = e.outcome.confidence;
+    if (!levels[k]) {
+      unset++;
+      continue;
+    }
+    levels[k].n++;
+    if (o.correct) levels[k].literal++;
+    if (o.independent) levels[k].independent++;
+  }
+  for (const l of Object.values(levels)) {
+    l.literalRate = wilson(l.literal, l.n);
+    l.independentRate = wilson(l.independent, l.n);
+  }
+  return { levels, unset, n: Object.values(levels).reduce((s, l) => s + l.n, 0) };
 }
 
 /** Reviews and practice answers that still count (undone ones removed). */
@@ -209,6 +290,7 @@ export function summary(events, units, { today, now, params, corr = correctionIn
     meanAdjustedLatencyMs: mean(adjusted),
     medianHesitation: median(hesitation),
     firstAttemptAccuracy: wilson(independent, first.length),
+    assessment: assessmentBreakdown(events, corr),
     eventualSuccess: eventual,
     predictedRecall: rN ? rSum / rN : null,
     predictedRecallUnits: rN,
