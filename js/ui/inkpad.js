@@ -134,7 +134,9 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     const pt = {
       x: e.clientX - r.left,
       y: e.clientY - r.top,
-      p: e.pointerType === 'pen' ? (e.pressure || 0.5) : 0.5,
+      // A real 0 from the pencil is a light touch, not “missing”. Coercing it
+      // to 0.5 made every stroke start and end blunt.
+      p: e.pointerType === 'pen' ? (typeof e.pressure === 'number' ? e.pressure : 0.5) : 0.5,
       scale: pen.scale,
     };
     // tilt / altitude / azimuth / twist are optional. A mouse reports the
