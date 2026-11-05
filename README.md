@@ -327,6 +327,14 @@ import leaves no partial cards and appears on the Recovery screen.
 | **Catch-up** | A manageable slice of an overdue backlog (most overdue first, or the cards still most likely to be recalled first) | Yes |
 | **Exam practice** | Cards from an exam plan | No* |
 
+On the Study screen, **Reverse Recall** shows the back and asks for the
+front. **Normal** keeps the deck’s own direction (Front → Back, Back →
+Front, or Both). **Mixed** studies both directions in this session. None
+of these change the deck’s direction setting. A reverse card is the same
+Back → Front unit the deck already uses, with its own schedule. Typed
+answers are matched as usual. If the front is only handwriting, you write
+it in ink and grade it yourself.
+
 \* Practice is recorded as **exposure** (it counts for statistics and marks
 later tests as "affected by practice") but leaves the long-term schedule
 alone. Each practice mode has an explicit *Record as scheduling reviews*
@@ -787,8 +795,8 @@ Day-to-day reviews write one event each.
 ## Testing
 
 ```bash
-npm test               # 212 unit tests (node --test), ~4 s
-npm run test:browser   # 48 browser tests (Playwright + Chromium)
+npm test               # 213 unit tests (node --test), ~4 s
+npm run test:browser   # 49 browser tests (Playwright + Chromium)
 npm run check          # pre-cache list is current + unit tests
 ```
 
@@ -818,7 +826,9 @@ committed).
   IME composition; held Enter; toolbar insertion and calibration exclusion;
   one study tab at a time; image occlusion created and studied offline;
   leech actions; the import wizard; alias rescue and undo; cram; in-session
-  editing; plain and encrypted backup round trips through the UI; two-device
+  editing; plain and encrypted backup round trips through the UI; Reverse
+  Recall (back shown, front answered, ink self-graded, deck direction
+  unchanged); two-device
   sync through a mocked Gist API;   responsive layout at 1280, 834, 390 and
   320 px (light and dark) with checks for horizontal scroll, unnamed controls
   and touch-target size; handwriting smoothing, hover, palm rejection,
@@ -845,7 +855,7 @@ installation prompts, speech recognition and system TTS voices are
 
 | Component | Version | Notes |
 | --- | --- | --- |
-| App | 1.0.7 | cache `axon-v8` |
+| App | 1.0.8 | cache `axon-v9` |
 | Scheduler | ts-fsrs 5.4.2 (FSRS-6, default parameters) + `axon-fuzz@1` | reference-checked against py-fsrs 6.3.2 |
 | Grading rules | `axon-fluency@1.1.0` | thresholds above; recorded on every review |
 | Reading/warm-up heuristic | `axon-reading@2` | can be disabled |
@@ -907,7 +917,7 @@ service-worker registration and its cache list.
 Pages publishes):
 
 ```bash
-npm run release -- 1.0.7   # bumps CACHE_NAME (axon-vN → N+1) in sw.js and js/config.js,
+npm run release -- 1.0.8   # bumps CACHE_NAME (axon-vN → N+1) in sw.js and js/config.js,
                            # sets APP_VERSION, refreshes the pre-cache list
 npm run check              # pre-cache list current + unit tests
 ```

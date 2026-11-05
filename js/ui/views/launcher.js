@@ -16,7 +16,7 @@ export async function view(outlet, params, query) {
   const { root, body } = page({ title: 'Study', sub: 'Daily Review keeps your long-term schedule. Practice modes are extra and don’t change it unless you choose to record them.', actions: [button('Exam plans', { iconName: 'book', href: '#/plans' }), button('Vacation', { iconName: 'beach', onclick: () => postponeDialog() })] });
   outlet.append(root);
   const plans = await store.listPlans();
-  const st = { mode: query.mode && MODES[query.mode] ? query.mode : 'daily', deckIds: query.deck ? [query.deck] : [], tags: [], order: 'shuffled', includeNew: true, keepSiblingsTogether: false, limit: '', recordAsReviews: null, planId: plans[0]?.id || '', catchUpOrder: 'overdue', timer: false };
+  const st = { mode: query.mode && MODES[query.mode] ? query.mode : 'daily', deckIds: query.deck ? [query.deck] : [], tags: [], order: 'shuffled', includeNew: true, keepSiblingsTogether: false, limit: '', recordAsReviews: null, planId: plans[0]?.id || '', catchUpOrder: 'overdue', timer: false, recall: 'normal' };
   const sessionsHost = h('div');
   const modeHost = h('div', { class: 'mode-grid', role: 'group', 'aria-label': 'Study mode' });
   const optionsHost = h('section', { class: 'panel stack' });
@@ -41,6 +41,16 @@ export async function view(outlet, params, query) {
     const decks = [...app.cache.decks.values()].sort((a, b) => a.name.localeCompare(b.name)).map((d) => ({ value: d.id, label: d.name, color: d.color }));
     const tags = app.cache.allTags().slice(0, 60).map(([t, n]) => ({ value: t, label: `${t} · ${n}` }));
     const parts = [h('h3', {}, m.label)];
+    parts.push(settingRow({
+      title: 'Reverse Recall',
+      desc: 'See the answer, recall the prompt. This session only — the deck’s Front → Back, Back → Front or Both setting is not changed. Reverse cards keep their own schedule.',
+      control: segmented({
+        label: 'Reverse Recall',
+        options: [{ value: 'normal', label: 'Normal' }, { value: 'reverse', label: 'Reverse Recall' }, { value: 'mixed', label: 'Mixed' }],
+        value: st.recall,
+        onchange: (v) => { st.recall = v; },
+      }),
+    }));
     if (st.mode !== 'exam') {
       parts.push(h('div', { class: 'field' }, h('div', { class: 'label' }, 'Decks'), h('div', { class: 'hint' }, 'None selected = all decks.'), checklist({ items: decks, selected: st.deckIds, onchange: (v) => { st.deckIds = v; }, emptyText: 'Create a deck first.' })));
     }
@@ -79,7 +89,7 @@ export async function view(outlet, params, query) {
       const plan = plans.find((p) => p.id === st.planId);
       const s = await createSession({ ...st, limit: st.limit ? Number(st.limit) : null, plan, deckIds: st.mode === 'exam' ? plan?.deckIds : st.deckIds });
       if (!s.queue.length) {
-        const why = st.mode === 'daily' ? 'Nothing is due right now. Try Cram or Drill Weakest for extra practice.' : st.mode === 'speed' ? 'Speed Practice uses cards you have already learned (reviewed at least twice).' : 'No cards match this selection.';
+        const why = st.recall === 'reverse' ? 'No basic cards to reverse in this selection.' : st.mode === 'daily' ? 'Nothing is due right now. Try Cram or Drill Weakest for extra practice.' : st.mode === 'speed' ? 'Speed Practice uses cards you have already learned (reviewed at least twice).' : 'No cards match this selection.';
         toast(why, { timeout: 6000 });
         await store.saveSession({ ...s, status: 'completed' });
         return;

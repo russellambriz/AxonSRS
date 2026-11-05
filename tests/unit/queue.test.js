@@ -2,7 +2,7 @@
 // daily limits and catch-up sessions preserving real due dates; postpone.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { buildDailyQueue, buildCramQueue, buildDrillQueue, buildSpeedQueue, buildInterleaveQueue, spreadSiblings, siblingGroups, applySiblingSpacing, planPostpone, unitStatus, weaknessScore, requeuePosition, orderOcclusionMasks, siblingSafeIndex } from '../../js/core/queue.js';
+import { buildDailyQueue, buildCramQueue, buildDrillQueue, buildSpeedQueue, buildInterleaveQueue, spreadSiblings, siblingGroups, applySiblingSpacing, planPostpone, unitStatus, weaknessScore, requeuePosition, orderOcclusionMasks, siblingSafeIndex, unitsForRecall } from '../../js/core/queue.js';
 import { createCard, createDeck, unitKeys, unitId } from '../../js/core/model.js';
 import { State } from '../../js/core/scheduler.js';
 
@@ -45,6 +45,24 @@ test('status vocabulary keeps suspended, buried, deferred and postponed distinct
   assert.equal(unitStatus({ ...u, overlays: { postponedUntil: '2026-04-20' } }, c, ctx), 'postponed');
   assert.equal(unitStatus({ ...u, overlays: { postponedUntil: '2026-04-10' } }, c, ctx), 'due', 'postponement ends on its day');
   assert.equal(unitStatus({ ...u, state: { ...u.state, due: DAY_START - 1 } }, c, ctx), 'overdue');
+});
+
+test('Reverse Recall studies the reverse unit without turning a forward deck around', () => {
+  const w = world({ cards: 3, direction: 'forward' });
+  const direction = w.deck.settings.direction;
+  const rev = w.units.map((u) => ({ ...u, id: u.id.replace(':fwd', ':rev'), key: 'rev', active: false }));
+  w.units.push(...rev);
+  const base = { ...w, introducedToday: new Map(), reviewedToday: new Map() };
+  const normal = buildDailyQueue(base).queue;
+  assert.ok(normal.every((id) => id.endsWith(':fwd')));
+  assert.equal(normal.length, 3);
+  const reverse = buildDailyQueue({ ...base, recall: 'reverse' }).queue;
+  assert.deepEqual(reverse.map((id) => id.split(':')[1]), ['rev', 'rev', 'rev']);
+  const mixed = buildDailyQueue({ ...base, recall: 'mixed' }).queue;
+  assert.equal(mixed.length, 6);
+  assert.equal(w.deck.settings.direction, direction);
+  assert.ok(w.units.filter((u) => u.key === 'rev').every((u) => u.active === false));
+  assert.equal(unitsForRecall(w.units, 'normal').length, w.units.length);
 });
 
 test('sibling spacing: forward/reverse directions are never adjacent when avoidable', () => {

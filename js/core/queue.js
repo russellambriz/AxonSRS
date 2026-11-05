@@ -139,7 +139,8 @@ function interleaveNew(reviews, news, order) {
  *   retrievabilityOf: (unit) => number|null
  */
 export function buildDailyQueue(ctx) {
-  const { units, cardsById, decksById, now, today, dayStart, dayEnd } = ctx;
+  const { cardsById, decksById, now, today, dayStart, dayEnd } = ctx;
+  const units = unitsForRecall(ctx.units, ctx.recall);
   const deckFilter = ctx.deckIds ? new Set(ctx.deckIds) : null;
   const learning = [];
   const reviews = [];
@@ -303,9 +304,28 @@ function inScope(u, card, { deckIds, tags }) {
   return true;
 }
 
+/**
+ * Which units a session may study.
+ * `normal` is the deck's own direction (only active units).
+ * `reverse` is Back → Front only: the reverse unit, even when the deck
+ * setting leaves it inactive. `mixed` is both directions.
+ * Inactive units are copied as active for this queue only; the stored
+ * unit is not changed, so a forward deck's daily counts stay forward.
+ */
+export function unitsForRecall(units, recall = 'normal') {
+  if (!recall || recall === 'normal') return units;
+  const out = [];
+  for (const u of units) {
+    if (recall === 'reverse' && u.key !== 'rev') continue;
+    if ((recall === 'reverse' || recall === 'mixed') && (u.key === 'fwd' || u.key === 'rev') && !u.active) out.push({ ...u, active: true });
+    else out.push(u);
+  }
+  return out;
+}
+
 function activeUnits(ctx, scope) {
   const out = [];
-  for (const u of ctx.units) {
+  for (const u of unitsForRecall(ctx.units, ctx.recall)) {
     if (!u.active) continue;
     const card = ctx.cardsById.get(u.cardId);
     if (!card || card.suspended || u.suspended) continue;

@@ -250,7 +250,7 @@ study materials.
 | Inspect repo first; preserve existing code and data | ✅ (repository was empty) |
 | Complete README (setup, imports, scheduling, offline, deployment, backup, Gist sync) | ✅ `README.md` |
 | Explain grading methodology and limitations | ✅ README "How grading works" |
-| Run all automated tests | ✅ 212 unit + 48 browser tests pass (see README "Testing") |
+| Run all automated tests | ✅ 213 unit + 49 browser tests pass (see README "Testing") |
 | Verify it runs as a static GitHub Pages site | ✅ locally under `/AxonSRS/`. Live site still serves `main` (29 Oct 2026, `axon-v5`): Pages source is that branch, not the default branch. Retargeting it is a Settings change the Pages API refused (403) |
 | Commit and push to `main` | ✅ pushed (verified with `git push`) |
 | Report features, tests, deployment, limitations | ✅ README and delivery report |

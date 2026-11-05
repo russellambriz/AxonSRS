@@ -389,7 +389,12 @@ class StudyScreen {
       const unitId = s.queue[s.index];
       const unit = app.cache.units.get(unitId);
       const card = unit && app.cache.cards.get(unit.cardId);
-      if (unit && card && unit.active && !card.suspended && !unit.suspended) {
+      // A Reverse Recall session studies the reverse unit even when the
+      // deck's direction leaves that unit inactive. Inactive here means
+      // "not part of Normal", not "deleted".
+      const recall = s.config?.recall;
+      const askedFor = unit && ((recall === 'reverse' && unit.key === 'rev') || (recall === 'mixed' && (unit.key === 'fwd' || unit.key === 'rev')));
+      if (unit && card && (unit.active || askedFor) && !card.suspended && !unit.suspended) {
         await this.present(unit, card);
         return;
       }
@@ -455,8 +460,10 @@ class StudyScreen {
     this.promptEl.className = `prompt rich${long ? ' long' : short ? ' short' : ''}`;
     await renderInto(this.promptEl, content.prompt || (content.kind === 'occlusion' ? 'What is hidden here?' : ''), { media: mediaFetcher });
     this.instructionEl.textContent = this.current.inkAnswer
-      ? 'Write your answer in ink. You will compare it with the handwritten answer and grade it yourself.'
-      : (content.instruction || '');
+      ? (unit.key === 'rev'
+        ? 'The back is showing. Write the front in ink, then grade it yourself.'
+        : 'Write your answer in ink. You will compare it with the handwritten answer and grade it yourself.')
+      : (content.instruction || (unit.key === 'rev' ? 'See the answer, recall the prompt.' : ''));
     clear(this.occlusionEl);
     if (content.occlusion?.imageId) {
       const url = await mediaUrl(content.occlusion.imageId, mediaFetcher);
