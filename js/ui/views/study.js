@@ -995,10 +995,19 @@ class StudyScreen {
       if (cur.ink) {
         this.ink.clear();
         this.ink.setGhost(null);
+        // A model to trace: the card's own handwriting, or a short plain-text
+        // answer written out in the device's handwriting face.
         const traceId = cur.inkAnswer ? inkMediaId(cur.content) : null;
-        this.ink.setHint(traceId ? 'Trace the correct answer once' : 'Write the correct answer once');
+        const modelText = traceId ? null : traceableText(cur);
+        this.ink.setHint(traceId || modelText ? 'Trace the correct answer once' : 'Write the correct answer once');
         if (traceId) void this.loadInkTrace(traceId);
-        requestAnimationFrame(() => this.ink.resize());
+        requestAnimationFrame(() => {
+          this.ink.resize();
+          if (modelText && this.phase === 'retype' && this.current === cur) {
+            this.ink.setGhost(textTrace(modelText), { pixelRatio: window.devicePixelRatio || 1 });
+            announce('The correct answer is faintly on the page. Trace it once. This is not another review.');
+          }
+        });
       } else {
         this.input.value = '';
         this.input.className = 'answer-input incorrect retype';
@@ -1767,12 +1776,41 @@ function speechRecognitionCtor() {
   return globalThis.SpeechRecognition || globalThis.webkitSpeechRecognition || null;
 }
 
+/** Plain text worth tracing: a text-mode answer, short enough to write in one go. Maths and chemistry are typeset, not traced. */
+function traceableText(cur) {
+  if ((cur.settings?.answerMode || 'text') !== 'text' || cur.content?.kind === 'occlusion') return null;
+  const text = plainText((cur.content?.answerGroups || []).map((g) => g[0]).filter(Boolean).join('; ')).trim();
+  if (!text || text.length > 40 || /\n/.test(text)) return null;
+  return text;
+}
+
+/** The answer in the device's handwriting face, as an alpha mask for the write-on ghost (device pixels). */
+function textTrace(text) {
+  const ratio = window.devicePixelRatio || 1;
+  const size = 46;
+  const font = `${size}px Noteworthy, 'Bradley Hand', 'Segoe Print', 'Comic Sans MS', cursive`;
+  const c = document.createElement('canvas');
+  const probe = c.getContext('2d');
+  probe.font = font;
+  const w = Math.ceil(probe.measureText(text).width) + 24;
+  const hh = Math.ceil(size * 1.7);
+  c.width = Math.max(1, Math.round(w * ratio));
+  c.height = Math.max(1, Math.round(hh * ratio));
+  const g = c.getContext('2d');
+  g.scale(ratio, ratio);
+  g.font = font;
+  g.fillStyle = '#fff';
+  g.textBaseline = 'middle';
+  g.fillText(text, 12, hh / 2);
+  return c;
+}
+
 function inkMediaId(content) {
   const text = (content?.answerGroups || []).flat().join('\n');
   return /axon-media:([^)\s]+)/.exec(text)?.[1] || null;
 }
 
-/** Paper-backed handwriting PNG → graphite with a transparent page, so the pad shows only the trace. */
+/** Paper-backed handwriting PNG → an alpha mask of the ink. The pad tints it with the theme accent, so the trace reads in light and dark. */
 function traceImage(blob) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(blob);
@@ -1786,12 +1824,14 @@ function traceImage(blob) {
       const frame = g.getImageData(0, 0, c.width, c.height);
       const d = frame.data;
       for (let i = 0; i < d.length; i += 4) {
+        // Paper (light) → transparent, ink (dark, any pen colour) → opaque,
+        // with a smooth edge so the anti-aliasing of the original survives.
         const lum = (d[i] + d[i + 1] + d[i + 2]) / 3;
-        const ink = Math.max(0, Math.min(1, (236 - lum) / 150));
-        d[i] = 28;
-        d[i + 1] = 25;
-        d[i + 2] = 23;
-        d[i + 3] = Math.round(ink * 210);
+        const k = Math.max(0, Math.min(1, (236 - lum) / 150));
+        d[i] = 255;
+        d[i + 1] = 255;
+        d[i + 2] = 255;
+        d[i + 3] = Math.round(k * k * (3 - 2 * k) * 255);
       }
       g.putImageData(frame, 0, 0);
       URL.revokeObjectURL(url);
