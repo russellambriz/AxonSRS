@@ -1261,14 +1261,33 @@ body.studying, body.penciling { overflow: hidden; }
   width: 100%;
   height: 100%;
   border-radius: 16px;
-  border: 1.5px dashed var(--control-border);
   background: var(--surface);
-  color: var(--text);
+  /* Read by the pad as tokens: custom properties switch with the theme at
+     once, where a transitioning colour would lag a frame or two. */
+  --ink: var(--text);
+  --ink-ghost: var(--accent);
+  /* Multiplies the ghost's opacity: a faint accent needs a little more on a dark pad. */
+  --ink-ghost-strength: 1;
+  color: var(--ink);
   touch-action: none;
   -webkit-user-select: none;
   user-select: none;
   -webkit-touch-callout: none;
   cursor: crosshair;
+}
+:root[data-theme='dark'] .ink-canvas { --ink-ghost-strength: 1.4; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .ink-canvas { --ink-ghost-strength: 1.4; }
+}
+/* The dashed edge is drawn over the pad, not on the canvas: a border on the
+   canvas shifts the ink off the pencil tip and resamples the bitmap. */
+.ink-stage::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border: 1.5px dashed var(--control-border);
+  border-radius: 16px;
+  pointer-events: none;
 }
 .ink-overlay {
   position: absolute;
@@ -1660,7 +1679,8 @@ button.pencil-saved:disabled { color: var(--text-3); text-decoration: none; curs
 }
 .pencil-paper .ink-pad { position: absolute; inset: 0; }
 .pencil-paper .ink-stage { height: auto; flex: 1; min-height: 0; border-radius: 0; }
-.pencil-paper .ink-canvas { background: transparent; border: 0; border-radius: 0; }
+.pencil-paper .ink-canvas { background: transparent; border-radius: 0; }
+.pencil-paper .ink-stage::after { display: none; }
 .pencil-ghost {
   position: absolute;
   inset: 0;

@@ -14,14 +14,19 @@ const MIN_WIDTH = 1.8;
 /** Added across pressure 0→1. A shaped half-pressure stroke lands near 4.3px. */
 const PRESSURE_SPAN = 4.2;
 /**
- * Pencil pressure is not a straight line. Below 1 lifts a light touch so
- * everyday writing is present, and a firmer press still reaches the full
- * width. Monotonic, so Fine stays thinner than Medium.
+ * Pencil pressure is not a straight line. The gamma below 1 lifts a light
+ * touch so everyday writing is present; the soft knee then flattens the
+ * top so leaning in grows the line gently instead of blooming. 0 stays 0
+ * (a full taper as the pencil lifts) and 1 stays 1, the curve is monotonic
+ * (Fine stays thinner than Medium), and it never runs past the straight
+ * line's full width.
  */
 const PRESSURE_GAMMA = 0.72;
+const PRESSURE_KNEE = 0.15;
 
-function shapedPressure(p) {
-  return Math.pow(clamp(p, 0, 1), PRESSURE_GAMMA);
+export function shapedPressure(p) {
+  const q = clamp(finite(p, 0), 0, 1);
+  return (Math.pow(q, PRESSURE_GAMMA) * (1 - PRESSURE_KNEE * q * q)) / (1 - PRESSURE_KNEE);
 }
 
 function clamp(n, lo, hi) {
@@ -366,8 +371,26 @@ export function centerlineCovered(samples) {
   return true;
 }
 
+/** A tap is drawn at least this pressure, so a dotted i or a full stop reads. */
+const DOT_PRESSURE = 0.45;
+/** CSS px. A stroke that never leaves this disc is a dot, not a line. */
+const DOT_RADIUS = 1.5;
+
+function isDot(points) {
+  const first = points[0];
+  return points.every((p) => Math.hypot(p.x - first.x, p.y - first.y) <= DOT_RADIUS);
+}
+
 export function paintSamples(points, smoothing = 'medium') {
-  const stable = stabilizeStroke(points, smoothing);
+  const pts = points || [];
+  if (pts.length && isDot(pts)) {
+    // A light tap reports little pressure; give the dot a readable size and
+    // centre it where the pencil landed.
+    const scale = finite(pts[0].scale, 1) > 0 ? finite(pts[0].scale, 1) : 1;
+    const w = Math.max(...pts.map(widthOf), strokeWidth(DOT_PRESSURE) * scale);
+    return [{ x: pts[0].x, y: pts[0].y, w }];
+  }
+  const stable = stabilizeStroke(pts, smoothing);
   const out = [];
   for (const seg of smoothStroke(stable)) {
     for (const p of segmentSamples(seg)) {
@@ -407,6 +430,51 @@ export function splitPointerSamples(previous, coalesced, predicted) {
     prev = p;
   }
   return { real, tail };
+}
+
+/**
+ * A short tail ahead of the pencil for browsers that do not provide
+ * getPredictedEvents() (Safari on iPad). It extrapolates the velocity of
+ * the last real samples (`t` in ms) by `horizonMs`, capped at `maxPx`, and
+ * only while the stroke is moving steadily in one direction: a resting,
+ * slowing, turning or stale stroke gets no tail. Like a browser
+ * prediction it is drawn for one frame and never stored.
+ */
+export function extrapolateTail(points, { horizonMs = 14, maxPx = 9 } = {}) {
+  const pts = points || [];
+  const n = pts.length;
+  if (n < 3) return [];
+  const a = pts[n - 3];
+  const b = pts[n - 2];
+  const c = pts[n - 1];
+  if (![a.t, b.t, c.t].every((t) => typeof t === 'number' && Number.isFinite(t))) return [];
+  const dt1 = b.t - a.t;
+  const dt2 = c.t - b.t;
+  if (dt1 < 0.5 || dt2 < 0.5 || dt1 > 40 || dt2 > 40) return [];
+  const v1x = (b.x - a.x) / dt1;
+  const v1y = (b.y - a.y) / dt1;
+  const v2x = (c.x - b.x) / dt2;
+  const v2y = (c.y - b.y) / dt2;
+  const s1 = Math.hypot(v1x, v1y);
+  const s2 = Math.hypot(v2x, v2y);
+  // Slower than 50 px/s is a pen settling, not a stroke to run ahead of.
+  if (s1 < 0.05 || s2 < 0.05) return [];
+  // Turning more than ~30° between samples: a corner is coming, do not guess past it.
+  if ((v1x * v2x + v1y * v2y) / (s1 * s2) < 0.87) return [];
+  // Decelerating hard: the stroke is about to stop.
+  if (s2 < s1 * 0.6) return [];
+  const vx = v2x * 0.7 + v1x * 0.3;
+  const vy = v2y * 0.7 + v1y * 0.3;
+  let dx = vx * horizonMs;
+  let dy = vy * horizonMs;
+  const len = Math.hypot(dx, dy);
+  if (len < 0.3) return [];
+  if (len > maxPx) {
+    dx *= maxPx / len;
+    dy *= maxPx / len;
+  }
+  const { t, ...rest } = c;
+  return [{ ...rest, x: c.x + dx, y: c.y + dy, predicted: true }];
 }
 
 function distToSegment(px, py, ax, ay, bx, by) {
