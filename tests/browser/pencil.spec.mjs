@@ -261,4 +261,56 @@ export const tests = [
       await ctx.close();
     },
   },
+  {
+    name: 'a closed pencil loop stays solid ink and does not fill its middle',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser, { viewport: { width: 900, height: 700 }, hasTouch: true });
+      const page = await openApp(ctx, url);
+      const deckId = await seedDeck(page, { name: 'Ink', cards: [] });
+      await page.evaluate((id) => { location.hash = `#/pencil?deck=${id}`; }, deckId);
+      await page.getByRole('heading', { name: 'Create with Pencil' }).waitFor();
+      await page.waitForFunction(() => [...document.querySelectorAll('.pencil-paper .ink-canvas')].some((c) => c.width > 0));
+      const coverage = await page.evaluate(() => {
+        const c = [...document.querySelectorAll('.pencil-paper .ink-canvas')].find((el) => el.getBoundingClientRect().width > 0);
+        const r = c.getBoundingClientRect();
+        const cx = 120;
+        const cy = 100;
+        const rad = 34;
+        const n = 36;
+        const fire = (name, i) => {
+          const a = (i / n) * Math.PI * 2;
+          c.dispatchEvent(new PointerEvent(name, {
+            pointerType: 'pen', pointerId: 11, clientX: r.left + cx + Math.cos(a) * rad, clientY: r.top + cy + Math.sin(a) * rad,
+            pressure: 0.55, buttons: name === 'pointerup' ? 0 : 1, bubbles: true, cancelable: true,
+          }));
+        };
+        fire('pointerdown', 0);
+        for (let i = 1; i <= n; i++) fire('pointermove', i);
+        fire('pointerup', 0);
+        const ctx2 = c.getContext('2d');
+        const dpr = c.width / r.width;
+        const alpha = (x, y) => {
+          const px = Math.round(x * dpr);
+          const py = Math.round(y * dpr);
+          if (px < 0 || py < 0 || px >= c.width || py >= c.height) return 0;
+          return ctx2.getImageData(px, py, 1, 1).data[3];
+        };
+        const near = (x, y) => {
+          let m = 0;
+          for (let dy = -4; dy <= 4; dy++) for (let dx = -4; dx <= 4; dx++) m = Math.max(m, alpha(x + dx, y + dy));
+          return m;
+        };
+        const onRing = [];
+        for (let i = 0; i < 12; i++) {
+          const a = (i / 12) * Math.PI * 2;
+          onRing.push(near(cx + Math.cos(a) * rad, cy + Math.sin(a) * rad));
+        }
+        return { onRing, middle: alpha(cx, cy) };
+      });
+      assert.ok(coverage.onRing.every((a) => a > 80), `ink dropped out on the loop: ${coverage.onRing.join(',')}`);
+      assert.ok(coverage.middle < 40, 'the middle of the loop was filled in');
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
 ];
