@@ -11,8 +11,18 @@ export const ERASER_RADIUS = 14;
 
 /** CSS pixels at zero pressure. Raised from 1.15 so a light stroke is not a hairline. */
 const MIN_WIDTH = 1.8;
-/** Added across pressure 0→1. Medium pressure is MIN_WIDTH + half of this (3.9px). */
+/** Added across pressure 0→1. A shaped half-pressure stroke lands near 4.3px. */
 const PRESSURE_SPAN = 4.2;
+/**
+ * Pencil pressure is not a straight line. Below 1 lifts a light touch so
+ * everyday writing is present, and a firmer press still reaches the full
+ * width. Monotonic, so Fine stays thinner than Medium.
+ */
+const PRESSURE_GAMMA = 0.72;
+
+function shapedPressure(p) {
+  return Math.pow(clamp(p, 0, 1), PRESSURE_GAMMA);
+}
 
 function clamp(n, lo, hi) {
   return Math.min(hi, Math.max(lo, n));
@@ -49,7 +59,7 @@ export function pencilFlatness(tilt = {}) {
  * upright tilt leaves the pressure width unchanged.
  */
 export function strokeWidth(pressure, tilt = {}) {
-  const p = clamp(finite(pressure, 0.5), 0, 1);
+  const p = shapedPressure(clamp(finite(pressure, 0.5), 0, 1));
   let width = MIN_WIDTH + PRESSURE_SPAN * p;
   const flat = pencilFlatness(tilt);
   if (flat != null) width *= 1 + 0.5 * flat;

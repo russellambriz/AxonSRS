@@ -252,7 +252,10 @@ import leaves no partial cards and appears on the Recovery screen.
   - **Write** (Alt+D or D on the study screen) swaps the answer box for a
     handwriting pad. Nothing is recognised: after **Check**, your ink is shown
     next to the correct answer and you grade it (Again = wrong, otherwise
-    Hard, Good or Easy). Strokes are smoothed and follow pressure. Each
+    Hard, Good or Easy). Strokes are smoothed and follow pressure. A light
+    touch lays down more ink than a straight line through the pressure
+    number, and leaning in still thickens the stroke; a reported pressure
+    of 0 stays light, so a stroke can taper as the pencil lifts. Each
     bit of the stroke is a round disc joined to the next, so a loop stays
     solid instead of the fill punching a hole.
     **Smoothing** (Off, Low, Medium, High) is on the pen row in Create with
@@ -864,7 +867,7 @@ Day-to-day reviews write one event each.
 ## Testing
 
 ```bash
-npm test               # 236 unit tests (node --test), ~5 s
+npm test               # 237 unit tests (node --test), ~5 s
 npm run test:browser   # 55 browser tests (Playwright + Chromium)
 npm run check          # pre-cache list is current + unit tests
 ```
@@ -924,7 +927,7 @@ installation prompts, speech recognition and system TTS voices are
 
 | Component | Version | Notes |
 | --- | --- | --- |
-| App | 1.0.12 | cache `axon-v13` |
+| App | 1.0.13 | cache `axon-v14` |
 | Scheduler | ts-fsrs 5.4.2 (FSRS-6, default parameters) + `axon-fuzz@1` | reference-checked against py-fsrs 6.3.2 |
 | Grading rules | `axon-fluency@1.1.0` | thresholds above; recorded on every review |
 | Reading/warm-up heuristic | `axon-reading@2` | can be disabled |

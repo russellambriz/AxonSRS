@@ -18,6 +18,13 @@ test('stroke width follows pressure and ignores upright or missing tilt', () => 
   assert.equal(pencilFlatness({ tiltX: 0, tiltY: 0 }), null);
 });
 
+test('a light Pencil touch draws fuller than a straight pressure line, and harder still grows', () => {
+  const straight = (p) => 1.8 + 4.2 * p;
+  assert.ok(strokeWidth(0.2) > straight(0.2), 'light writing is present');
+  assert.ok(strokeWidth(0.2) < strokeWidth(0.5) && strokeWidth(0.5) < strokeWidth(1));
+  assert.ok(strokeWidth(1) <= straight(1) + 0.01, 'a full press does not run past the pen');
+});
+
 test('medium pressure is fuller than the old hairline, and Fine stays thinner than Medium', () => {
   const mid = strokeWidth(0.5);
   assert.ok(mid > 3, 'thicker than the previous 3px stroke at pressure 0.5');
