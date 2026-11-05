@@ -192,6 +192,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
   let plate = null;
   let plateMediaId = null;
   let plateUrl = null;
+  let ghost = null;
 
   function drawPlate() {
     if (!plate) return;
@@ -206,11 +207,28 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     ctx.drawImage(plate, (r.width - w) / 2, (r.height - h) / 2, w, h);
   }
 
+  function drawGhost() {
+    if (!ghost) return;
+    const r = canvas.getBoundingClientRect();
+    const iw = ghost.naturalWidth || ghost.width;
+    const ih = ghost.naturalHeight || ghost.height;
+    if (!r.width || !r.height || !iw || !ih) return;
+    const scale = Math.min((r.width * 0.92) / iw, (r.height * 0.92) / ih);
+    const w = iw * scale;
+    const h = ih * scale;
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.save();
+    ctx.globalAlpha = 0.9;
+    ctx.drawImage(ghost, (r.width - w) / 2, (r.height - h) / 2, w, h);
+    ctx.restore();
+  }
+
   function redraw() {
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (!canvas.width || !canvas.height) return;
     drawPlate();
+    drawGhost();
     for (const s of strokes) {
       const tail = current && s === current.stroke && predicted.length ? predicted : null;
       applyInk(s.color);
@@ -511,6 +529,11 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     plateId: () => plateMediaId,
     /** Show a saved drawing under new strokes. `url` is revoked when replaced. */
     setPlate,
+    /** Faint model to trace. Not a stroke, so Clear and Done still see an empty pad. */
+    setGhost(image) {
+      ghost = image || null;
+      redraw();
+    },
     strokeCount: () => strokes.length,
     clear,
     /** Prompt under the pad, for example the retype instruction. */
