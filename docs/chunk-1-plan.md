@@ -15,8 +15,13 @@ happens at release time, on request.
 Update this list in the same commit as the work.
 
 - [x] 1. Audit and plan (this file).
-- [ ] 2. Central outcome policy (`js/core/outcome.js`), wired into
-      `planReview` and `planOverride`; unit tests.
+- [x] 2. Central outcome policy (`js/core/outcome.js`), wired into
+      `planReview` and `planOverride`; unit tests
+      (`tests/unit/outcome.test.js`). Evaluator reports `unresolved` for
+      unreadable math/chem (`matchAnswer`). Default "I guessed" → Again.
+      planReview now takes `policy`, `confidence`, `dontKnow`, `selfHelp`;
+      the study screen does not pass them yet (step 3), so today it uses
+      the standard policy with no confidence.
 - [ ] 3. Study screen: pre-submission confidence, "I don't know", outcome
       labels, self-assessment panel (ink, manual, unresolved), unresolved
       phase, effort buttons, alias split, timing under a disclosure.
@@ -34,6 +39,16 @@ Update this list in the same commit as the work.
       "unknown".
 - [ ] 8. Docs: README, REQUIREMENTS.md, `docs/chunk-1-report.md` (final
       handoff per section 17 of the prompt).
+
+### Merged since the plan was first written
+
+PRs #1–#7 (Grok/Cursor) added ink cards (a side that is only handwriting,
+self-graded through `submitInk`/`manualGrade`), the "Create with Pencil"
+studio (`js/ui/views/pencil.js`, `js/core/pencil.js`, `js/core/ink.js`), a
+handwriting card editor, ink smoothing, Reverse Recall sessions and a
+version 1.0.5 commit on this branch. Those paths go through the same
+`planReview`, so the outcome policy covers them; their self-grading
+buttons are replaced by the self-assessment panel in step 3.
 
 ## How to work in this repo
 

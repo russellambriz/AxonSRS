@@ -32,10 +32,10 @@ export function rawTrial({ latencyMs = 1500, typingMs = 1000, text = '' } = {}) 
 
 let counter = 0;
 /** Plan a review of `unit` with typed `text` at time `at`. */
-export function review({ unit, card, deck, text, at, live = true, deviceId = 'dev-A', mode = 'daily', eventId = `ev-${++counter}`, baseline = null, params = schedulerParams(), gradeMode = 'auto', manualRating = null, research = null, firstAttempt = true }) {
+export function review({ unit, card, deck, text, at, live = true, deviceId = 'dev-A', mode = 'daily', eventId = `ev-${++counter}`, baseline = null, params = schedulerParams(), gradeMode = 'auto', manualRating = null, research = null, firstAttempt = true, policy = undefined, confidence = null }) {
   const match = evaluateAnswer(card, deck, unit.key, text);
   return planReview({
     eventId, now: at, deviceId, seq: counter, sessionId: 's1', mode, live, unit, card, deck,
-    trial: rawTrial({ text }), match, baseline, params, studyDay: '2026-01-05', timeZone: 'UTC', gradeMode, manualRating, research, firstAttempt,
+    trial: rawTrial({ text }), match, baseline, params, studyDay: '2026-01-05', timeZone: 'UTC', gradeMode, manualRating, research, firstAttempt, policy, confidence,
   });
 }

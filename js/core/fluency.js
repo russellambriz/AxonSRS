@@ -51,7 +51,7 @@ export const DEFAULT_GRADING_CONFIG = Object.freeze({
   thresholds: Object.freeze({ hard: 1.0, easy: -0.8, provisionalHard: 2.0 }),
   weights: Object.freeze({ typing: 0.35, correction: 0.25, pause: 0.35 }),
   hintCeiling: 'good', // 'hard' | 'good'
-  guessedGrade: 'hard', // 'again' | 'hard'
+  guessedGrade: 'again', // 'again' | 'hard'; a guess is not recall (axon-outcomes@2)
   minEffortForTyping: 4,
   baselineWindow: 200,
   // Conservative population priors, used only to blend while personal data accumulates.

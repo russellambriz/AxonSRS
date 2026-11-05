@@ -174,9 +174,12 @@ test('a rescue also replaces the failure’s other effects: performance, Easy el
   let baseline = createBaseline('physical|recall');
   for (let i = 0; i < 40; i++) baseline = addSample(baseline, { eventId: `b${i}`, ts: i, lnLatency: Math.log(6000) + (((i % 7) - 3) / 3) * 0.25, lnMsPerEffort: Math.log(500) + (((i % 7) - 3) / 3) * 0.25 });
   const nextAt = rescue.unit.state.due;
-  const after = review({ unit: rescue.unit, card, deck, text: 'SO4^2-', at: nextAt, baseline });
+  // (Easy from timing exists only under the experimental timing policy.)
+  const timing = 'timing-experimental@1';
+  const after = review({ unit: rescue.unit, card, deck, text: 'SO4^2-', at: nextAt, baseline, policy: timing });
   assert.equal(after.event.rating, 4, after.event.grading.reasons.join(','));
-  const stale = review({ unit: { ...rescue.unit, lastScheduled: failed.unit.lastScheduled }, card, deck, text: 'SO4^2-', at: nextAt, baseline });
+  assert.equal(review({ unit: rescue.unit, card, deck, text: 'SO4^2-', at: nextAt, baseline }).event.rating, 3, 'the standard policy records Good');
+  const stale = review({ unit: { ...rescue.unit, lastScheduled: failed.unit.lastScheduled }, card, deck, text: 'SO4^2-', at: nextAt, baseline, policy: timing });
   assert.ok(stale.event.grading.reasons.includes('EASY_NEEDS_CONSISTENCY'));
 });
 
@@ -306,7 +309,7 @@ test('a backwards device clock never makes a review unsaveable', () => {
   assert.ok(b.unit.state.last_review >= a.unit.state.last_review);
 });
 
-test('alias rescue re-grades from the original measurements (hint ceiling still applies)', async () => {
+test('a rescue corrects the evaluation but keeps the hint that was used (T32)', async () => {
   const { DEFAULT_GRADING_CONFIG } = await import('../../js/core/fluency.js');
   const deck = makeDeck({ answerMode: 'text' });
   const card = makeCard({ answerMode: 'text', front: 'Largest planet', back: 'Jupiter' });
@@ -315,8 +318,11 @@ test('alias rescue re-grades from the original measurements (hint ceiling still 
   assert.ok(failed.event.promptStats, 'prompt size is recorded for re-grading');
   failed.event.assistance.hintShown = true;
   const rescue = planOverride({ eventId: 'o9', now: T0 + 4000, deviceId: 'dev-A', seq: 3, target: failed.event, kind: 'alias', unit: failed.unit, unitEvents: [failed.event], alias: 'Iuppiter', studyDay: '2026-01-05', gradingConfig: { ...DEFAULT_GRADING_CONFIG, hintCeiling: 'hard' } });
-  assert.equal(rescue.event.newRating, 2, 'a hinted rescue respects the Hard ceiling');
-  assert.ok(rescue.event.reasons.includes('ALIAS_RESCUE') && rescue.event.reasons.includes('HINT_CEILING'));
+  // The evaluation is corrected, the hint is not erased: practice with help, Again.
+  assert.equal(rescue.event.newRating, 1, 'a hinted answer stays assisted after "My answer is correct"');
+  assert.ok(rescue.event.reasons.includes('ALIAS_RESCUE') && rescue.event.reasons.includes('ASSISTED_HINT'));
+  assert.equal(rescue.event.outcome.class, 'assisted');
+  assert.equal(rescue.event.outcome.independent, false);
 });
 
 test('“I knew that” never lifts an answer past its hint ceiling or a typo past Good', async () => {

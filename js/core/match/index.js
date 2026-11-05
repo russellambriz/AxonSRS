@@ -193,6 +193,9 @@ export function matchAnswer(input, accepted, options = {}) {
   // Strict matches win over typo-tolerated ones across all alternatives.
   let tolerant = null;
   const diagnostics = new Set();
+  // True while no accepted answer could even read the response: the
+  // evaluator cannot judge it, which is not the same as wrong.
+  let unreadable = true;
   for (let i = 0; i < answers.length; i++) {
     const expected = answers[i];
     let cmp;
@@ -206,6 +209,7 @@ export function matchAnswer(input, accepted, options = {}) {
       cmp = compareText(typed, expected, opts);
     }
     (cmp.diagnostics || []).forEach((d) => diagnostics.add(d));
+    if (cmp.method !== 'unparseable-user') unreadable = false;
     if (cmp.equal && !cmp.typoTolerated) {
       return {
         ...result,
@@ -236,6 +240,7 @@ export function matchAnswer(input, accepted, options = {}) {
   const unit = unitDiagnostic(typed, answers[result.closestIndex]);
   if (unit) diagnostics.add(unit);
   result.diagnostics = [...diagnostics];
+  if (unreadable) result.unresolved = true;
   return result;
 }
 

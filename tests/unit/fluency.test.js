@@ -257,8 +257,8 @@ test('baselines are rolling, robust and support exact removal (undo)', () => {
 test('overrides: knew raises, guessed never Easy, alias rescue is Good', () => {
   assert.equal(overrideGrade('knew', 2).grade, 3);
   assert.equal(overrideGrade('knew', 3).grade, 4);
-  assert.equal(overrideGrade('guessed', 4).grade, 2);
-  assert.equal(overrideGrade('guessed', 3, mergeGradingConfig({ guessedGrade: 'again' })).grade, 1);
+  assert.equal(overrideGrade('guessed', 4).grade, 1, 'a guess is not recall');
+  assert.equal(overrideGrade('guessed', 3, mergeGradingConfig({ guessedGrade: 'hard' })).grade, 2);
   assert.equal(overrideGrade('alias', 1).grade, 3);
 });
 

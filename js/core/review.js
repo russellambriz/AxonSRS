@@ -16,6 +16,7 @@ import { matchAnswer, matchOrderedAnswers } from './match/index.js';
 import { unitContent, effectiveCardSettings } from './model.js';
 import { replayUnit, lastScheduledFrom, RESCUE_REASONS } from './history.js';
 import { isLeech } from './stats.js';
+import { assessOutcome, explainOutcome, phaseOf, POLICIES, LEGACY_POLICY } from './outcome.js';
 
 export const PERF_WINDOW = 8;
 
@@ -56,6 +57,7 @@ export function planReview(ctx) {
     eventId, now, deviceId, seq, sessionId, mode, live, unit, card, deck, trial, match,
     gradeMode = 'auto', manualRating = null, gradingConfig = DEFAULT_GRADING_CONFIG, baseline,
     params, studyDay, timeZone, research = null, firstAttempt = true, appVersion = APP_VERSION,
+    policy = POLICIES.standard, confidence = null, dontKnow = false, selfHelp = false,
   } = ctx;
   const enrichedTrial = {
     ...trial,
@@ -66,11 +68,20 @@ export function planReview(ctx) {
   };
   const grading = gradeReview(enrichedTrial, baseline, gradingConfig);
   const usesManual = gradeMode === 'manual' || (gradeMode === 'research' && research?.arm === 'standard');
-  // Self-grading applies only to answers the matcher accepted: a wrong
-  // answer is recorded as Again in every mode (use "Mark correct" to
-  // overrule the matcher).
-  if (usesManual && match.correct && ![1, 2, 3, 4].includes(manualRating)) throw new Error('Manual grading requires a rating');
-  const rating = usesManual && match.correct ? manualRating : usesManual ? 1 : grading.grade;
+  // One outcome policy for every path (js/core/outcome.js). A wrong answer
+  // is Again in every mode ("My answer is correct" overrules the matcher);
+  // a manual Again for an accepted answer means "not recalled on my own".
+  const phase = phaseOf(unit.state);
+  const evidence = {
+    correct: match.correct == null ? null : !!match.correct && !(usesManual && manualRating === 1),
+    provenance: match.method === 'self' || (usesManual && manualRating === 1) ? 'self' : 'evaluator',
+    assistance: trial.assistance, confidence, dontKnow, selfHelp,
+    typoTolerated: !!match.typoTolerated, phase, policy, timingGrade: grading.grade,
+  };
+  const proposed = assessOutcome(evidence);
+  const outcome = assessOutcome({ ...evidence, manualRating: usesManual ? manualRating : null });
+  if (usesManual && outcome.independent && ![2, 3, 4].includes(manualRating)) throw new Error('Manual grading requires a rating');
+  const rating = outcome.rating;
   const predictedR = retrievability(unit.state, now, params);
   const elapsedDays = elapsedDaysOf(unit, now);
   const wasNew = !unit.state || unit.state.state === State.New;
@@ -103,6 +114,7 @@ export function planReview(ctx) {
     response: {
       text: trial.responseText,
       correct: !!match.correct,
+      unresolved: !!match.unresolved,
       method: match.method,
       typoTolerated: !!match.typoTolerated,
       warnings: match.warnings || [],
@@ -111,12 +123,24 @@ export function planReview(ctx) {
       matcherVersion: match.version,
       probabilistic: !!match.probabilistic,
     },
-    assistance: { hintShown: !!trial.assistance?.hintShown, revealed: !!trial.assistance?.revealed, solutionViewed: !!trial.assistance?.solutionViewed },
+    assistance: { hintShown: !!trial.assistance?.hintShown, revealed: !!trial.assistance?.revealed, solutionViewed: !!trial.assistance?.solutionViewed, priorExposure: !!trial.assistance?.priorExposure },
+    outcome,
     modality: trial.modality || { kind: 'unknown', confidence: 0 },
     // Prompt size, so the review can be re-graded from its own measurements
     // (alias rescue / mark correct) with the same reading-time estimate.
     promptStats: trial.prompt ? { words: trial.prompt.words || 0, mathTokens: trial.prompt.mathTokens || 0, images: trial.prompt.images || 0, chars: trial.prompt.chars || 0 } : null,
-    grading: { ...grading, mode: usesManual ? 'manual' : 'auto', shadowGrade: usesManual ? grading.grade : null },
+    // `grade` is what the active policy would record automatically; the
+    // response-time engine's own grade is kept as `timingGrade`.
+    grading: {
+      ...grading,
+      grade: proposed.rating,
+      timingGrade: grading.grade,
+      timingExplanation: grading.explanation,
+      explanation: explainOutcome(outcome, { manual: usesManual, timingExplanation: grading.explanation }),
+      policy,
+      mode: usesManual ? 'manual' : 'auto',
+      shadowGrade: usesManual ? proposed.rating : null,
+    },
     rating,
     predictedR,
     elapsedDays,
@@ -136,7 +160,7 @@ export function planReview(ctx) {
       lastReviewAt: unit.lastReviewAt || null,
     },
   };
-  let nextUnit = { ...unit, perf: pushPerf(unit.perf, { c: !!match.correct, h: grading.scores?.hesitation ?? null, k: trial.raw?.corrections || 0, t: now }) };
+  let nextUnit = { ...unit, perf: pushPerf(unit.perf, { c: outcome.independent, h: grading.scores?.hesitation ?? null, k: trial.raw?.corrections || 0, t: now }) };
   if (live) {
     const { state, transition } = applyRating(unit.state, rating, now, params, eventId);
     event.parentId = unit.headEventId || null;
@@ -150,7 +174,7 @@ export function planReview(ctx) {
       headEventId: eventId,
       lastReviewAt: now,
       practiceSinceLast: false,
-      lastScheduled: { correct: !!match.correct, assisted: !!(trial.assistance?.hintShown || trial.assistance?.revealed || trial.assistance?.solutionViewed), grade: rating, typoTolerated: !!match.typoTolerated, hesitation: grading.scores?.hesitation ?? null },
+      lastScheduled: { correct: outcome.independent, assisted: !outcome.independent, grade: rating, typoTolerated: !!match.typoTolerated, hesitation: grading.scores?.hesitation ?? null },
       introducedDay: unit.introducedDay || (wasNew ? studyDay : unit.introducedDay || null),
     };
     const threshold = deck?.settings?.leechThreshold ?? 4;
@@ -167,8 +191,8 @@ export function planReview(ctx) {
     nextUnit.practiceSinceLast = true;
     nextUnit.lastPracticeAt = now;
   }
-  const cal = calibrationSample(enrichedTrial, grading, { eventId, ts: now, mode });
-  return { event, unit: nextUnit, calibration: cal.eligible ? cal : null, calibrationExclusion: cal.eligible ? null : cal.reasons, requeue: !match.correct };
+  const cal = outcome.independent ? calibrationSample(enrichedTrial, grading, { eventId, ts: now, mode }) : { eligible: false, reasons: ['not-independent'] };
+  return { event, unit: nextUnit, calibration: cal.eligible ? cal : null, calibrationExclusion: cal.eligible ? null : cal.reasons, requeue: !outcome.independent, outcome };
 }
 
 /**
@@ -211,18 +235,34 @@ export function planOverride({ eventId, now, deviceId, seq, target, kind, manual
     throw new Error('A revealed answer cannot be counted as recalled.');
   }
   const original = target.grading?.grade ?? target.rating;
+  // Reviews from before versioned policies keep their timing semantics.
+  const policy = target.grading?.policy || LEGACY_POLICY;
+  const base = { assistance: target.assistance || {}, confidence: target.outcome?.confidence || null, phase: target.outcome?.phase || phaseOf(target.prevState), policy };
   let og = kind === 'manual' ? { grade: manualRating, reasons: ['MANUAL_GRADE'] } : overrideGrade(kind, original, gradingConfig);
   if (kind === 'knew') og = capKnew(og, target, gradingConfig);
   const rescued = RESCUE_REASONS.has(kind);
   let hesitation = null;
+  let outcome = null;
   if (rescued) {
-    // Grade the rescued answer as a correct one from the measurements taken
-    // when it was typed (never the time spent on the feedback screen), so
-    // hesitation, hints and calibration rules still apply.
+    // "My answer is correct": the evaluation is corrected, the assistance
+    // and confidence that really happened are kept. A timing policy grades
+    // from the measurements taken when it was typed, never the feedback time.
     const regraded = regradeAsCorrect(target, baseline, gradingConfig);
-    if (regraded) {
-      og = { grade: regraded.grade, reasons: [og.reasons[0], ...regraded.reasons], explanation: regraded.explanation };
-      hesitation = regraded.scores?.hesitation ?? null;
+    outcome = assessOutcome({ ...base, correct: true, provenance: 'user-correction', timingGrade: regraded?.grade ?? null });
+    og = { grade: outcome.rating, reasons: [og.reasons[0], outcome.reason, ...(regraded && policy !== POLICIES.standard ? regraded.reasons : [])], explanation: explainOutcome(outcome, { timingExplanation: regraded?.explanation }) };
+    hesitation = regraded?.scores?.hesitation ?? null;
+  } else if (kind === 'guessed') {
+    outcome = assessOutcome({ ...base, correct: !!target.response?.correct, provenance: target.outcome?.provenance || 'evaluator', guessed: true });
+    og = { grade: outcome.rating, reasons: ['OVERRIDE_GUESSED'], explanation: explainOutcome(outcome) };
+  } else if (kind === 'manual' && target.outcome) {
+    if (manualRating === 1) {
+      outcome = { ...target.outcome, class: 'failed', independent: false, reason: 'SELF_NOT_RECALLED', rating: 1 };
+    } else {
+      // Effort (Hard/Easy) only for an answer that, after any correction, was recalled on its own.
+      const rescue = (unitEvents || []).filter((e) => e.type === 'correction' && e.kind === 'override' && e.targetId === target.id && RESCUE_REASONS.has(e.reason)).at(-1);
+      const independent = rescue ? rescue.outcome?.independent !== false : target.outcome.independent;
+      if (!independent) throw new Error('Only an answer recalled on your own can be rated for effort.');
+      outcome = { ...target.outcome, class: 'success', independent: true, rating: manualRating };
     }
   }
   const correction = {
@@ -243,6 +283,7 @@ export function planOverride({ eventId, now, deviceId, seq, target, kind, manual
     previousRating: target.rating,
     reasons: og.reasons,
     explanation: og.explanation || null,
+    outcome: outcome ? { v: outcome.v, class: outcome.class, independent: outcome.independent, reason: outcome.reason, provenance: outcome.provenance } : null,
     // Hesitation of the re-graded answer (rescues only), so the corrected
     // review's summary can be rebuilt from history.
     hesitation,
@@ -251,7 +292,7 @@ export function planOverride({ eventId, now, deviceId, seq, target, kind, manual
     // spent on the feedback screen is never treated as retrieval.
     measurementsFrom: target.id,
   };
-  const perf = rescued ? rescuePerf(unit.perf, target, hesitation) : unit.perf;
+  const perf = rescued && outcome?.independent ? rescuePerf(unit.perf, target, hesitation) : unit.perf;
   if (target.type !== 'review') return { event: correction, unit: perf === unit.perf ? unit : { ...unit, perf } };
   const replay = replayUnit([...unitEvents, correction]);
   const next = { ...unit, state: replay.state, headEventId: replay.headEventId, perf };
