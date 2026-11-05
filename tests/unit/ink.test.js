@@ -18,6 +18,18 @@ test('stroke width follows pressure and ignores upright or missing tilt', () => 
   assert.equal(pencilFlatness({ tiltX: 0, tiltY: 0 }), null);
 });
 
+test('medium pressure is fuller than the old hairline, and Fine stays thinner than Medium', () => {
+  const mid = strokeWidth(0.5);
+  assert.ok(mid > 3, 'thicker than the previous 3px stroke at pressure 0.5');
+  assert.ok(mid < 5.5, 'still a pencil, not a marker');
+  assert.ok(strokeWidth(0) >= 1.6 && strokeWidth(0) < mid);
+  assert.ok(pointWidth({ x: 0, y: 0, p: 0.5, scale: 0.7 }) < pointWidth({ x: 0, y: 0, p: 0.5, scale: 1 }));
+  const flat = paintSamples([pt(0, 0, 0.5), pt(40, 0, 0.5)], 'off');
+  const ribbon = ribbonPolygon(flat);
+  const end = flat[flat.length - 1];
+  assert.ok(ribbon.some((p) => p.x > end.x + end.w * 0.3), 'the end cap rounds past the last sample');
+});
+
 test('tilt, altitude and twist widen a stroke only as optional extras', () => {
   const base = strokeWidth(0.5);
   assert.ok(strokeWidth(0.5, { tiltX: 75 }) > base);

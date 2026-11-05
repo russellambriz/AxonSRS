@@ -19,7 +19,7 @@ export const PEN_COLORS = [
 
 /** Multipliers on the pressure width. Fine < medium < broad. */
 export const PEN_WIDTHS = [
-  { id: 'fine', label: 'Fine', scale: 0.62 },
+  { id: 'fine', label: 'Fine', scale: 0.7 },
   { id: 'medium', label: 'Medium', scale: 1 },
   { id: 'broad', label: 'Broad', scale: 1.75 },
 ];

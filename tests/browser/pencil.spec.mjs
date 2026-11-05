@@ -78,10 +78,10 @@ export const tests = [
       assert.equal(await visibleStrokes(page), '1', 'the front sketch is still there');
 
       await page.getByRole('button', { name: 'Typed answer' }).click();
-      await page.getByRole('button', { name: 'Save & next' }).click();
+      await page.getByRole('button', { name: 'Save & flip' }).click();
       await page.getByText('Type the answer Axon should check').waitFor();
       await page.getByRole('textbox', { name: 'Graded answer' }).fill('Lima');
-      await page.getByRole('button', { name: 'Save & next' }).click();
+      await page.getByRole('button', { name: 'Save & flip' }).click();
       await page.getByText('1 saved').waitFor();
       assert.equal(await page.locator('.pencil-answer').inputValue(), '');
       assert.equal(await visibleStrokes(page), '0', 'the next card starts on a clean page');
@@ -95,7 +95,7 @@ export const tests = [
 
       await page.getByRole('textbox', { name: 'Prompt text' }).fill('Capital of Chile');
       await page.getByRole('textbox', { name: 'Graded answer' }).fill('Santiago');
-      await page.getByRole('button', { name: 'Save & next' }).click();
+      await page.getByRole('button', { name: 'Save & flip' }).click();
       await page.getByText('2 saved').waitFor();
       const cards = await idbAll(page, 'cards');
       assert.equal(cards.length, 2);
@@ -142,7 +142,7 @@ export const tests = [
       await page.waitForFunction(() => document.querySelector('.pencil-studio')?.dataset.side === 'back');
       await page.locator('.pencil-ghost').getByText('Write the answer', { exact: true }).waitFor();
       await stroke(page, { y: 70, id: 9 });
-      await page.getByRole('button', { name: 'Save & next' }).click();
+      await page.getByRole('button', { name: 'Save & flip' }).click();
       await page.getByText('1 saved').waitFor();
       const [card] = await idbAll(page, 'cards');
       assert.match(card.front.join('\n'), /!\[[^\]]*\]\(axon-media:sha256-/);
@@ -193,7 +193,7 @@ export const tests = [
       await page.getByRole('button', { name: 'Typed answer' }).click();
       await page.getByRole('textbox', { name: 'Prompt text' }).fill('Alpha');
       await page.getByRole('textbox', { name: 'Graded answer' }).fill('One');
-      await page.getByRole('button', { name: 'Save & next' }).click();
+      await page.getByRole('button', { name: 'Save & flip' }).click();
       await page.getByText('1 saved').waitFor();
 
       await page.getByRole('button', { name: 'Handwritten answer' }).click();
@@ -202,7 +202,7 @@ export const tests = [
       await page.getByRole('button', { name: 'Back' }).click();
       await page.waitForFunction(() => document.querySelector('.pencil-studio')?.dataset.side === 'back');
       await stroke(page, { y: 90, id: 15 });
-      await page.getByRole('button', { name: 'Save & next' }).click();
+      await page.getByRole('button', { name: 'Save & flip' }).click();
       await page.getByRole('button', { name: 'Show 2 saved' }).click();
       const beta = page.getByRole('button', { name: 'Beta', exact: true });
       await beta.waitFor();

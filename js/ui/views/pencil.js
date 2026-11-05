@@ -77,7 +77,7 @@ export async function view(outlet, _params, query) {
   const undoBtn = h('button', { type: 'button', class: 'btn ghost', disabled: true, onclick: () => { active().undo(); refresh(); } }, icon('undo'), 'Undo stroke');
   const redoBtn = h('button', { type: 'button', class: 'btn ghost', disabled: true, onclick: () => { active().redo(); refresh(); } }, icon('redo'), 'Redo stroke');
   const clearBtn = h('button', { type: 'button', class: 'btn ghost', disabled: true, onclick: () => { active().clear(); refresh(); } }, icon('trash'), 'Clear');
-  const nextBtn = h('button', { type: 'button', class: 'btn primary pencil-next', onclick: () => saveCard(true) }, 'Save & next');
+  const nextBtn = h('button', { type: 'button', class: 'btn primary pencil-next', onclick: () => saveCard(true) }, 'Save & flip');
   const doneBtn = h('button', { type: 'button', class: 'btn', onclick: () => saveCard(false) }, 'Done');
 
   const colorHost = h('div', { class: 'pencil-choices', role: 'group', 'aria-label': 'Pen colour' });

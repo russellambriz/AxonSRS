@@ -9,8 +9,10 @@
 /** Eraser disc radius in CSS pixels. A hit removes the whole stroke. */
 export const ERASER_RADIUS = 14;
 
-const MIN_WIDTH = 1.15;
-const PRESSURE_SPAN = 3.7;
+/** CSS pixels at zero pressure. Raised from 1.15 so a light stroke is not a hairline. */
+const MIN_WIDTH = 1.8;
+/** Added across pressure 0→1. Medium pressure is MIN_WIDTH + half of this (3.9px). */
+const PRESSURE_SPAN = 4.2;
 
 function clamp(n, lo, hi) {
   return Math.min(hi, Math.max(lo, n));
@@ -131,27 +133,68 @@ export function stabilizeStroke(points, level = 'medium') {
   return out;
 }
 
-/** Filled outline of a variable-width centerline. Null when there is nothing to fill. */
+function halfWidth(w) {
+  return Math.max(0.8, w / 2);
+}
+
+/** Semicircle from the left edge, through `dir`, to the right edge. */
+function outwardCap(cx, cy, dirX, dirY, hw) {
+  const len = Math.hypot(dirX, dirY) || 1;
+  const dx = dirX / len;
+  const dy = dirY / len;
+  const nx = -dy;
+  const ny = dx;
+  const steps = Math.max(8, Math.min(14, Math.ceil(hw * 2)));
+  const pts = [];
+  for (let i = 0; i <= steps; i++) {
+    const t = (i / steps) * Math.PI;
+    const c = Math.cos(t);
+    const s = Math.sin(t);
+    pts.push({ x: cx + (nx * c + dx * s) * hw, y: cy + (ny * c + dy * s) * hw });
+  }
+  return pts;
+}
+
+/**
+ * Filled outline of a variable-width centerline, with round caps on both
+ * ends so the live stroke and the committed stroke meet the same way.
+ * Null when there is nothing to fill.
+ */
 export function ribbonPolygon(samples) {
   if (!samples || samples.length < 2) return null;
   const left = [];
   const right = [];
+  const tangents = [];
   for (let i = 0; i < samples.length; i++) {
     const prev = samples[Math.max(0, i - 1)];
     const next = samples[Math.min(samples.length - 1, i + 1)];
     let dx = next.x - prev.x;
     let dy = next.y - prev.y;
     const len = Math.hypot(dx, dy);
-    if (len < 0.001) continue;
-    dx /= len;
-    dy /= len;
-    const hw = Math.max(0.45, samples[i].w / 2);
-    left.push({ x: samples[i].x + -dy * hw, y: samples[i].y + dx * hw });
-    right.push({ x: samples[i].x - -dy * hw, y: samples[i].y - dx * hw });
+    if (len < 0.001) {
+      const prevT = tangents[tangents.length - 1] || { dx: 1, dy: 0 };
+      dx = prevT.dx;
+      dy = prevT.dy;
+    } else {
+      dx /= len;
+      dy /= len;
+    }
+    tangents.push({ dx, dy });
+    const hw = halfWidth(samples[i].w);
+    left.push({ x: samples[i].x - dy * hw, y: samples[i].y + dx * hw });
+    right.push({ x: samples[i].x + dy * hw, y: samples[i].y - dx * hw });
   }
   if (left.length < 2) return null;
+  const start = samples[0];
+  const end = samples[samples.length - 1];
+  const startT = tangents[0];
+  const endT = tangents[tangents.length - 1];
   right.reverse();
-  return left.concat(right);
+  return left.concat(
+    outwardCap(end.x, end.y, endT.dx, endT.dy, halfWidth(end.w)),
+    right,
+    outwardCap(start.x, start.y, -startT.dx, -startT.dy, halfWidth(start.w)),
+  );
 }
 
 /**
@@ -224,7 +267,7 @@ export function segmentSamples(seg) {
     ];
   }
   const dist = Math.hypot(seg.x1 - seg.x0, seg.y1 - seg.y0) + Math.hypot(seg.cx - seg.x0, seg.cy - seg.y0);
-  const steps = Math.max(2, Math.min(32, Math.ceil(dist / 3)));
+  const steps = Math.max(2, Math.min(48, Math.ceil(dist / 1.5)));
   const out = [];
   for (let s = 0; s <= steps; s++) {
     const t = s / steps;

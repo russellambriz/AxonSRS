@@ -312,7 +312,7 @@ import leaves no partial cards and appears on the Recovery screen.
     the default: the ink on the back *is* the answer, stored and shown as
     the drawing, with no typed text. **Typed answer** keeps the normal box
     (Scribble still works) and Axon matches that text; a drawing is then
-    only a note. **Save & next** stores the card and clears the page.
+    only a note. **Save & flip** stores the card and clears the page.
     **N saved** under the title opens this deck’s cards, newest first: a
     strip of thumbnails (the front, with the back peeking out) and a
     full-size viewer. Swipe or the arrows move between cards, and a tap
@@ -862,7 +862,7 @@ Day-to-day reviews write one event each.
 ## Testing
 
 ```bash
-npm test               # 233 unit tests (node --test), ~5 s
+npm test               # 234 unit tests (node --test), ~5 s
 npm run test:browser   # 54 browser tests (Playwright + Chromium)
 npm run check          # pre-cache list is current + unit tests
 ```
@@ -922,7 +922,7 @@ installation prompts, speech recognition and system TTS voices are
 
 | Component | Version | Notes |
 | --- | --- | --- |
-| App | 1.0.9 | cache `axon-v10` |
+| App | 1.0.10 | cache `axon-v11` |
 | Scheduler | ts-fsrs 5.4.2 (FSRS-6, default parameters) + `axon-fuzz@1` | reference-checked against py-fsrs 6.3.2 |
 | Grading rules | `axon-fluency@1.1.0` | thresholds above; recorded on every review |
 | Reading/warm-up heuristic | `axon-reading@2` | can be disabled |
