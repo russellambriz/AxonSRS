@@ -149,6 +149,8 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
 
   function applyInk(color) {
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
     ctx.strokeStyle = ctx.fillStyle = color || getComputedStyle(canvas).color;
     ctx.lineCap = 'round';
     ctx.lineJoin = 'round';
@@ -156,7 +158,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
 
   function fillDot(sample) {
     ctx.beginPath();
-    ctx.arc(sample.x, sample.y, Math.max(0.6, sample.w / 2), 0, Math.PI * 2);
+    ctx.arc(sample.x, sample.y, Math.max(0.8, sample.w / 2), 0, Math.PI * 2);
     ctx.fill();
   }
 
@@ -174,8 +176,6 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i].x, poly[i].y);
     ctx.closePath();
     ctx.fill();
-    fillDot(samples[0]);
-    fillDot(samples[samples.length - 1]);
   }
 
   let plate = null;
