@@ -206,3 +206,36 @@ test('assessOutcome: one rule, explained in plain language', () => {
   assert.equal(assessOutcome({ correct: true, confidence: 'nonsense' }).confidence, null, 'unknown values are not invented');
   assert.match(explainOutcome(assessOutcome({ correct: true, confidence: 'guessing' })), /guess/);
 });
+
+test('T08–T12 the evaluator stays conservative: equivalence, constants, domains, chemistry and tolerance', () => {
+  const math = (t, e, o = {}) => matchAnswer(t, [e], { mode: 'math', ...o });
+  // T08 equivalent forms only under the configured equivalence policy, and flagged as sampled.
+  assert.equal(math('2(x+1)', '2x+2').correct, false, 'notation mode does not expand');
+  const alg = math('2(x+1)', '2x+2', { mathEquivalence: 'algebraic' });
+  assert.equal(alg.correct, true);
+  assert.equal(alg.probabilistic, true, 'agreement at sampled points is not presented as proof');
+  // T09 a missing constant of integration is not a complete answer.
+  const noC = math('x^3/3', 'x^3/3 + C', { mathEquivalence: 'algebraic' });
+  assert.equal(noC.correct, false);
+  assert.ok(noC.diagnostics.includes('missing-constant'));
+  // T10 domain-sensitive forms are not blindly equal.
+  for (const eq of ['notation', 'algebraic']) {
+    assert.equal(math('x', 'sqrt(x^2)', { mathEquivalence: eq }).correct, false);
+    assert.equal(math('2ln(x)', 'ln(x^2)', { mathEquivalence: eq }).correct, false);
+  }
+  assert.equal(math('abs(x)', 'sqrt(x^2)', { mathEquivalence: 'algebraic' }).correct, true);
+  // T11 chemistry identity: charge, subscript, element case.
+  const chem = (t, e) => matchAnswer(t, [e], { mode: 'chem' });
+  assert.equal(chem('NH4', 'NH4^+').correct, false);
+  assert.equal(chem('NH4+', 'NH4^+').correct, true);
+  assert.equal(chem('SO4^-', 'SO4^2-').correct, false);
+  assert.equal(chem('SO3^2-', 'SO4^2-').correct, false);
+  assert.equal(chem('Co', 'CO').correct, false);
+  assert.equal(chem('4H2 + 2O2 -> 4H2O', '2H2 + O2 -> 2H2O').correct, false, 'coefficients must match the accepted equation');
+  // T12 numeric tolerance and exact spelling work within their documented scope.
+  assert.equal(math('3.14', '3.14159', { numericTolerance: '1%' }).correct, true);
+  assert.equal(math('3.14', '3.14159', { numericTolerance: '0.0001' }).correct, false);
+  assert.equal(matchAnswer('Pariss', ['Paris'], { mode: 'text' }).typoTolerated, true);
+  assert.equal(matchAnswer('Pariss', ['Paris'], { mode: 'text', typoTolerance: 'off' }).correct, false);
+  assert.equal(matchAnswer('paris', ['Paris'], { mode: 'text', caseSensitive: true }).correct, false);
+});

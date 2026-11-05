@@ -48,11 +48,16 @@ Update this list in the same commit as the work.
       1–5 ratings shown as "after feedback (older versions)"; session
       summary counts "recalled on your own" and "answered with help";
       research report warns when a study mixes grading policies.
-- [ ] 7. Persistence checks: double submit, reload during commit, storage
-      failure, backup round trip of the new fields, legacy events stay
-      "unknown".
-- [ ] 8. Docs: README, REQUIREMENTS.md, `docs/chunk-1-report.md` (final
-      handoff per section 17 of the prompt).
+- [x] 7. Persistence checks: double submit and reload during a self-check
+      (B:grading), storage failure (B:storage, existing), backup round trip
+      of the new fields and legacy events staying "unknown" (U:backup).
+      Perf spec re-run: no regression.
+- [x] 8. Docs: README (grading, study screen, statistics), REQUIREMENTS.md
+      (Chunk 1 table T01–T45), `docs/chunk-1-report.md` (section 17
+      handoff).
+
+Chunk 1 is complete on this branch. Not merged to `main`, not deployed.
+Remaining: a real-device pass on iPad with Apple Pencil (see the report).
 
 ### Merged since the plan was first written
 

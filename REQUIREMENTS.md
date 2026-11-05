@@ -112,7 +112,7 @@ study materials.
 | Accuracy dominates; no reward for fast guessing; never Easy for shortness; typo ≠ Easy; conservative with few samples | `gradeReview` | P2 | U:fluency "accuracy dominates", "Easy needs history and consistency", "typo-tolerated answers never get Easy" | ✅ |
 | Configurable, explainable thresholds | `DEFAULT_GRADING_CONFIG`; Settings → Grading; "Why this grade?" | P2 | U:fluency "every grade stores reasons, explanation, confidence and versions" | ✅ |
 | Raw measurements stored apart from the grade | event `grading.measurements.raw/adjusted` | P2 | U:review, U:fluency | ✅ |
-| "I knew that" / "I guessed" | `planOverride` kinds `knew`/`guessed` | P2 | U:review "“I knew that” and “I guessed” are explicit overrides" | ✅ |
+| "Took effort" / "It was easy" / "I guessed without remembering" (replaces the ambiguous "I knew that"; Chunk 1) | `planOverride` kinds `manual`/`guessed`, study `override('effort'\|'guessed')` | P2 | U:outcome "I guessed … effort ratings"; B:grading corrections | ✅ |
 | Manual grading mode | Settings → Grading mode; manual buttons | P2 | U:review "manual grading uses the chosen rating and keeps Axon’s grade as a shadow" | ✅ |
 | Wrong answer: show correct answer, highlight differences, retype once (with bypass), record Again, copying ≠ recall, requeue | `study.js` feedback/retype; `diff.js`; `review.js` | P2/P3 | U:review "a wrong answer records Again … and requeues"; U:match "diff highlights …"; B:flows (retype + bypass) | ✅ |
 | Inferred grade → FSRS rating; state only via scheduler | `applyRating` | P2 | U:review "correct answers update FSRS state through the scheduler only" | ✅ |
@@ -250,7 +250,7 @@ study materials.
 | Inspect repo first; preserve existing code and data | ✅ (repository was empty) |
 | Complete README (setup, imports, scheduling, offline, deployment, backup, Gist sync) | ✅ `README.md` |
 | Explain grading methodology and limitations | ✅ README "How grading works" |
-| Run all automated tests | ✅ 213 unit + 49 browser tests pass (see README "Testing") |
+| Run all automated tests | ✅ 233 unit + 54 browser tests pass (see README "Testing"; perf spec run separately) |
 | Verify it runs as a static GitHub Pages site | ✅ locally under `/AxonSRS/`. Live site still serves `main` (29 Oct 2026, `axon-v5`): Pages source is that branch, not the default branch. Retargeting it is a Settings change the Pages API refused (403) |
 | Commit and push to `main` | ✅ pushed (verified with `git push`) |
 | Report features, tests, deployment, limitations | ✅ README and delivery report |
@@ -264,12 +264,12 @@ study materials.
 | Dynamic per-review modality detection (keys, pointer, viewport) | `classifyModality`, trial signals | U:fluency modality test | ✅ |
 | Deterministic, retention-safe fuzz for intervals > 7 days | `fuzzInterval` (`axon-fuzz@1`) | U:scheduler fuzz tests (3) | ✅ |
 | Leech detection (≥ 4 lapses, high difficulty), badges in review and browser, edit/hint/suspend actions | `isLeech`, unit `leech`, `leechActions` | U:review leech test; U:stats; B:study "leech cards offer one-click fixes" | ✅ |
-| "Mark Correct & Save as Alias" (one click/shortcut, appends alias, bypasses retype, records correct with original metrics) | `override('alias')`, Alt+A | U:review alias rescue; B:flows | ✅ |
+| Correcting an evaluator error and accepting an alternative are separate (Chunk 1): "My answer is correct" (Alt+C) corrects this review once, keeping real help; "Also accept this answer next time" (Alt+A) edits the card only | `override('correct')`, `acceptAlias` | U:outcome T31/T32; B:flows "My answer is correct …" | ✅ |
 | Live maths/chemistry preview above the input | `livePreviewHtml` | screenshots | ☑️ |
 | Sign, charge and +C diagnostics | `match/math.js`, `chem.js`, `DIAGNOSTIC_LABELS` | U:match "maths diagnostics: sign error, missing +C"; U:review charge-sign | ✅ |
 | Toolbar presets (general/maths/chemistry/custom, auto by mode) | `TOOLBAR_PRESETS` | B:study toolbar (chemistry preset) | ✅ |
 | Inline in-session editing (E / Alt+E / icon) without losing place | `edit()` | B:flows "editing the current card mid-session" | ✅ |
-| Hint field caps the grade; cloze syntax `{{c1::…}}` and `{{…}}` | `cloze.js`, hint ceiling | U:fluency hint ceiling; U:cloze (8 tests) | ✅ |
+| A hint before answering makes the review practice with help (Again, once; Chunk 1 policy); cloze syntax `{{c1::…}}` and `{{…}}` | `cloze.js`, `assessOutcome` | U:outcome T13/T16; B:grading; U:cloze (8 tests) | ✅ |
 | `navigator.storage.persist()` with status and quota in Settings | `AxonStore.requestPersistence/storageStatus` | B:storage "persistence denied or unsupported" | ✅ |
 | `.nojekyll`; hash routing (no 404 on refresh) | `.nojekyll`, `router.js` | U:paths; B:offline deep link `#/stats` cold start | ✅ |
 | Gzip before AES-GCM; truncated Gist files via `raw_url` | `compress.js`, `GistClient.fileContent` | U:sync compression and truncation tests; B:data uses raw_url | ✅ |
@@ -283,7 +283,7 @@ study materials.
 | 16.1 Explanation / worked solution; viewing before answering counts as assistance; in editing, import, backup, sync | `explanation` field, `solutionViewed` | U:fluency "solution-viewed answers are Again"; U:backup round trip | ✅ |
 | 16.2 Grade, confidence, reason codes, explanation, rule version, config, raw vs adjusted, exclusions stored; "Why this grade?" | `gradeReview` output, feedback disclosure | U:fluency "every grade stores …" | ✅ |
 | 16.2 Unreliable/unknown/insufficient → Good (correct) / Again (incorrect); assistance rules apply separately; reveal = Again; hint ceiling; no Easy for guesses; "I knew that" is an override; confidence not presented as calibrated | `gradeReview`, `overrideGrade` | U:fluency (unreliable timing, overrides, hints) | ✅ |
-| 16.2 Optional 1–5 confidence self-rating, stored separately | feedback confidence buttons, `self-rating` event | U:stats exposure breakdown includes it | ✅ |
+| 16.2 Optional confidence, stored separately: now Guessing / Unsure / Confident before checking (pre-feedback, Chunk 1); older 1–5 post-feedback ratings kept and labelled | `renderConfidence`, `event.outcome.confidence`, `self-rating` events | U:outcome T03/T04; U:stats T27; B:grading T25/T26 | ✅ |
 | 16.2 Reading/warm-up: labelled heuristic, clamped ≥ 0, versioned, bounded, never alone Easy, conservative for complex prompts, can be disabled | `adjustMeasurements`, `heuristicsEnabled` | U:fluency reading-floor and warm-up tests | ✅ |
 | 16.2 Modality: unknown allowed, confidence stored, user override, ambiguous samples excluded, minimum sample count, copying/reveal/interrupted excluded | `classifyModality`, `modalityOverride`, `calibrationSample` | U:fluency "calibration samples exclude …" | ✅ |
 | 16.2 Fuzz exactly once (library fuzz off), original/chosen/seed recorded, bounds documented and tested | `applyRating` transition record | U:scheduler | ✅ |
@@ -294,7 +294,7 @@ study materials.
 | 16.4 Exam plans (date, decks/tags, budget, coverage, weak/unintroduced, workload, feasibility warning, observed vs predicted, no guarantees, schedule untouched, exposure recorded) | `planner.analyzeExamPlan`, `views/plans.js` | U:stats "exam plans report coverage, weak items, workload and a feasibility warning without changing schedules" | ✅ (logic) / ☑️ (UI) |
 | 16.5 Atomic review commit (event + state + calibration + queue), unique id, idempotent, retryable on failure | `store.commitReview` | B:storage "a failed review transaction saves nothing … retries exactly once" | ✅ |
 | 16.5 Audit history; amendments as linked correction events | `correction` events | U:review; B:flows | ✅ |
-| 16.5 Alias rescue: right side, bypass retype, replace failure once, remove requeue, consistent stats/calibration, original metrics, override visible | `planOverride` | U:review alias rescue; B:flows | ✅ |
+| 16.5 Evaluator correction: bypass retype, replace failure once, remove requeue, consistent stats/calibration, original metrics, override visible; alias added only on request | `planOverride`, `acceptAlias` | U:review; U:outcome; B:flows | ✅ |
 | 16.5 Structured aliases, pipe/backslash escaping | `aliases.js` | U:aliases | ✅ |
 | 16.5 Undo consistent; dependent reviews reconciled by replay; alias removal separate; formatting vs substantive edits; preserve-or-reset choice; revisions kept; timing paused in editor | `planUndo`, `classifyEdit`, `revisions` store | U:review undo; U:history reset events; B:flows | ✅ |
 | 16.6 Event history authoritative, schedules derived and rebuildable; device ids, seq, parent refs, versions, parameters | `history.js` | U:history (8 tests); B:perf verifies all schedules | ✅ |
@@ -373,3 +373,30 @@ study materials.
 | Anki-compatible export (front, back, tags, deck, scheduling note) with documented limits vs `.apkg` | `core/anki.js`, Settings → Data | U:backup "Anki export preserves front, back (with aliases), tags, deck and scheduling notes" | ✅ |
 | Leech actions in statistics and card browser (edit, hint, suspend, related practice card) | `leechActions` | B:study "leech cards offer one-click fixes" | ✅ |
 | All optional, non-blocking, offline | — | B:offline | ✅ |
+
+## Chunk 1 — trustworthy answers, learning evidence and grading
+
+Plan and handoff: [`docs/chunk-1-plan.md`](docs/chunk-1-plan.md). Test ids
+are the acceptance matrix of the Chunk 1 prompt (§14). U = unit
+(`tests/unit/`), B = browser (`tests/browser/`).
+
+| Tests | What | Where | Status |
+| --- | --- | --- | --- |
+| T01–T04 | correct, wrong, unsure, guess | U:outcome; B:grading | ✅ |
+| T05–T06 | unresolved answers; notation repair keeps independence | U:outcome; B:grading | ✅ |
+| T07 | after feedback, changes are corrections or copies, never the first response | B:session (retype), B:flows | ✅ |
+| T08–T12 | maths equivalence, `+ C`, `sqrt(x^2)`, chemistry charge/case, tolerance | U:outcome "T08–T12"; U:match | ✅ |
+| T13–T16, T19 | hint, explanation after commit, reveal / I don't know, repeated taps, skip | U:outcome; B:grading | ✅ |
+| T17–T18 | copying, later success keeps the first failure | U:outcome T02; B:session | ✅ |
+| T20 | new cards vs delayed reviews | U:outcome; U:stats T43; B:grading | ✅ |
+| T21–T24 | blank ink, ink frozen before the answer, no editing of the assessed ink, self-checked label | B:session, B:pencil, B:grading | ✅ |
+| T25–T27 | confidence before feedback, unset stays unknown, legacy ratings apart | B:grading; U:stats | ✅ |
+| T28–T30 | slow, interrupted or uncertain input never fails | U:outcome | ✅ |
+| T31–T33, T36 | evaluator correction once, help kept, alias separate, older corrections replayed | U:outcome; U:review; B:flows | ✅ |
+| T34–T35 | undo restores schedule and queue; the answer stays seen (retry is practice) | B:flows | ✅ |
+| T37–T39 | double submit, reload during a check, storage failure | B:grading; B:storage | ✅ |
+| T40–T41 | legacy data stays unknown; backup keeps evidence, policy and corrections | U:backup | ✅ |
+| T42–T43 | recall denominator; new vs delayed | U:stats | ✅ |
+| T44–T45 | research arms record their policy; practice modes unchanged | U:outcome; B:flows (cram) | ✅ |
+| Real device | Apple Pencil, palm, iPad keyboard, interruption recovery on iPadOS | not run (no device in this environment) | ⚠️ |
+

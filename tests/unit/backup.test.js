@@ -130,3 +130,31 @@ test('Anki export preserves front, back (with aliases), tags, deck and schedulin
   assert.equal(count, 2);
   assert.equal(skipped.length, 1);
 });
+
+test('T40/T41 a backup keeps outcome evidence, the grading policy and correction links; older reviews stay "unknown"', async () => {
+  const { correctionIndex, outcome } = await import('../../js/core/stats.js');
+  const data = dataset();
+  const review = {
+    id: 'e2', type: 'review', ts: 2, deviceId: 'dev', seq: 2, unitId: 'c1:fwd', cardId: 'c1', rating: 1, params: schedulerParams(),
+    response: { text: 'SO4^2', correct: false, unresolved: false }, assistance: { hintShown: true, priorExposure: false },
+    outcome: { v: 'axon-outcomes@2', class: 'assisted', independent: false, evaluation: 'incorrect', provenance: 'evaluator', retrieval: 'unknown', confidence: 'unsure', confidenceTiming: 'pre-feedback', phase: 'review', reason: 'ASSISTED_HINT', policy: 'standard@2', rating: 1 },
+    grading: { policy: 'standard@2', grade: 1, timingGrade: 3, mode: 'auto' },
+  };
+  const fix = { id: 'k2', type: 'correction', kind: 'override', reason: 'correct', targetId: 'e2', ts: 3, deviceId: 'dev', seq: 3, unitId: 'c1:fwd', newRating: 1, outcome: { v: 'axon-outcomes@2', class: 'assisted', independent: false, reason: 'CORRECTED', provenance: 'user-correction' } };
+  data.events.push(review, fix);
+  const res = readBackup(JSON.parse(JSON.stringify(buildBackup(data, { deviceId: 'dev' }))));
+  assert.ok(res.ok);
+  const back = res.dataset.events.find((e) => e.id === 'e2');
+  assert.deepEqual(back.outcome, review.outcome, 'all outcome evidence survives');
+  assert.equal(back.grading.policy, 'standard@2');
+  assert.equal(back.grading.timingGrade, 3);
+  const c = res.dataset.events.find((e) => e.id === 'k2');
+  assert.equal(c.targetId, 'e2');
+  assert.equal(c.outcome.provenance, 'user-correction');
+  const corr = correctionIndex(res.dataset.events);
+  assert.deepEqual([outcome(back, corr).correct, outcome(back, corr).independent], [true, false], 'corrected, still with help');
+  // The older review in the same backup has no outcome: it stays legacy, with nothing invented.
+  const legacy = res.dataset.events.find((e) => e.id === 'e1');
+  assert.equal(legacy.outcome, undefined);
+  assert.equal(outcome(legacy, corr).legacy, true);
+});

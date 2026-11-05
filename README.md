@@ -1,11 +1,12 @@
 # Axon — adaptive spaced repetition
 
 Axon is an offline-first, typed-answer flashcard app (a Progressive Web App).
-You type every answer; Axon checks it with matchers built for plain text,
-mathematics and chemistry, and **infers the review grade from how you
-answered**: accuracy first, then retrieval latency, typing fluency and your
-own history. Scheduling uses the FSRS memory model. Most of the time you
-never press Again/Hard/Good/Easy.
+Practice recalling answers by typing or writing. Axon checks supported typed
+answers with matchers built for plain text, mathematics and chemistry; for
+handwritten work you compare your response with the solution and assess it
+yourself. Every answer keeps its evidence (correct or not, who judged it, any
+help used, how sure you were) separately from the FSRS grade, and reviews are
+scheduled with the FSRS memory model to help you remember over time.
 
 - **Live site:** <https://russellambriz.github.io/AxonSRS/> (after GitHub Pages
   is enabled, see [Deploying](#deploying-to-github-pages))
@@ -190,21 +191,43 @@ import leaves no partial cards and appears on the Recovery screen.
   (optional auto-advance after correct answers, Settings → Study). Holding
   Enter never submits *and* advances, and Enter while an input method
   (IME) is composing never submits.
-- Feedback shows the correct answer, your answer with the differences
-  highlighted, a timing breakdown (first key, typing, total), the next
-  interval and an optional **Why this grade?** disclosure.
+- Before checking you can say how sure you are: **Guessing**, **Unsure** or
+  **Confident** (optional; leaving it unset is fine and is never read as
+  confident). It is stored with the review as pre-feedback confidence.
+  *Guessing* means you are choosing an answer without remembering it, so the
+  answer is not counted as recall even if it matches.
+- Feedback shows a clear outcome (**Correct**, **Not quite**, **Answered
+  with help**, **Answer revealed**, **New card — study the answer**,
+  **Guessed, not counted as recalled**, **Needs your check**), the correct
+  answer and your answer with the differences highlighted. Timing, the
+  grading policy and reason codes sit inside the optional **Why this grade?**
+  disclosure.
+- **Needs your check**: when Axon cannot read an answer (for example `2x+`
+  in maths or `NH4)+` in chemistry) nothing is graded and the answer stays
+  hidden. **Edit answer** lets you fix the notation (still your first,
+  independent attempt; its timing is not used), or **Compare with the
+  answer** shows it and you check your answer yourself.
 - **Wrong answer** → recorded as Again; you retype the correct answer once
-  (accessibility bypass: *Skip retyping*, `Alt+B`). Copying it is logged as
-  copying, never as recall. The card returns later in the session.
-- **Mark correct & save as alias** (`Alt+A`): when you typed a valid synonym
-  or notation, this adds what you typed as an accepted answer, skips retyping,
-  and replaces the failed review with a correct one exactly once, using the
-  original timing.
-- **I knew that** / **I guessed** (`Alt+K` / `Alt+G`) correct a misleading
-  automatic grade; both are stored as explicit overrides.
+  (accessibility bypass: *Skip retyping*, `Alt+B`). This helps you review
+  the answer; it is logged as copying and never counts as independent recall.
+  The card returns later in the session.
+- **My answer is correct** (`Alt+C`): the evaluator got it wrong. The
+  original answer and verdict are kept and a linked correction updates this
+  review exactly once (no second review). Help you really used still counts
+  as help. Then **Also accept this answer next time** (`Alt+A`) is a separate,
+  explicit change to the card; it never rewrites past reviews.
+- After a correct answer recalled on your own: **Took effort** (Hard), **It
+  was easy** (Easy, `Alt+K`) or **I guessed without remembering** (Again,
+  `Alt+G`). One correction per review.
 - **Undo** (`Alt+Z`) reverses the last review's schedule, statistics and queue
-  effects. Aliases you added are removed separately.
-- **Skip**, **Reveal** (counts as Again), **Hint**, **Worked solution**,
+  effects. You have seen the answer, so the card comes back as practice
+  ("Practice · answer seen") rather than as an unseen test. Aliases you
+  added are removed separately.
+- **I don't know** (`Alt+R`; **Show answer** on a new card) shows the answer
+  and records that it was not recalled. **Skip** records no outcome at all.
+- **Hint** and **Worked solution** before answering make the card practice
+  with help (Again, once, however many times you tap).
+- **Skip**, **I don't know**, **Hint**, **Worked solution**,
   **Edit** (`Alt+E`; timing pauses and the review is flagged), **Read aloud**,
   **Voice input** and **Pause** are all one key away. See
   [Shortcuts](#keyboard-shortcuts).
@@ -214,8 +237,6 @@ import leaves no partial cards and appears on the Recovery screen.
   keeps focus.
 - **Live preview**: in maths and chemistry modes your typing is rendered
   above the input, so a misplaced parenthesis is visible before you submit.
-- **Optional confidence rating** (1–5) after feedback. It is stored
-  separately and never required.
 - **Read aloud** uses the browser's speech synthesis. Built-in system voices
   usually work offline (Safari on iOS/macOS, most Android voices once
   downloaded); some Chrome voices need a connection.
@@ -388,8 +409,39 @@ and ended; completed reviews are already saved.
 
 ## How grading works
 
-Axon Retrieval Fluency, `axon-fluency@1.1.0` (Layer B), turns each answer into
-an FSRS rating.
+### Outcome policy (`axon-outcomes@2`, `js/core/outcome.js`)
+
+One rule turns the evidence of every answer, typed or handwritten, into an
+FSRS rating. Correctness, who judged it, help used before answering, your
+retrieval report and confidence are stored separately from the grade
+(`event.outcome`), with the policy that produced it (`event.grading.policy`).
+
+| Situation (scheduled review) | Recorded as |
+| --- | --- |
+| Correct, on your own (any confidence except Guessing) | **Good**; Hard or Easy only when you choose them (manual mode, "Took effort", "It was easy") or under the experimental response-time policy |
+| Not correct | **Again**, a failed first attempt; later success in the session does not replace it |
+| Guessing before checking, or "I guessed without remembering" | **Again**, even if the literal answer matched |
+| Hint or worked solution before answering | **Again** ("Answered with help"), once per card |
+| "I don't know" / answer shown before answering | **Again**; on a new card this is first learning, not a lapse |
+| Answer Axon cannot read | not graded until you edit it or check it yourself |
+| Handwritten answer | you check it (Not correct / Correct on my own / I needed help or saw the answer); labelled self-checked |
+| Copying the correct answer, skipping | logged, never a grade |
+
+Mapping help to Again is a conservative, versioned product rule for this
+release, not a claim that every hint has the same effect on memory. Low
+confidence alone never turns a correct answer into a failure. Reading the
+prompt aloud and other accessibility aids are not help. Practice modes keep
+their own scheduling setting. Reviews recorded before this policy keep the
+rule they were recorded under (corrections to them too).
+
+### Response-time grades (experimental, off by default)
+
+Settings → Grading → *Grades from response time (experimental)*. When on,
+and in the research comparison's automatic arm, Axon Retrieval Fluency,
+`axon-fluency@1.1.0` (Layer B), may move an independent correct answer to
+Hard or Easy. The heuristics below are documented as heuristics, not proven
+memory boundaries. Help, reveals and guesses are Again whatever the timing
+says; the engine's own grade is always stored as `grading.timingGrade`.
 
 **1. Accuracy decides first.** Incorrect, revealed, or answered after
 viewing the worked solution → **Again**. Nothing about speed can rescue a
@@ -445,9 +497,9 @@ slower than usual; and the answer still counts as fast when only **half** of
 the reading allowance is subtracted. So the reading heuristic alone can never
 produce Easy.
 
-**6. Caps and fallbacks.** A hint caps the grade (Good by default). A
-typo-tolerated answer can't be Easy. "I guessed" gives Hard (configurable to
-Again), never Easy. If timing is unreliable (hidden tab, long idle gap,
+**6. Caps and fallbacks.** Help before answering is Again under the outcome
+policy (the engine's own hint cap only matters for its stored timing
+grade). A typo-tolerated answer can't be Easy. "I guessed" is Again. If timing is unreliable (hidden tab, long idle gap,
 editor opened, clock jump, paste/autofill, unknown or low-confidence modality,
 anticipatory answer < 120 ms, unreliable reading estimate), a correct answer
 is **Good**. Uncertain timing never upgrades assisted recall.
@@ -459,10 +511,11 @@ explanation, the rule version and the configuration used, and which
 measurements were excluded and why. The confidence value is a heuristic,
 **not a calibrated probability**, and is labelled as such.
 
-**Manual mode** (Settings → Grading) shows Again/Hard/Good/Easy buttons
-after a correct answer and stores Axon's automatic grade alongside as a
-shadow, for accessibility or comparison. A wrong answer is always **Again**,
-in manual mode too. The time spent choosing a self-grade is recorded
+**Manual mode** (Settings → Grading) asks how a correct answer felt (*Took
+effort* = Hard, *Remembered* = Good, *Easy*, or *I guessed without
+remembering* = Again) and stores what Axon would have recorded as a shadow,
+for accessibility or comparison. A wrong or assisted answer is always
+**Again**, in manual mode too. The time spent choosing a self-grade is recorded
 separately from answer time.
 
 **Voice** answers are detected from speech-recognition input even when the
@@ -527,6 +580,20 @@ Rules applied throughout:
   retrievability** (what the model estimates).
 - **First-attempt accuracy** is separate from **eventual success** after
   retries.
+- **Observed recall** is "recalled on your own, first attempt of each
+  scheduled review". Its denominator is every completed first assessment:
+  answers with help, after "I don't know" or a reveal, and genuine guesses
+  stay in it as not recalled, so hard cards don't drop out of the figure.
+  Skips and unanswered attempts are counted separately and never as a
+  success or a failure. New cards' first tests are shown apart from delayed
+  reviews (learning, not retention), and "accuracy among attempts made
+  without help" is shown as a labelled conditional figure, not as retention.
+  Self-checked answers (handwriting, uncheckable answers) are counted and
+  labelled as such. Older reviews recorded before confidence and guesses
+  were captured are marked: those facts are unknown for them.
+- **Confidence before checking** (Guessing / Unsure / Confident) is reported
+  against what happened. Ratings from older versions (1–5, given after
+  feedback) are shown separately as post-feedback ratings.
 - **Hinted, revealed, overridden and independent** answers are counted
   separately. Copying the correct answer never counts as recall.
 - Delayed tests preceded by optional practice or sibling-answer exposure are
@@ -748,10 +815,10 @@ Customise them in Settings → Input & keyboard (conflicts are rejected).
 | Submit / continue | Enter |
 | Leave the answer field (so single keys work) / back to it | Esc |
 | Edit current card | Alt+E or E |
-| Hint · Reveal (counts as Again) · Skip | Alt+H / H · Alt+R / R · Alt+S / S |
+| Hint · I don't know (shows the answer) · Skip | Alt+H / H · Alt+R / R · Alt+S / S |
 | Undo last review | Alt+Z or U |
-| Mark correct & save as alias · Mark correct (no alias) | Alt+A / A · Alt+C / C |
-| I knew that · I guessed | Alt+K / K · Alt+G / G |
+| Also accept this answer next time · My answer is correct | Alt+A / A · Alt+C / C |
+| It was easy · I guessed without remembering | Alt+K / K · Alt+G / G |
 | Skip retyping (accessibility) | Alt+B or B |
 | Worked solution · Why this grade? | Alt+W / W · Alt+Y / Y |
 | Read aloud · Voice input · Pause session | Alt+T / T · Alt+M / M · Alt+P / P |
@@ -795,8 +862,8 @@ Day-to-day reviews write one event each.
 ## Testing
 
 ```bash
-npm test               # 213 unit tests (node --test), ~4 s
-npm run test:browser   # 49 browser tests (Playwright + Chromium)
+npm test               # 233 unit tests (node --test), ~5 s
+npm run test:browser   # 54 browser tests (Playwright + Chromium)
 npm run check          # pre-cache list is current + unit tests
 ```
 
