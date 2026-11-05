@@ -1,7 +1,7 @@
 // Handwriting geometry: smoothing, pressure/tilt width, predicted samples, eraser hits.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { strokeWidth, pencilFlatness, smoothStroke, paintSamples, stabilizeStroke, ribbonPolygon, ribbonEdges, centerlineCovered, smoothingLevel, splitPointerSamples, strokeHits, eraseStrokes, ERASER_RADIUS, pointWidth, undoInkAction, redoInkAction } from '../../js/core/ink.js';
+import { strokeWidth, pencilFlatness, smoothStroke, paintSamples, stabilizeStroke, ribbonPolygon, ribbonEdges, centerlineCovered, smoothingLevel, splitPointerSamples, strokeHits, eraseStrokes, ERASER_RADIUS, pointWidth, undoInkAction, redoInkAction, ghostPlacement, isPalmTouch } from '../../js/core/ink.js';
 
 const pt = (x, y, p = 0.5, extra = {}) => ({ x, y, p, ...extra });
 
@@ -151,6 +151,47 @@ test('a tight loop stays covered, so the stroke cannot go hollow between samples
   const samples = paintSamples(raw, 'medium');
   assert.equal(centerlineCovered(samples), true);
   assert.ok(samples.length > raw.length);
+});
+
+test('a fast sparse stroke stays finely sampled and covered, and the saved points stay put', () => {
+  const raw = [pt(0, 0, 0.2), pt(180, 40, 0.95), pt(40, 120, 0.25, { tiltX: 20 })];
+  const snapshot = raw.map((p) => ({ ...p }));
+  const samples = paintSamples(raw, 'medium');
+  assert.deepEqual(raw, snapshot, 'gap filling is a render step');
+  let maxStep = 0;
+  for (let i = 1; i < samples.length; i++) {
+    maxStep = Math.max(maxStep, Math.hypot(samples[i].x - samples[i - 1].x, samples[i].y - samples[i - 1].y));
+  }
+  assert.ok(maxStep <= 1.15, `sample step ${maxStep.toFixed(2)}px would facet a fast stroke`);
+  assert.equal(centerlineCovered(samples), true);
+  assert.equal(samples[0].x, 0);
+  assert.equal(samples[0].y, 0);
+  assert.equal(samples.at(-1).x, 40);
+  assert.equal(samples.at(-1).y, 120);
+  assert.ok(samples.length > 80, 'long gaps are filled in the drawn line');
+});
+
+test('the trace sits at the size it was written, and only shrinks to fit the page', () => {
+  const small = ghostPlacement({ imageWidth: 120, imageHeight: 48, padWidth: 700, padHeight: 280, dpr: 1 });
+  assert.equal(small.w, 120);
+  assert.equal(small.h, 48);
+  assert.ok(Math.abs(small.x + small.w / 2 - 350) < 0.01, 'centered');
+  assert.ok(small.y < (280 - 48) / 2, 'a little above the middle, where the pencil starts');
+  const retina = ghostPlacement({ imageWidth: 400, imageHeight: 160, padWidth: 700, padHeight: 280, dpr: 2 });
+  assert.equal(retina.w, 200, 'device pixels are not treated as CSS pixels');
+  const huge = ghostPlacement({ imageWidth: 2000, imageHeight: 800, padWidth: 400, padHeight: 300, dpr: 1 });
+  assert.ok(huge.w <= 400 * 0.84 + 0.01 && huge.h <= 300 * 0.84 + 0.01);
+  assert.equal(ghostPlacement({ imageWidth: 0, imageHeight: 10, padWidth: 10, padHeight: 10 }), null);
+});
+
+test('a palm-sized touch or a second finger is ignored, and one finger is not', () => {
+  assert.equal(isPalmTouch({ pointerType: 'touch', width: 120, height: 40, isPrimary: true }), true);
+  assert.equal(isPalmTouch({ pointerType: 'touch', width: 20, height: 90, isPrimary: true }), true);
+  assert.equal(isPalmTouch({ pointerType: 'touch', width: 24, height: 24, isPrimary: false }), true);
+  assert.equal(isPalmTouch({ pointerType: 'touch', width: 24, height: 24, isPrimary: true }), false);
+  assert.equal(isPalmTouch({ pointerType: 'pen', width: 140, height: 140, isPrimary: true }), false);
+  assert.equal(isPalmTouch({ pointerType: 'mouse', isPrimary: false }), false);
+  assert.equal(isPalmTouch(null), false);
 });
 
 test('predicted samples are a tail and coalesced movement is kept', () => {

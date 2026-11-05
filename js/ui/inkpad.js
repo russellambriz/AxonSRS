@@ -3,7 +3,9 @@
  * finger or a mouse. Nothing is recognised; the ink is shown back next to
  * the correct answer so the learner can grade it. Once a pen has touched
  * the pad on this device, finger and palm touches are ignored from then
- * on, including the first stroke of a later session. Settings → Study →
+ * on, including the first stroke of a later session. A palm-sized touch
+ * or a second finger is ignored even before that, so a resting hand does
+ * not start a stroke; one finger still writes. Settings → Study →
  * Pencil only ignores every touch even before a pen is seen. While a pen
  * stroke is down, every other pointer is ignored. Eraser removes each
  * whole stroke it touches, so Undo stroke can put that stroke back.
@@ -18,7 +20,7 @@
 import { h } from './dom.js';
 import { icon } from './icons.js';
 import { local } from './local.js';
-import { eraseStrokes, ERASER_RADIUS, paintSamples, pointWidth, redoInkAction, SMOOTHING_LEVELS, smoothingLevel, splitPointerSamples, undoInkAction } from '../core/ink.js';
+import { eraseStrokes, ERASER_RADIUS, ghostPlacement, isPalmTouch, paintSamples, pointWidth, redoInkAction, SMOOTHING_LEVELS, smoothingLevel, splitPointerSamples, undoInkAction } from '../core/ink.js';
 
 const HINT = 'Write your answer, then check it';
 /** Set after a pen has touched a pad on this device. */
@@ -95,12 +97,12 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
   const eraserBtn = tools ? h('button', { class: 'btn small ghost', type: 'button', 'aria-pressed': 'false', onclick: () => setEraser(!erasing) }, icon('eraser'), 'Eraser') : null;
   const clearBtn = tools ? h('button', { class: 'btn small ghost', type: 'button', disabled: true, onclick: () => clear() }, icon('trash'), 'Clear') : null;
   const hintEl = tools ? h('span', { class: 'faint small ink-hint' }, HINT) : null;
-  const el = h('div', { class: 'ink-pad', dataset: { predicted: '0', hover: '0', penSeen: penSeen ? '1' : '0' } }, stage, tools ? h('div', { class: 'ink-tools' }, hintEl, h('div', { class: 'row tight' }, undoBtn, eraserBtn, clearBtn)) : null);
+  const el = h('div', { class: 'ink-pad', dataset: { predicted: '0', hover: '0', penSeen: penSeen ? '1' : '0', ghost: '0' } }, stage, tools ? h('div', { class: 'ink-tools' }, hintEl, h('div', { class: 'row tight' }, undoBtn, eraserBtn, clearBtn)) : null);
 
-  /** Touch is ignored after a pen has been used here, or whenever Pencil only is on. Any second pointer is ignored while a stroke — a pen stroke in particular — is active. */
+  /** Touch is ignored after a pen has been used here, whenever Pencil only is on, or when the contact is a palm or an extra finger. Any second pointer is ignored while a stroke — a pen stroke in particular — is active. */
   function ignored(e) {
     if (current && e.pointerId !== current.id) return true;
-    if (e.pointerType === 'touch' && (penSeen || pencilOnly())) return true;
+    if (e.pointerType === 'touch' && (penSeen || pencilOnly() || isPalmTouch(e))) return true;
     return false;
   }
 
@@ -193,6 +195,9 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
   let plateMediaId = null;
   let plateUrl = null;
   let ghost = null;
+  /** Full model on an empty page; a whisper once ink is down. Not stored. */
+  let ghostShown = 0;
+  let omitGhost = false;
 
   function drawPlate() {
     if (!plate) return;
@@ -207,23 +212,34 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     ctx.drawImage(plate, (r.width - w) / 2, (r.height - h) / 2, w, h);
   }
 
+  function writingNow() {
+    return strokes.length > 0 || queued.length > 0 || !!current?.stroke;
+  }
+
+  function syncGhost() {
+    const writing = writingNow();
+    ghostShown = !ghost ? 0 : writing ? 0.16 : 0.62;
+    el.dataset.ghost = !ghost ? '0' : writing ? 'lift' : '1';
+  }
+
   function drawGhost() {
-    if (!ghost) return;
+    if (!ghost || omitGhost || ghostShown < 0.01) return;
     const r = canvas.getBoundingClientRect();
     const iw = ghost.naturalWidth || ghost.width;
     const ih = ghost.naturalHeight || ghost.height;
-    if (!r.width || !r.height || !iw || !ih) return;
-    const scale = Math.min((r.width * 0.92) / iw, (r.height * 0.92) / ih);
-    const w = iw * scale;
-    const h = ih * scale;
+    const place = ghostPlacement({ imageWidth: iw, imageHeight: ih, padWidth: r.width, padHeight: r.height, dpr });
+    if (!place) return;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     ctx.save();
-    ctx.globalAlpha = 0.9;
-    ctx.drawImage(ghost, (r.width - w) / 2, (r.height - h) / 2, w, h);
+    ctx.globalAlpha = ghostShown;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = 'high';
+    ctx.drawImage(ghost, place.x, place.y, place.w, place.h);
     ctx.restore();
   }
 
   function redraw() {
+    syncGhost();
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     ctx.clearRect(0, 0, canvas.width, canvas.height);
     if (!canvas.width || !canvas.height) return;
@@ -421,18 +437,24 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
       update();
       return;
     }
-    const stroke = { pts: [pointerFrom(e)], color: pen.color };
+    // Coalesced history on the down event, in order, so a fast stroke does
+    // not start as one dot and then a jump. The predicted tail is not stored.
+    const { real, tail } = ingest(e);
+    const stroke = { pts: real.length ? real : [pointerFrom(e)], color: pen.color };
     strokes.push(stroke);
     current = { id: e.pointerId, type: e.pointerType, stroke };
     queued = [];
-    setPredicted([]);
+    setPredicted(tail);
     update();
     redraw();
     onStroke(e);
   });
 
   canvas.addEventListener('pointermove', (e) => {
-    if (ignored(e)) return;
+    if (ignored(e)) {
+      if (e.pointerType === 'touch') e.preventDefault();
+      return;
+    }
     if (current?.erasing) {
       if (e.pointerId !== current.id) return;
       e.preventDefault();
@@ -529,7 +551,12 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     plateId: () => plateMediaId,
     /** Show a saved drawing under new strokes. `url` is revoked when replaced. */
     setPlate,
-    /** Faint model to trace. Not a stroke, so Clear and Done still see an empty pad. */
+    /**
+     * Faint model to trace. Not a stroke, so Clear and Done still see an
+     * empty pad. The model is full while the page is empty and lifts as
+     * soon as ink lands, so the new stroke is the mark. Undo or Clear
+     * back to an empty page brings it back.
+     */
     setGhost(image) {
       ghost = image || null;
       redraw();
@@ -557,7 +584,13 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
       const saved = predicted;
       setPredicted([]);
       cancelFrame();
+      omitGhost = true;
       redraw();
+      omitGhost = false;
+      const restoreOverlay = () => {
+        if (current && saved.length) setPredicted(saved);
+        if (ghost || (current && saved.length)) redraw();
+      };
       if (plate && strokes.length) {
         const out = document.createElement('canvas');
         out.width = canvas.width;
@@ -570,15 +603,12 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
         o.fillRect(0, 0, out.width, out.height);
       }
       o.drawImage(canvas, 0, 0);
-        if (current && saved.length) {
-          setPredicted(saved);
-          redraw();
-        }
+        restoreOverlay();
         const r = canvas.getBoundingClientRect();
         return { src: out.toDataURL('image/png'), width: Math.round(r.width), height: Math.round(r.height) };
       }
       if (!strokes.length) {
-        if (saved.length) setPredicted(saved);
+        restoreOverlay();
         return null;
       }
       const all = strokes.flatMap((s) => s.pts);
@@ -598,10 +628,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
         o.fillRect(0, 0, out.width, out.height);
       }
       o.drawImage(canvas, x0 * dpr, y0 * dpr, out.width, out.height, 0, 0, out.width, out.height);
-      if (current && saved.length) {
-        setPredicted(saved);
-        redraw();
-      }
+      restoreOverlay();
       return { src: out.toDataURL('image/png'), width: Math.round(x1 - x0), height: Math.round(y1 - y0) };
     },
   };

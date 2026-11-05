@@ -530,6 +530,40 @@ export const tests = [
         for (let i = 3; i < data.length; i += 8) if (data[i] > m) m = data[i];
         return m > 24 && c.dataset.strokes === '0';
       });
+      const fitted = await page.evaluate(() => {
+        const c = document.querySelector('.ink-canvas');
+        const r = c.getBoundingClientRect();
+        const dpr = c.width / r.width;
+        const { data, width, height } = c.getContext('2d').getImageData(0, 0, c.width, c.height);
+        let minX = width;
+        let maxX = 0;
+        let minY = height;
+        let maxY = 0;
+        for (let y = 0; y < height; y += 2) {
+          for (let x = 0; x < width; x += 2) {
+            if (data[(y * width + x) * 4 + 3] > 24) {
+              if (x < minX) minX = x;
+              if (x > maxX) maxX = x;
+              if (y < minY) minY = y;
+              if (y > maxY) maxY = y;
+            }
+          }
+        }
+        return {
+          w: (maxX - minX) / dpr,
+          cx: ((minX + maxX) / 2) / dpr,
+          padW: r.width,
+          ghost: c.closest('.ink-pad').dataset.ghost,
+        };
+      });
+      assert.equal(fitted.ghost, '1', 'the model is on the empty page');
+      assert.ok(fitted.w < fitted.padW * 0.5, `the model stays near the size it was written (${fitted.w.toFixed(0)}px on a ${fitted.padW.toFixed(0)}px pad)`);
+      assert.ok(Math.abs(fitted.cx - fitted.padW / 2) < fitted.padW * 0.12, 'the model sits in the writing area');
+      await stroke(page, { id: 8, dy: 20 });
+      assert.equal(await page.getAttribute('.ink-pad', 'data-ghost'), 'lift', 'ink lifts the model so the new stroke is the mark');
+      await page.getByRole('button', { name: 'Undo stroke' }).click();
+      assert.equal(await page.getAttribute('.ink-canvas', 'data-strokes'), '0');
+      assert.equal(await page.getAttribute('.ink-pad', 'data-ghost'), '1', 'undoing back to an empty page brings the model back');
       await stroke(page, { id: 8, dy: 20 });
       await page.getByRole('button', { name: 'Done' }).click();
       assert.equal(await waitPhase(page, ['question', 'done']), 'question', 'a miss comes back later; the trace was not a second review');
@@ -537,6 +571,43 @@ export const tests = [
       assert.equal(events.filter((e) => e.type === 'review').length, 1);
       assert.equal(events.filter((e) => e.type === 'copy' && !e.bypassed).length, 1);
       assert.equal(events.find((e) => e.type === 'review').response.method, 'self');
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
+  {
+    name: 'a palm-sized touch or a second finger does not start a stroke, and one finger still does',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser, { viewport: { width: 820, height: 1180 }, hasTouch: true });
+      const page = await openApp(ctx, url);
+      await seedDeck(page, { cards: [['Palm', 'size']] });
+      await startReview(page);
+      await page.getByRole('button', { name: 'Write' }).click();
+      await page.locator('.ink-canvas').waitFor();
+      const touch = (extra) => page.evaluate((opts) => {
+        const c = document.querySelector('.ink-canvas');
+        const r = c.getBoundingClientRect();
+        const fire = (name, x) => c.dispatchEvent(new PointerEvent(name, {
+          pointerType: 'touch',
+          pointerId: opts.id,
+          isPrimary: opts.primary,
+          width: opts.w,
+          height: opts.h,
+          clientX: r.left + x,
+          clientY: r.top + 40,
+          pressure: name === 'pointerup' ? 0 : 0.5,
+          buttons: name === 'pointerup' ? 0 : 1,
+          bubbles: true,
+          cancelable: true,
+        }));
+        fire('pointerdown', 24);
+        fire('pointermove', 70);
+        fire('pointerup', 70);
+        return c.dataset.strokes;
+      }, extra);
+      assert.equal(await touch({ id: 2, primary: true, w: 140, h: 90 }), '0', 'a palm-sized contact is ignored before any pen');
+      assert.equal(await touch({ id: 3, primary: false, w: 18, h: 18 }), '0', 'a second finger is ignored');
+      assert.equal(await touch({ id: 4, primary: true, w: 16, h: 16 }), '1', 'one finger still writes');
       assertNoErrors(page);
       await ctx.close();
     },

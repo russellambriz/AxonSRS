@@ -1788,10 +1788,13 @@ function traceImage(blob) {
       for (let i = 0; i < d.length; i += 4) {
         const lum = (d[i] + d[i + 1] + d[i + 2]) / 3;
         const ink = Math.max(0, Math.min(1, (236 - lum) / 150));
-        d[i] = 28;
-        d[i + 1] = 25;
-        d[i + 2] = 23;
-        d[i + 3] = Math.round(ink * 210);
+        // Soft graphite wash: paper drops out, and the stroke eases in
+        // so the model reads as a guide rather than a second copy of the ink.
+        const wash = ink * ink * (3 - 2 * ink);
+        d[i] = 58;
+        d[i + 1] = 52;
+        d[i + 2] = 46;
+        d[i + 3] = Math.round(wash * 168);
       }
       g.putImageData(frame, 0, 0);
       URL.revokeObjectURL(url);
