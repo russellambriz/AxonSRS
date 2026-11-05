@@ -257,7 +257,10 @@ import leaves no partial cards and appears on the Recovery screen.
     number, and leaning in still thickens the stroke; a reported pressure
     of 0 stays light, so a stroke can taper as the pencil lifts. Each
     bit of the stroke is a round disc joined to the next, so a loop stays
-    solid instead of the fill punching a hole.
+    solid instead of the fill punching a hole. Fast strokes keep every
+    coalesced sample, and a long gap is filled only while the ink is drawn,
+    so the discs stay close and a quick flick does not facet. The saved
+    points stay as the pencil reported them.
     **Smoothing** (Off, Low, Medium, High) is on the pen row in Create with
     Pencil and the card editor, and under Settings → Study. Medium is the
     default. It steadies the line and the width when the ink is drawn. The
@@ -268,7 +271,10 @@ import leaves no partial cards and appears on the Recovery screen.
     twist only nudges that. A short predicted tail keeps the ink near the tip
     and is replaced as real samples arrive. It works with Apple Pencil,
     including hover on Pencil Pro and other hover-capable iPads (a small dot
-    shows where the tip will land), any stylus, a finger or a mouse. Once a
+    shows where the tip will land), any stylus, a finger or a mouse. A
+    palm-sized touch, or a second finger, does not start a stroke, so a
+    resting hand is ignored even before a pencil has been seen; one finger
+    still writes. Once a
     pencil has touched the pad on this device, palm and finger touches are
     ignored from the first stroke of later sessions. **Settings → Study →
     Pencil only** ignores every touch even before that. While a pencil stroke
@@ -280,8 +286,10 @@ import leaves no partial cards and appears on the Recovery screen.
     the first stroke. These answers are self-judged, so they never calibrate
     timing and are left out of research comparisons. A wrong one asks you to
     **write the correct answer once** (or **Skip retyping**). When the answer
-    itself is handwriting, that writing appears faintly on the pad so you
-    can trace it. That is the
+    itself is handwriting, that writing appears on the pad as a faint
+    graphite wash, at the size it was written, in the middle of the page.
+    The moment your pencil lays down ink, the model lifts so the new stroke
+    is the mark; undo or clear back to an empty page and it returns. That is the
     same copy event as retyping, never a second review, and it follows
     Settings → Study → Retype after a mistake. The review ink is shown only
     during feedback and is not saved or synced. **Type** switches back; the
@@ -869,8 +877,8 @@ Day-to-day reviews write one event each.
 ## Testing
 
 ```bash
-npm test               # 237 unit tests (node --test), ~5 s
-npm run test:browser   # 56 browser tests (Playwright + Chromium)
+npm test               # 240 unit tests (node --test), ~5 s
+npm run test:browser   # 57 browser tests (Playwright + Chromium)
 npm run check          # pre-cache list is current + unit tests
 ```
 
@@ -905,8 +913,10 @@ committed).
   unchanged); two-device
   sync through a mocked Gist API;   responsive layout at 1280, 834, 390 and
   320 px (light and dark) with checks for horizontal scroll, unnamed controls
-  and touch-target size; handwriting smoothing, hover, palm rejection,
-  eraser, wide ink layout, the copy step after a missed ink answer, a
+  and touch-target size; handwriting smoothing, hover, palm rejection
+  (including a palm-sized touch and a second finger), eraser, wide ink
+  layout, the copy step after a missed ink answer (faint model, lift on
+  the first stroke, undo brings it back), a
   sketch inserted from the card editor, the Create with Pencil studio
   (draw, undo, redo, save and next, landscape and 320px), saved cards
   opened from the studio (thumbnails, flip, swipe, edit, delete and undo), an ink-only
@@ -929,7 +939,7 @@ installation prompts, speech recognition and system TTS voices are
 
 | Component | Version | Notes |
 | --- | --- | --- |
-| App | 1.0.14 | cache `axon-v15` |
+| App | 1.0.15 | cache `axon-v16` |
 | Scheduler | ts-fsrs 5.4.2 (FSRS-6, default parameters) + `axon-fuzz@1` | reference-checked against py-fsrs 6.3.2 |
 | Grading rules | `axon-fluency@1.1.0` | thresholds above; recorded on every review |
 | Reading/warm-up heuristic | `axon-reading@2` | can be disabled |
