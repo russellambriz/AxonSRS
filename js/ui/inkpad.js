@@ -18,7 +18,7 @@
 import { h } from './dom.js';
 import { icon } from './icons.js';
 import { local } from './local.js';
-import { eraseStrokes, ERASER_RADIUS, paintSamples, pointWidth, redoInkAction, ribbonEdges, SMOOTHING_LEVELS, smoothingLevel, splitPointerSamples, undoInkAction } from '../core/ink.js';
+import { eraseStrokes, ERASER_RADIUS, paintSamples, pointWidth, redoInkAction, SMOOTHING_LEVELS, smoothingLevel, splitPointerSamples, undoInkAction } from '../core/ink.js';
 
 const HINT = 'Write your answer, then check it';
 /** Set after a pen has touched a pad on this device. */
@@ -156,74 +156,34 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     ctx.lineJoin = 'round';
   }
 
-  function fillDot(sample) {
-    ctx.beginPath();
-    ctx.arc(sample.x, sample.y, Math.max(0.8, sample.w / 2), 0, Math.PI * 2);
-    ctx.fill();
-  }
-
-  function curveThrough(points) {
-    if (points.length < 2) return;
-    if (points.length === 2) {
-      ctx.lineTo(points[1].x, points[1].y);
-      return;
-    }
-    for (let i = 1; i < points.length - 1; i++) {
-      const mx = (points[i].x + points[i + 1].x) / 2;
-      const my = (points[i].y + points[i + 1].y) / 2;
-      ctx.quadraticCurveTo(points[i].x, points[i].y, mx, my);
-    }
-    const a = points[points.length - 2];
-    const b = points[points.length - 1];
-    ctx.quadraticCurveTo(a.x, a.y, b.x, b.y);
-  }
-
-  function normAngle(a) {
-    const t = Math.PI * 2;
-    a %= t;
-    return a < 0 ? a + t : a;
-  }
-
-  /** Canvas arc flag: true when the anticlockwise sweep passes nearest `through`. */
-  function arcAnticlockwise(from, to, through) {
-    const cw = (normAngle(to) - normAngle(from) + Math.PI * 2) % (Math.PI * 2);
-    const mid = (delta) => normAngle(from + delta);
-    const dist = (a, b) => {
-      const d = Math.abs(normAngle(a) - normAngle(b));
-      return Math.min(d, Math.PI * 2 - d);
-    };
-    const throughN = normAngle(through);
-    const cwMid = mid(cw / 2);
-    const ccwMid = mid(-(Math.PI * 2 - cw) / 2);
-    return dist(ccwMid, throughN) < dist(cwMid, throughN);
-  }
-
-  function capArc(center, hw, fromPt, toPt, dir) {
-    const a0 = Math.atan2(fromPt.y - center.y, fromPt.x - center.x);
-    const a1 = Math.atan2(toPt.y - center.y, toPt.x - center.x);
-    const through = Math.atan2(dir.dy, dir.dx);
-    ctx.arc(center.x, center.y, hw, a0, a1, arcAnticlockwise(a0, a1, through));
-  }
-
   function drawPoints(pts) {
     const samples = paintSamples(pts, smoothingId);
     if (!samples.length) return;
-    if (samples.length === 1) {
-      fillDot(samples[0]);
-      return;
-    }
-    const edges = ribbonEdges(samples);
-    if (!edges) return;
-    const { left, right, tangents, start, end } = edges;
-    const endT = tangents[tangents.length - 1];
-    const startT = tangents[0];
+    // One outline around the whole stroke self-intersects on a loop (o, e, s)
+    // and the fill then punches holes. Each disc and each link is its own
+    // subpath, all wound the same way, so the union stays solid. Live ink,
+    // the stroke after lift, and the PNG copy this same canvas.
     ctx.beginPath();
-    ctx.moveTo(left[0].x, left[0].y);
-    curveThrough(left);
-    capArc(end, Math.max(0.8, end.w / 2), left[left.length - 1], right[right.length - 1], endT);
-    curveThrough(right.slice().reverse());
-    capArc(start, Math.max(0.8, start.w / 2), right[0], left[0], { dx: -startT.dx, dy: -startT.dy });
-    ctx.closePath();
+    for (let i = 0; i < samples.length; i++) {
+      const s = samples[i];
+      const r = Math.max(0.8, s.w / 2);
+      ctx.moveTo(s.x + r, s.y);
+      ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+      if (i === 0) continue;
+      const p = samples[i - 1];
+      const dx = s.x - p.x;
+      const dy = s.y - p.y;
+      const len = Math.hypot(dx, dy);
+      if (len < 0.01) continue;
+      const nx = -dy / len;
+      const ny = dx / len;
+      const r0 = Math.max(0.8, p.w / 2);
+      ctx.moveTo(p.x + nx * r0, p.y + ny * r0);
+      ctx.lineTo(s.x + nx * r, s.y + ny * r);
+      ctx.lineTo(s.x - nx * r, s.y - ny * r);
+      ctx.lineTo(p.x - nx * r0, p.y - ny * r0);
+      ctx.closePath();
+    }
     ctx.fill();
   }
 

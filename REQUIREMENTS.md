@@ -250,7 +250,7 @@ study materials.
 | Inspect repo first; preserve existing code and data | ✅ (repository was empty) |
 | Complete README (setup, imports, scheduling, offline, deployment, backup, Gist sync) | ✅ `README.md` |
 | Explain grading methodology and limitations | ✅ README "How grading works" |
-| Run all automated tests | ✅ 235 unit + 54 browser tests pass (see README "Testing"; perf spec run separately) |
+| Run all automated tests | ✅ 236 unit + 55 browser tests pass (see README "Testing"; perf spec run separately) |
 | Verify it runs as a static GitHub Pages site | ✅ locally under `/AxonSRS/`. Pages publishes `claude/axonsrs-github-pages-setup-43lha6` since 4 Nov 2026; release 1.0.9 (`axon-v10`) built from it on 5 Nov 2026, with `main` at the same commit. The live URL itself cannot be opened from this environment |
 | Commit and push to `main` | ✅ pushed (verified with `git push`) |
 | Report features, tests, deployment, limitations | ✅ README and delivery report |

@@ -339,6 +339,23 @@ export function segmentSamples(seg) {
  * `smoothing` steadies the points used to draw. Stored points are unchanged.
  * The default is Medium.
  */
+/**
+ * True when neighbouring samples' discs overlap, so a round-stamp stroke
+ * cannot leave a hole between them. A single ribbon outline is not used:
+ * it self-intersects on a loop and the fill goes hollow.
+ */
+export function centerlineCovered(samples) {
+  const list = samples || [];
+  for (let i = 1; i < list.length; i++) {
+    const a = list[i - 1];
+    const b = list[i];
+    const dist = Math.hypot(b.x - a.x, b.y - a.y);
+    const cover = Math.max(0.8, a.w / 2) + Math.max(0.8, b.w / 2);
+    if (dist > cover + 0.05) return false;
+  }
+  return true;
+}
+
 export function paintSamples(points, smoothing = 'medium') {
   const stable = stabilizeStroke(points, smoothing);
   const out = [];

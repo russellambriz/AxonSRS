@@ -1,7 +1,7 @@
 // Handwriting geometry: smoothing, pressure/tilt width, predicted samples, eraser hits.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { strokeWidth, pencilFlatness, smoothStroke, paintSamples, stabilizeStroke, ribbonPolygon, ribbonEdges, smoothingLevel, splitPointerSamples, strokeHits, eraseStrokes, ERASER_RADIUS, pointWidth, undoInkAction, redoInkAction } from '../../js/core/ink.js';
+import { strokeWidth, pencilFlatness, smoothStroke, paintSamples, stabilizeStroke, ribbonPolygon, ribbonEdges, centerlineCovered, smoothingLevel, splitPointerSamples, strokeHits, eraseStrokes, ERASER_RADIUS, pointWidth, undoInkAction, redoInkAction } from '../../js/core/ink.js';
 
 const pt = (x, y, p = 0.5, extra = {}) => ({ x, y, p, ...extra });
 
@@ -133,6 +133,17 @@ test('a pencil curve is sampled finely and its edge does not kink', () => {
   }
   assert.ok(maxTurn < Math.PI / 3, `edge kink of ${maxTurn.toFixed(2)} rad`);
   assert.notEqual(JSON.stringify(raw[3]), JSON.stringify(stabilizeStroke(raw, 'medium')[3] || raw[3]));
+});
+
+test('a tight loop stays covered, so the stroke cannot go hollow between samples', () => {
+  const raw = [];
+  for (let i = 0; i <= 28; i++) {
+    const a = (i / 28) * Math.PI * 2;
+    raw.push(pt(Math.cos(a) * 16, Math.sin(a) * 16, 0.4));
+  }
+  const samples = paintSamples(raw, 'medium');
+  assert.equal(centerlineCovered(samples), true);
+  assert.ok(samples.length > raw.length);
 });
 
 test('predicted samples are a tail and coalesced movement is kept', () => {
