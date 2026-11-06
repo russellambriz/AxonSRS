@@ -15,12 +15,19 @@
  * draws a tail that the next frame replaces — it is never stored.
  * A pen hovering above the pad (buttons === 0) shows a preview dot; a
  * finger or a mouse never does.
+ *
+ * Write Mode lifts the same pad over the viewport, inside the safe area.
+ * Leaving it puts the pad back where it was. Strokes, the undo and redo
+ * stacks, and the tool in hand are not rebuilt. Apple Pencil Pro squeeze,
+ * barrel roll, double-tap and haptics are not used.
  */
 
 import { h } from './dom.js';
 import { icon } from './icons.js';
 import { local } from './local.js';
+import { announce, reducedMotion } from './appearance.js';
 import { eraseStrokes, ERASER_RADIUS, ghostPlacement, isPalmTouch, paintSamples, pointWidth, redoInkAction, SMOOTHING_LEVELS, smoothingLevel, splitPointerSamples, undoInkAction } from '../core/ink.js';
+import { chromeOnPointer, contentPoint, createWriteSession, PROMPT_HOLD_MS, writeModeControlEnabled } from './writemode.js';
 
 const HINT = 'Write your answer, then check it';
 /** Set after a pen has touched a pad on this device. */
@@ -30,6 +37,53 @@ export const PENCIL_ONLY_KEY = 'axon-pencil-only';
 /** Per device. Off, low, medium (default) or high. Render only. */
 export const SMOOTHING_KEY = 'axon-ink-smoothing';
 const SMOOTHING_EVENT = 'axon-ink-smoothing';
+/** Settings → Study. '0' hides the Write Mode button. Anything else shows it. */
+export const WRITE_MODE_KEY = 'axon-write-mode-control';
+const WRITE_MODE_EVENT = 'axon-write-mode-control';
+const WRITE_MODE_CHANGE = 'axon-write-mode';
+
+/** Only one pad is fullscreen at a time. */
+let closeCurrentWrite = null;
+
+export function writeModeControlOn() {
+  return writeModeControlEnabled(local.get(WRITE_MODE_KEY));
+}
+
+export function setWriteModeControl(on) {
+  local.set(WRITE_MODE_KEY, on ? '1' : '0');
+  window.dispatchEvent(new CustomEvent(WRITE_MODE_EVENT));
+  return writeModeControlOn();
+}
+
+/** The Write Mode button. `getPad` is read on click, so the pad can be built later. */
+export function createWriteModeButton(getPad) {
+  const btn = h('button', {
+    type: 'button',
+    class: 'btn ghost icon write-mode-btn',
+    'aria-label': 'Write Mode',
+    title: 'Write Mode',
+    'aria-pressed': 'false',
+    onclick: () => getPad()?.toggleWrite(),
+  }, icon('expand'));
+  const sync = () => {
+    const pad = getPad();
+    btn.hidden = !writeModeControlOn();
+    btn.setAttribute('aria-pressed', pad?.isWriting() ? 'true' : 'false');
+  };
+  const onPref = () => {
+    if (!btn.isConnected) {
+      window.removeEventListener(WRITE_MODE_EVENT, onPref);
+      window.removeEventListener(WRITE_MODE_CHANGE, sync);
+      return;
+    }
+    if (!writeModeControlOn()) getPad()?.exitWrite();
+    sync();
+  };
+  window.addEventListener(WRITE_MODE_EVENT, onPref);
+  window.addEventListener(WRITE_MODE_CHANGE, sync);
+  sync();
+  return btn;
+}
 
 export function inkSmoothing() {
   return smoothingLevel(local.get(SMOOTHING_KEY)).id;
@@ -71,7 +125,7 @@ function pencilOnly() {
   return local.get(PENCIL_ONLY_KEY) === '1';
 }
 
-export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = {}) {
+export function inkPad({ onStroke = () => {}, onChange = null, tools = true, promptEl = null } = {}) {
   const canvas = h('canvas', { class: 'ink-canvas', role: 'img', 'aria-label': 'Handwriting pad. Write your answer with Apple Pencil, a stylus or a finger.', dataset: { strokes: '0', points: '0' } });
   const overlay = h('canvas', { class: 'ink-overlay', 'aria-hidden': 'true' });
   const ctx = canvas.getContext('2d');
@@ -92,12 +146,19 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
   let hover = null;
   let rafId = 0;
   let smoothingId = inkSmoothing();
+  /** Content space. Identity until a view zoom or pan is set; Write Mode restores the previous one. */
+  const view = { zoom: 1, panX: 0, panY: 0 };
+  const session = createWriteSession({ view, strokes, history, redo: redoStack });
+  let api = null;
 
   const undoBtn = tools ? h('button', { class: 'btn small ghost', type: 'button', disabled: true, onclick: () => undo() }, icon('undo'), 'Undo stroke') : null;
   const eraserBtn = tools ? h('button', { class: 'btn small ghost', type: 'button', 'aria-pressed': 'false', onclick: () => setEraser(!erasing) }, icon('eraser'), 'Eraser') : null;
   const clearBtn = tools ? h('button', { class: 'btn small ghost', type: 'button', disabled: true, onclick: () => clear() }, icon('trash'), 'Clear') : null;
   const hintEl = tools ? h('span', { class: 'faint small ink-hint' }, HINT) : null;
-  const el = h('div', { class: 'ink-pad', dataset: { predicted: '0', hover: '0', penSeen: penSeen ? '1' : '0', ghost: '0' } }, stage, tools ? h('div', { class: 'ink-tools' }, hintEl, h('div', { class: 'row tight' }, undoBtn, eraserBtn, clearBtn)) : null);
+  const writeBtn = tools ? createWriteModeButton(() => api) : null;
+  const toolsRow = tools ? h('div', { class: 'ink-tools' }, hintEl, h('div', { class: 'row tight' }, undoBtn, eraserBtn, clearBtn, writeBtn)) : null;
+  const el = h('div', { class: 'ink-pad', dataset: { predicted: '0', hover: '0', penSeen: penSeen ? '1' : '0', ghost: '0', write: '0' } }, stage, toolsRow);
+  let chromeTarget = toolsRow;
 
   /** Touch is ignored after a pen has been used here, whenever Pencil only is on, or when the contact is a palm or an extra finger. Any second pointer is ignored while a stroke — a pen stroke in particular — is active. */
   function ignored(e) {
@@ -133,9 +194,10 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
 
   function pointerFrom(e) {
     const r = canvas.getBoundingClientRect();
+    const mapped = contentPoint({ x: e.clientX, y: e.clientY }, r, view);
     const pt = {
-      x: e.clientX - r.left,
-      y: e.clientY - r.top,
+      x: mapped.x,
+      y: mapped.y,
       // A real 0 from the pencil is a light touch, not “missing”. Coercing it
       // to 0.5 made every stroke start and end blunt.
       p: e.pointerType === 'pen' ? (typeof e.pressure === 'number' ? e.pressure : 0.5) : 0.5,
@@ -151,8 +213,13 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     return pt;
   }
 
+  function viewTransform(context) {
+    const z = view.zoom > 0 ? view.zoom : 1;
+    context.setTransform(dpr * z, 0, 0, dpr * z, dpr * (view.panX || 0), dpr * (view.panY || 0));
+  }
+
   function applyInk(color) {
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    viewTransform(ctx);
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = 'high';
     ctx.strokeStyle = ctx.fillStyle = color || getComputedStyle(canvas).color;
@@ -160,19 +227,19 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     ctx.lineJoin = 'round';
   }
 
-  function drawPoints(pts) {
+  function drawPoints(pts, context = ctx) {
     const samples = paintSamples(pts, smoothingId);
     if (!samples.length) return;
     // One outline around the whole stroke self-intersects on a loop (o, e, s)
     // and the fill then punches holes. Each disc and each link is its own
     // subpath, all wound the same way, so the union stays solid. Live ink,
     // the stroke after lift, and the PNG copy this same canvas.
-    ctx.beginPath();
+    context.beginPath();
     for (let i = 0; i < samples.length; i++) {
       const s = samples[i];
       const r = Math.max(0.8, s.w / 2);
-      ctx.moveTo(s.x + r, s.y);
-      ctx.arc(s.x, s.y, r, 0, Math.PI * 2);
+      context.moveTo(s.x + r, s.y);
+      context.arc(s.x, s.y, r, 0, Math.PI * 2);
       if (i === 0) continue;
       const p = samples[i - 1];
       const dx = s.x - p.x;
@@ -182,13 +249,13 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
       const nx = -dy / len;
       const ny = dx / len;
       const r0 = Math.max(0.8, p.w / 2);
-      ctx.moveTo(p.x + nx * r0, p.y + ny * r0);
-      ctx.lineTo(s.x + nx * r, s.y + ny * r);
-      ctx.lineTo(s.x - nx * r, s.y - ny * r);
-      ctx.lineTo(p.x - nx * r0, p.y - ny * r0);
-      ctx.closePath();
+      context.moveTo(p.x + nx * r0, p.y + ny * r0);
+      context.lineTo(s.x + nx * r, s.y + ny * r);
+      context.lineTo(s.x - nx * r, s.y - ny * r);
+      context.lineTo(p.x - nx * r0, p.y - ny * r0);
+      context.closePath();
     }
-    ctx.fill();
+    context.fill();
   }
 
   let plate = null;
@@ -351,7 +418,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     octx.setTransform(1, 0, 0, 1, 0, 0);
     octx.clearRect(0, 0, overlay.width, overlay.height);
     if (!overlay.width) return;
-    octx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    viewTransform(octx);
     octx.fillStyle = (erasing ? null : pen.color) || getComputedStyle(canvas).color;
     if (erasing && eraserAt) {
       octx.globalAlpha = 0.18;
@@ -433,6 +500,8 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     if (erasing) {
       eraseLog = [];
       current = { id: e.pointerId, type: e.pointerType, erasing: true };
+      noteWriting();
+      hideChromeFor(e);
       eraseWith(e);
       update();
       return;
@@ -447,6 +516,8 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     setPredicted(tail);
     update();
     redraw();
+    noteWriting();
+    hideChromeFor(e);
     onStroke(e);
   });
 
@@ -483,6 +554,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
 
   const end = (e) => {
     if (!current || e.pointerId !== current.id) return;
+    const lift = chromeOnPointer({ type: e.pointerType, phase: e.type === 'pointercancel' ? 'cancel' : 'up', buttons: 0, reducedMotion: reducedMotion() });
     if (current.erasing) {
       eraseWith(e);
       if (eraseLog?.length) remember({ kind: 'erase', items: eraseLog });
@@ -492,6 +564,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
       drawOverlay();
       redraw();
       update();
+      scheduleChrome(lift);
       return;
     }
     const finished = current.stroke;
@@ -504,6 +577,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     remember({ kind: 'add', stroke: finished });
     redraw();
     update();
+    scheduleChrome(lift);
   };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
@@ -540,9 +614,248 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     redraw();
     drawOverlay();
     update();
+    if (open) showPrompt();
   }
 
-  return {
+  /* -------------------------------------------------------- write mode */
+
+  let open = false;
+  let writeLayer = null;
+  let anchor = null;
+  let promptNode = null;
+  let promptHome = null;
+  let promptNext = null;
+  let chromeHome = null;
+  let chromeNext = null;
+  let scrollSnap = null;
+  let chromeTimer = 0;
+  let promptTimer = 0;
+  let onKey = null;
+  let removeObserver = null;
+  const edgeBtn = h('button', { type: 'button', class: 'write-edge', 'aria-label': 'Show the question', hidden: true, onclick: () => showPrompt() });
+  const doneBtn = h('button', { type: 'button', class: 'btn primary write-done', 'aria-label': 'Done', onclick: () => exitWrite() }, 'Done');
+  const handleBtn = h('button', { type: 'button', class: 'write-handle', 'aria-label': 'Show writing tools', onclick: () => showChrome() }, h('span', { class: 'write-grab', 'aria-hidden': 'true' }));
+
+  function currentPrompt() {
+    const value = typeof promptEl === 'function' ? promptEl() : promptEl;
+    return value && value.nodeType === 1 ? value : null;
+  }
+
+  function emitWrite() {
+    window.dispatchEvent(new CustomEvent(WRITE_MODE_CHANGE));
+  }
+
+  function captureScrolls() {
+    const scrolls = [];
+    const seen = new Set();
+    const take = (node) => {
+      if (!node || node.nodeType !== 1 || seen.has(node)) return;
+      seen.add(node);
+      scrolls.push({ node, top: node.scrollTop || 0, left: node.scrollLeft || 0 });
+    };
+    take(document.scrollingElement);
+    document.querySelectorAll('.study-stage, .pencil-body, .pencil-stage, .sheet-body').forEach((node) => take(node));
+    let n = el.parentElement;
+    while (n) {
+      take(n);
+      n = n.parentElement;
+    }
+    return { scrollX: window.scrollX || 0, scrollY: window.scrollY || 0, scrolls };
+  }
+
+  function restoreScroll() {
+    if (!scrollSnap) return;
+    for (const s of scrollSnap.scrolls) {
+      if (s.node?.isConnected) {
+        s.node.scrollTop = s.top;
+        s.node.scrollLeft = s.left;
+      }
+    }
+    window.scrollTo(scrollSnap.scrollX, scrollSnap.scrollY);
+  }
+
+  function showPrompt() {
+    if (!open || !writeLayer || !promptNode) return;
+    clearTimeout(promptTimer);
+    promptTimer = 0;
+    writeLayer.dataset.prompt = 'shown';
+    edgeBtn.hidden = true;
+  }
+
+  function collapsePrompt() {
+    if (!open || !writeLayer || !promptNode) return;
+    writeLayer.dataset.prompt = 'collapsed';
+    edgeBtn.hidden = false;
+  }
+
+  function noteWriting() {
+    if (!open || !writeLayer || writeLayer.dataset.prompt !== 'shown' || promptTimer) return;
+    promptTimer = setTimeout(() => {
+      promptTimer = 0;
+      collapsePrompt();
+    }, PROMPT_HOLD_MS);
+  }
+
+  function showChrome() {
+    if (!open || !writeLayer) return;
+    clearTimeout(chromeTimer);
+    chromeTimer = 0;
+    writeLayer.dataset.chrome = 'shown';
+  }
+
+  function hideChromeFor(e) {
+    if (!open || !writeLayer) return;
+    const plan = chromeOnPointer({ type: e.pointerType, phase: 'down', buttons: e.buttons, reducedMotion: reducedMotion() });
+    if (plan?.chrome !== 'hidden') return;
+    clearTimeout(chromeTimer);
+    chromeTimer = 0;
+    writeLayer.dataset.chrome = 'hidden';
+  }
+
+  function scheduleChrome(plan) {
+    if (!open || !writeLayer || !plan) return;
+    clearTimeout(chromeTimer);
+    if (plan.delay <= 0) {
+      writeLayer.dataset.chrome = 'shown';
+      return;
+    }
+    chromeTimer = setTimeout(() => {
+      chromeTimer = 0;
+      if (open && writeLayer) writeLayer.dataset.chrome = 'shown';
+    }, plan.delay);
+  }
+
+  function putBack(node, home, next) {
+    if (!node || !home?.isConnected) return;
+    home.insertBefore(node, next && next.parentNode === home ? next : null);
+  }
+
+  function enterWrite() {
+    if (open || !writeModeControlOn()) return false;
+    if (closeCurrentWrite && closeCurrentWrite !== exitWrite) closeCurrentWrite();
+    if (open) return false;
+    scrollSnap = captureScrolls();
+    session.enter({
+      scrollX: scrollSnap.scrollX,
+      scrollY: scrollSnap.scrollY,
+      scrolls: scrollSnap.scrolls.map((s) => ({ top: s.top, left: s.left })),
+    });
+    const abs = getComputedStyle(el).position === 'absolute';
+    anchor = abs
+      ? document.createComment('write')
+      : h('div', { class: 'write-placeholder', 'aria-hidden': 'true', style: { height: `${Math.round(el.getBoundingClientRect().height)}px` } });
+    el.parentNode?.insertBefore(anchor, el);
+    promptNode = currentPrompt();
+    if (promptNode) {
+      promptHome = promptNode.parentNode;
+      promptNext = promptNode.nextSibling;
+    }
+    if (chromeTarget) {
+      chromeHome = chromeTarget.parentNode;
+      chromeNext = chromeTarget.nextSibling;
+    }
+    const promptStrip = h('div', { class: 'write-prompt' });
+    if (promptNode) promptStrip.append(promptNode);
+    const panel = h('div', { class: 'write-tools' }, chromeTarget, doneBtn);
+    const dock = h('div', { class: 'write-dock' }, panel, handleBtn);
+    writeLayer = h('dialog', {
+      class: ['write-overlay', el.closest('.pencil-paper') ? 'write-paper' : ''],
+      'aria-label': 'Write Mode',
+      dataset: { chrome: 'shown', prompt: promptNode ? 'shown' : 'off' },
+    }, promptStrip, el, edgeBtn, dock);
+    edgeBtn.hidden = true;
+    writeLayer.addEventListener('cancel', (e) => {
+      e.preventDefault();
+      exitWrite();
+    });
+    writeLayer.addEventListener('close', () => {
+      if (open) exitWrite();
+    });
+    open = true;
+    closeCurrentWrite = exitWrite;
+    el.dataset.write = '1';
+    try {
+      document.body.append(writeLayer);
+      writeLayer.showModal();
+    } catch {
+      exitWrite();
+      return false;
+    }
+    removeObserver?.disconnect();
+    removeObserver = new MutationObserver(() => {
+      if (open && anchor && !anchor.isConnected) exitWrite();
+    });
+    removeObserver.observe(document.body, { childList: true, subtree: true });
+    onKey = (e) => {
+      if (!open || e.key !== 'Escape') return;
+      e.preventDefault();
+      e.stopPropagation();
+      exitWrite();
+    };
+    document.addEventListener('keydown', onKey, true);
+    emitWrite();
+    requestAnimationFrame(() => { if (open) resize(); });
+    announce('Write mode. The page fills the screen. Done or Escape leaves it.');
+    return true;
+  }
+
+  function exitWrite() {
+    if (!open) return false;
+    open = false;
+    if (closeCurrentWrite === exitWrite) closeCurrentWrite = null;
+    clearTimeout(chromeTimer);
+    clearTimeout(promptTimer);
+    chromeTimer = 0;
+    promptTimer = 0;
+    session.exit();
+    removeObserver?.disconnect();
+    removeObserver = null;
+    if (onKey) document.removeEventListener('keydown', onKey, true);
+    onKey = null;
+    putBack(promptNode, promptHome, promptNext);
+    putBack(chromeTarget, chromeHome, chromeNext);
+    if (anchor?.parentNode) {
+      anchor.parentNode.insertBefore(el, anchor);
+      anchor.remove();
+    }
+    anchor = null;
+    promptNode = null;
+    promptHome = null;
+    promptNext = null;
+    chromeHome = null;
+    chromeNext = null;
+    const layer = writeLayer;
+    writeLayer = null;
+    try {
+      if (layer?.open) layer.close();
+    } catch {
+      /* closing from the dialog's own cancel event */
+    }
+    layer?.remove();
+    el.dataset.write = '0';
+    edgeBtn.hidden = true;
+    restoreScroll();
+    requestAnimationFrame(restoreScroll);
+    resize();
+    emitWrite();
+    announce('Left write mode.');
+    return true;
+  }
+
+  function toggleWrite() {
+    return open ? exitWrite() : enterWrite();
+  }
+
+  const onWritePref = () => {
+    if (!el.isConnected && !open) {
+      window.removeEventListener(WRITE_MODE_EVENT, onWritePref);
+      return;
+    }
+    if (!writeModeControlOn()) exitWrite();
+  };
+  window.addEventListener(WRITE_MODE_EVENT, onWritePref);
+
+  api = {
     el,
     canvas,
     resize,
@@ -578,6 +891,14 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     redo,
     canUndo: () => !current && history.length > 0,
     canRedo: () => !current && redoStack.length > 0,
+    /** Move an external tool row into the Write Mode edge. The study pad uses its own row. */
+    setChromeTarget(node) {
+      chromeTarget = node || null;
+    },
+    enterWrite,
+    exitWrite,
+    toggleWrite,
+    isWriting: () => open,
     /** The ink cropped to what was written: PNG data URL and size in CSS px (or null). The predicted tail is not included. `background` fills the crop (a paper sheet) so the PNG stays legible in either theme. */
     snapshot({ background = null } = {}) {
       applyQueued();
@@ -627,9 +948,29 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
         o.fillStyle = background;
         o.fillRect(0, 0, out.width, out.height);
       }
-      o.drawImage(canvas, x0 * dpr, y0 * dpr, out.width, out.height, 0, 0, out.width, out.height);
+      const r = canvas.getBoundingClientRect();
+      const outside = all.some((p) => p.x < -1 || p.y < -1 || p.x > r.width + 1 || p.y > r.height + 1);
+      if (outside) {
+        // The page was larger while writing. Paint the stored points into
+        // the crop so leaving Write Mode does not drop ink from the PNG.
+        const z = view.zoom > 0 ? view.zoom : 1;
+        o.setTransform(dpr * z, 0, 0, dpr * z, dpr * ((view.panX || 0) - x0), dpr * ((view.panY || 0) - y0));
+        o.lineCap = 'round';
+        o.lineJoin = 'round';
+        for (const s of strokes) {
+          o.strokeStyle = o.fillStyle = s.color || getComputedStyle(canvas).color;
+          drawPoints(s.pts, o);
+        }
+      } else {
+        o.drawImage(canvas, x0 * dpr, y0 * dpr, out.width, out.height, 0, 0, out.width, out.height);
+      }
       restoreOverlay();
       return { src: out.toDataURL('image/png'), width: Math.round(x1 - x0), height: Math.round(y1 - y0) };
     },
   };
+  Object.defineProperty(el, 'inkState', {
+    configurable: true,
+    value: () => ({ strokes, history, redo: redoStack, view, eraser: erasing, writing: open }),
+  });
+  return api;
 }

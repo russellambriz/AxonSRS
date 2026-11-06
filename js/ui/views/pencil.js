@@ -11,7 +11,7 @@ import { store } from '../../data/store.js';
 import { button } from './common.js';
 import { select, confirmDialog, errorToast } from '../components.js';
 import { announce } from '../appearance.js';
-import { inkPad, smoothingButtons } from '../inkpad.js';
+import { createWriteModeButton, inkPad, smoothingButtons } from '../inkpad.js';
 import { createCard } from '../../core/model.js';
 import { PAPER, PEN_COLORS, PEN_WIDTHS, composePencilCard, imageRejectReason, penColor, penWidth, splitPencilSide } from '../../core/pencil.js';
 import { pencilLibrary } from '../pencilreel.js';
@@ -113,6 +113,8 @@ export async function view(outlet, _params, query) {
   }
 
   function showSide(next) {
+    frontPad.exitWrite();
+    backPad.exitWrite();
     side = next;
     if (root) root.dataset.side = side;
     frontPad.el.hidden = side !== 'front';
@@ -318,6 +320,10 @@ export async function view(outlet, _params, query) {
     onchange: (v) => { deckId = v; library.refresh(); },
   });
 
+  const toolsEl = h('div', { class: 'pencil-tools' }, createWriteModeButton(() => active()), colorHost, widthHost, smoothingButtons(), h('span', { class: 'pencil-tool-gap' }), eraserBtn, undoBtn, redoBtn, clearBtn);
+  frontPad.setChromeTarget(toolsEl);
+  backPad.setChromeTarget(toolsEl);
+
   const root = h('div', { class: 'pencil-studio', role: 'region', 'aria-label': 'Create with Pencil' },
     h('header', { class: 'pencil-top' },
       h('button', { type: 'button', class: 'btn ghost icon', 'aria-label': 'Close', onclick: () => app.navigate(`/deck/${deckId}`) }, icon('x')),
@@ -330,7 +336,7 @@ export async function view(outlet, _params, query) {
       h('div', { class: 'pencil-stage' },
         h('div', { class: 'pencil-paper' }, frontPad.el, backPad.el, ghostEl),
         noteEl,
-        h('div', { class: 'pencil-tools' }, colorHost, widthHost, smoothingButtons(), h('span', { class: 'pencil-tool-gap' }), eraserBtn, undoBtn, redoBtn, clearBtn)),
+        toolsEl),
       h('aside', { class: 'pencil-panel', 'aria-label': 'Text' },
         h('div', { class: 'pencil-kinds', role: 'group', 'aria-label': 'How the answer is stored' }, handBtn, typeBtn),
         h('label', { class: 'pencil-field' }, h('span', {}, 'Prompt text ', h('span', { class: 'faint' }, 'optional')), promptInput),
@@ -348,6 +354,8 @@ export async function view(outlet, _params, query) {
 
   return {
     destroy() {
+      frontPad.exitWrite();
+      backPad.exitWrite();
       document.body.classList.remove('penciling');
       app.leaveGuard = null;
       library.destroy();

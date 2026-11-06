@@ -1286,6 +1286,169 @@ body.studying, body.penciling { overflow: hidden; }
   .ink-pad:not(.sheet) .ink-stage { height: clamp(120px, 24dvh, 260px); }
 }
 .ink-tools { display: flex; justify-content: space-between; align-items: center; gap: 8px; flex-wrap: wrap; min-width: 0; }
+/* Write Mode: the same pad, fixed to the viewport inside the safe area.
+   Tools sit on the bottom edge and the question is a glass strip. */
+dialog.write-overlay {
+  position: fixed;
+  top: env(safe-area-inset-top, 0px);
+  right: env(safe-area-inset-right, 0px);
+  bottom: env(safe-area-inset-bottom, 0px);
+  left: env(safe-area-inset-left, 0px);
+  width: auto;
+  height: auto;
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: hidden;
+  background: var(--surface);
+  color: var(--text);
+}
+dialog.write-overlay[open] {
+  display: flex;
+  flex-direction: column;
+}
+dialog.write-overlay::backdrop { background: var(--bg); }
+dialog.write-overlay.write-paper,
+dialog.write-overlay.write-paper::backdrop { background: #f6f3ee; }
+dialog.write-overlay .ink-pad {
+  position: relative;
+  inset: auto;
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  height: auto;
+  gap: 0;
+}
+dialog.write-overlay .ink-stage {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 0;
+  border-radius: 0;
+}
+dialog.write-overlay .ink-canvas {
+  border: 0;
+  border-radius: 0;
+}
+dialog.write-overlay.write-paper .ink-canvas { background: transparent; }
+.write-placeholder { pointer-events: none; }
+.write-prompt {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  z-index: 3;
+  max-height: 28%;
+  overflow: auto;
+  padding: 10px 14px;
+  background: color-mix(in srgb, var(--bg-elev) 78%, transparent);
+  -webkit-backdrop-filter: blur(18px);
+  backdrop-filter: blur(18px);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--border) 80%, transparent);
+  transition: opacity 180ms var(--ease), transform 180ms var(--ease);
+}
+.write-prompt .prompt {
+  font-size: 1rem;
+  line-height: 1.35;
+  text-align: left;
+  font-weight: 600;
+}
+dialog.write-overlay[data-prompt='collapsed'] .write-prompt,
+dialog.write-overlay[data-prompt='off'] .write-prompt {
+  opacity: 0;
+  transform: translateY(-100%);
+  pointer-events: none;
+}
+.write-edge {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 44px;
+  z-index: 4;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+}
+.write-dock {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 4;
+  pointer-events: none;
+}
+.write-handle {
+  position: absolute;
+  left: 50%;
+  bottom: 0;
+  transform: translateX(-50%);
+  width: 96px;
+  height: 44px;
+  margin: 0;
+  padding: 0 0 8px;
+  border: 0;
+  background: transparent;
+  display: grid;
+  place-items: end center;
+  pointer-events: auto;
+  cursor: pointer;
+}
+.write-grab {
+  display: block;
+  width: 56px;
+  height: 5px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--text) 38%, transparent);
+}
+.write-tools {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 36px;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  width: auto;
+  max-height: 42%;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: 18px;
+  background: color-mix(in srgb, var(--bg-elev) 84%, transparent);
+  -webkit-backdrop-filter: blur(16px);
+  backdrop-filter: blur(16px);
+  box-shadow: var(--shadow-2);
+  pointer-events: auto;
+  transition: opacity 180ms var(--ease), transform 180ms var(--ease);
+}
+dialog.write-overlay[data-chrome='hidden'] .write-tools {
+  opacity: 0;
+  transform: translateY(12px);
+  pointer-events: none;
+}
+.write-tools .ink-tools,
+.write-tools .pencil-tools,
+.write-tools .editor-ink-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px;
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0;
+  background: transparent;
+}
+.write-overlay .ink-hint { display: none; }
+.write-done { margin-left: auto; }
+@media (prefers-reduced-motion: reduce) {
+  .write-tools, .write-prompt { transition: none; }
+}
+:root.reduce-motion .write-tools,
+:root.reduce-motion .write-prompt { transition: none; }
 .study:not(.ink-mode) .ink-pad,
 .study.ink-mode:not([data-phase='question']):not([data-phase='retype']) .ink-pad { display: none; }
 .study.ink-mode .answer-input, .study.ink-mode .symbols, .study.ink-mode .live-preview, .study.ink-mode .voice-btn { display: none; }

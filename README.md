@@ -280,7 +280,18 @@ import leaves no partial cards and appears on the Recovery screen.
     Pencil only** ignores every touch even before that. While a pencil stroke
     is down, other pointers are ignored. **Eraser** removes each whole stroke
     it touches, so **Undo stroke** can put it back; **Clear** wipes the pad.
-    The ink colour is the text colour. On a wide study screen (900px and up,
+    The ink colour is the text colour. **Write Mode** (the expand button on
+    the pad, and the same control in Create with Pencil and on an editor ink
+    field) opens that page across the screen, inside the device safe area.
+    The question stays in a compact strip at the top and tucks away after a
+    moment of writing; tap the top edge to bring it back. Pen, eraser, undo,
+    redo, clear, size, colour and smoothing sit on the bottom edge: they hide
+    while the pencil tip is down and return shortly after it lifts. A thin
+    handle stays put. **Done** or Escape puts the previous layout back,
+    including scroll position, without rebuilding strokes or the undo stack.
+    **Settings → Study → Write Mode control** shows or hides the button
+    (on by default, remembered on this device). It does not use Pencil Pro
+    squeeze, double-tap, barrel roll or haptics. On a wide study screen (900px and up,
     such as iPad landscape) the prompt stays on the left and a tall pad fills
     the right; portrait and phones keep the stacked layout. Latency runs to
     the first stroke. These answers are self-judged, so they never calibrate
@@ -877,8 +888,8 @@ Day-to-day reviews write one event each.
 ## Testing
 
 ```bash
-npm test               # 240 unit tests (node --test), ~5 s
-npm run test:browser   # 57 browser tests (Playwright + Chromium)
+npm test               # 244 unit tests (node --test), ~5 s
+npm run test:browser   # 59 browser tests (Playwright + Chromium)
 npm run check          # pre-cache list is current + unit tests
 ```
 
@@ -897,7 +908,9 @@ committed).
   drills), time zones and DST, statistics, planning, research, sync merge,
   encryption, compression, Gist client, chunking, backups, GitHub Pages paths,
   handwriting geometry (smoothing, pressure and tilt width, predicted
-  samples, eraser hit-testing, undo and redo), and pencil-card composition
+  samples, eraser hit-testing, undo and redo), Write Mode (the control
+  defaults on, pen chrome timing, and enter/exit restores zoom and pan
+  without rewriting strokes), and pencil-card composition
   (a typed answer is matched; a side that is only ink is self-graded;
   the card editor starts a blank Basic side on ink only for a touch device).
 - **Browser**: persistence across reloads; a synthetic v1→v2 schema
@@ -913,7 +926,9 @@ committed).
   unchanged); two-device
   sync through a mocked Gist API;   responsive layout at 1280, 834, 390 and
   320 px (light and dark) with checks for horizontal scroll, unnamed controls
-  and touch-target size; handwriting smoothing, hover, palm rejection
+  and touch-target size; Write Mode on the study pad and in Create with
+  Pencil (strokes and undo survive enter/exit, pen chrome hides and returns,
+  reduced motion snaps); handwriting smoothing, hover, palm rejection
   (including a palm-sized touch and a second finger), eraser, wide ink
   layout, the copy step after a missed ink answer (faint model, lift on
   the first stroke, undo brings it back), a
@@ -939,7 +954,7 @@ installation prompts, speech recognition and system TTS voices are
 
 | Component | Version | Notes |
 | --- | --- | --- |
-| App | 1.0.16 | cache `axon-v17` |
+| App | 1.0.17 | cache `axon-v18` |
 | Scheduler | ts-fsrs 5.4.2 (FSRS-6, default parameters) + `axon-fuzz@1` | reference-checked against py-fsrs 6.3.2 |
 | Grading rules | `axon-fluency@1.1.0` | thresholds above; recorded on every review |
 | Reading/warm-up heuristic | `axon-reading@2` | can be disabled |

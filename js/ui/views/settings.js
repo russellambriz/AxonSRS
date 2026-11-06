@@ -17,7 +17,7 @@ import { systemTimeZone, isValidTimeZone } from '../../core/time.js';
 import { uuid } from '../../core/util.js';
 import { setAllowRemoteImages } from '../render.js';
 import { local } from '../local.js';
-import { PENCIL_ONLY_KEY, inkSmoothing, setInkSmoothing } from '../inkpad.js';
+import { PENCIL_ONLY_KEY, inkSmoothing, setInkSmoothing, setWriteModeControl, writeModeControlOn } from '../inkpad.js';
 import { SMOOTHING_LEVELS } from '../../core/ink.js';
 
 const SECTIONS = [
@@ -105,6 +105,7 @@ function study() {
     h('section', { class: 'panel' }, h('h2', {}, 'Review flow'),
       settingRow({ title: 'Retype after a mistake', desc: 'Type the correct answer once before moving on (never counted as recall). Turn off if typing is difficult; you can also skip it per card.', control: switchControl({ checked: g().requireRetype !== false, onchange: (v) => saveG({ requireRetype: v }) }) }),
       settingRow({ title: 'Pencil only', desc: 'On the handwriting pad, ignore fingers and palms. Apple Pencil and a mouse still draw. After a pencil has touched the pad on this device, palm touches are ignored from the next session even when this is off.', control: switchControl({ checked: local.get(PENCIL_ONLY_KEY) === '1', onchange: (v) => local.set(PENCIL_ONLY_KEY, v ? '1' : '0') }) }),
+      settingRow({ title: 'Write Mode control', desc: 'Shows a Write Mode button on the handwriting pad, in the card editor and in Create with Pencil. One tap fills the screen with the page. Kept on this device.', control: switchControl({ checked: writeModeControlOn(), onchange: (v) => setWriteModeControl(v) }) }),
       settingRow({ title: 'Ink smoothing', desc: 'Steadies handwriting. Medium is the default. Saved strokes keep their original points; this only changes how they are drawn. Also on the pen row in Create with Pencil.', control: segmented({ label: 'Ink smoothing', options: SMOOTHING_LEVELS.map((level) => ({ value: level.id, label: level.label })), value: inkSmoothing(), onchange: (v) => setInkSmoothing(v) }) }),
       settingRow({ title: 'Auto-advance after a correct answer', desc: 'Milliseconds; 0 = off (press Enter to continue).', control: numberInput(g().autoAdvanceMs ?? 0, (v) => saveG({ autoAdvanceMs: v || 0 }), { min: 0, max: 10000, step: 100 }) }),
       settingRow({ title: 'Show “Why this grade?”', control: switchControl({ checked: g().showWhy !== false, onchange: (v) => saveG({ showWhy: v }) }) }),

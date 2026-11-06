@@ -66,6 +66,7 @@ const P = {
   grip: '<circle cx="9" cy="6" r="1"/><circle cx="15" cy="6" r="1"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><circle cx="9" cy="18" r="1"/><circle cx="15" cy="18" r="1"/>',
   conflict: '<path d="M6 3v12"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="6" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/>',
   shield: '<path d="M12 3 4 6v6c0 5 3.5 8 8 9 4.5-1 8-4 8-9V6z"/>',
+  expand: '<path d="M14 4h6v6"/><path d="M20 4 14 10"/><path d="M4 10V4h6"/><path d="M4 4l6 6"/><path d="M4 14v6h6"/><path d="M4 20l6-6"/><path d="M14 20h6v-6"/><path d="M20 20l-6-6"/>',
 };
 
 export function icon(name, { size = null, label = null } = {}) {

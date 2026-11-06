@@ -205,12 +205,15 @@ class StudyScreen {
     this.voiceBtn = h('button', { class: 'btn icon submit-btn voice-btn', type: 'button', 'aria-label': 'Answer by voice', title: 'Voice input (Alt+M)', hidden: true }, icon('mic'));
     this.submitBtn = h('button', { class: 'btn primary submit-btn', type: 'button', 'aria-label': 'Submit answer' }, icon('check'));
     this.actionsEl = h('div', { class: 'actions' });
-    this.ink = inkPad({ onStroke: () => {
-      // Retyping the correct answer is copying, not a new attempt, so it does not move the trial clock.
-      if (this.phase !== 'question') return;
-      this.trial.onInkStroke();
-      this.cancelAutoAdvance();
-    } });
+    this.ink = inkPad({
+      promptEl: () => this.promptEl,
+      onStroke: () => {
+        // Retyping the correct answer is copying, not a new attempt, so it does not move the trial clock.
+        if (this.phase !== 'question') return;
+        this.trial.onInkStroke();
+        this.cancelAutoAdvance();
+      },
+    });
     this.confEl = h('div', { class: 'confidence-pick', role: 'group', 'aria-label': 'How sure are you? Optional' });
     this.composer = h('div', { class: 'composer' }, h('div', { class: 'composer-inner' }, this.liveEl, this.symbolsEl, this.ink.el, this.confEl, h('div', { class: 'answer-row' }, this.input, this.voiceBtn, this.submitBtn), this.actionsEl));
     this.root = h('div', { class: ['study', this.inkMode && 'ink-mode'], role: 'region', 'aria-label': 'Study session' }, top, this.stage, this.composer);
@@ -287,6 +290,7 @@ class StudyScreen {
 
   destroy() {
     this.destroyed = true;
+    this.ink?.exitWrite();
     this.abort.abort();
     for (const u of this.unsubs) u();
     app.shortcuts.enableScope('study', false);
@@ -342,6 +346,7 @@ class StudyScreen {
   }
 
   setPhase(p) {
+    if (this.ink && p !== 'question' && p !== 'retype') this.ink.exitWrite();
     this.phase = p;
     this.root.dataset.phase = p;
     const busy = { question: 'the current card', submitting: 'saving a review', feedback: 'the current card', grading: 'grading', retype: 'a correction', error: 'an unsaved review' }[p];
@@ -1246,6 +1251,7 @@ class StudyScreen {
       announce('This card’s answer is handwriting. You grade it yourself.');
       return;
     }
+    this.ink.exitWrite();
     this.inkMode = !this.inkMode;
     local.set('axon-ink-mode', this.inkMode ? '1' : '0');
     this.root.classList.toggle('ink-mode', this.usingInk());
