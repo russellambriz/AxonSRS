@@ -19,7 +19,7 @@
  * All paths are relative so the app works under /AxonSRS/ on GitHub Pages.
  */
 
-const CACHE_NAME = 'axon-v16';
+const CACHE_NAME = 'axon-v17';
 
 const PRECACHE = [
   './',
@@ -135,10 +135,14 @@ const PRECACHE = [
   './vendor/opendyslexic/opendyslexic-latin-400-normal.woff2',
   './vendor/opendyslexic/opendyslexic-latin-700-normal.woff2',
   './vendor/ts-fsrs/index.mjs',
+  './icons/AppIcon-1024.png',
+  './icons/apple-touch-icon-120.png',
+  './icons/apple-touch-icon-152.png',
+  './icons/apple-touch-icon-167.png',
+  './icons/apple-touch-icon-180.png',
   './icons/apple-touch-icon.png',
   './icons/icon-192.png',
   './icons/icon-512.png',
-  './icons/icon.svg',
   './icons/maskable-512.png',
 ];
 
