@@ -1,7 +1,7 @@
 // Handwriting geometry: smoothing, pressure/tilt width, predicted samples, eraser hits.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { strokeWidth, pencilFlatness, smoothStroke, paintSamples, stabilizeStroke, ribbonPolygon, ribbonEdges, centerlineCovered, smoothingLevel, splitPointerSamples, strokeHits, eraseStrokes, ERASER_RADIUS, pointWidth, undoInkAction, redoInkAction, ghostPlacement, isPalmTouch } from '../../js/core/ink.js';
+import { strokeWidth, shapedPressure, extrapolateTail, pencilFlatness, smoothStroke, paintSamples, simplifySamples, stabilizeStroke, ribbonPolygon, ribbonEdges, centerlineCovered, smoothingLevel, splitPointerSamples, strokeHits, eraseStrokes, ERASER_RADIUS, pointWidth, undoInkAction, redoInkAction, ghostPlacement, isPalmTouch } from '../../js/core/ink.js';
 
 const pt = (x, y, p = 0.5, extra = {}) => ({ x, y, p, ...extra });
 
@@ -238,4 +238,124 @@ test('undo puts a stroke or an erasure back, and redo repeats it', () => {
   const restored = undoInkAction(afterErase, { kind: 'erase', items: [{ index: 0, stroke: a }] });
   assert.deepEqual(restored, [a, b]);
   assert.deepEqual(redoInkAction(restored, { kind: 'erase', items: [{ index: 0, stroke: a }] }), [b]);
+});
+
+test('pressure curve: 0 stays 0 (taper on lift), 1 stays the full pen, light is fuller and a hard press is controlled', () => {
+  assert.equal(shapedPressure(0), 0, 'a real 0 is the thinnest line, so a lift tapers');
+  assert.equal(shapedPressure(1), 1);
+  assert.equal(shapedPressure(-1), 0);
+  assert.equal(shapedPressure(3), 1);
+  let prev = -1;
+  for (let i = 0; i <= 100; i++) {
+    const v = shapedPressure(i / 100);
+    assert.ok(v > prev, `monotonic at ${i / 100}`);
+    assert.ok(v <= 1 + 1e-9);
+    prev = v;
+  }
+  const gammaOnly = (p) => Math.pow(p, 0.72);
+  for (const p of [0.05, 0.1, 0.2, 0.3]) assert.ok(shapedPressure(p) > gammaOnly(p), `a light touch (${p}) lays down more ink`);
+  const slope = (p) => (shapedPressure(p + 0.01) - shapedPressure(p - 0.01)) / 0.02;
+  assert.ok(slope(0.9) < slope(0.5) * 0.75, 'leaning in grows the line gently near the top');
+  assert.ok(slope(0.9) > 0, 'but it still grows');
+  assert.equal(strokeWidth(1), strokeWidth(1, {}), 'full pressure is the same full width as before');
+  assert.ok(Math.abs(strokeWidth(1) - 6) < 1e-9);
+});
+
+test('a quick tap is a readable dot, centred where the pencil landed; a short line is still a line', () => {
+  const tap = paintSamples([pt(40, 30, 0.04), pt(40.6, 30.4, 0.08)]);
+  assert.equal(tap.length, 1, 'one dot, not a smear');
+  assert.deepEqual([tap[0].x, tap[0].y], [40, 30]);
+  assert.ok(tap[0].w >= strokeWidth(0.45) - 1e-9, `dot ${tap[0].w.toFixed(2)}px is too faint to read`);
+  const firm = paintSamples([pt(10, 10, 1)]);
+  assert.equal(firm[0].w, strokeWidth(1), 'a firm tap keeps its own size');
+  const fine = paintSamples([{ x: 0, y: 0, p: 0.05, scale: 0.7 }]);
+  assert.ok(fine[0].w < tap[0].w, 'a Fine pen still draws a finer dot');
+  const line = paintSamples([pt(0, 0, 0.3), pt(4, 0, 0.3), pt(8, 0, 0.3)], 'off');
+  assert.ok(line.length > 3, 'a short line is drawn as a line');
+});
+
+test('without browser prediction, a steady stroke gets a short capped tail ahead of the tip; turns, stops and stale samples get none', () => {
+  const steady = [{ x: 0, y: 0, p: 0.4, t: 0 }, { x: 4, y: 0, p: 0.4, t: 4 }, { x: 8, y: 0, p: 0.5, t: 8 }];
+  const frozen = JSON.stringify(steady);
+  const tail = extrapolateTail(steady);
+  assert.equal(tail.length, 1);
+  assert.ok(tail[0].x > 8 && tail[0].x <= 8 + 9 + 1e-9, `ahead of the tip, at most 9px: ${tail[0].x}`);
+  assert.ok(Math.abs(tail[0].y) < 1e-9, 'along the stroke');
+  assert.equal(tail[0].p, 0.5, 'carries the tip pressure');
+  assert.equal(tail[0].predicted, true);
+  assert.equal(tail[0].t, undefined, 'a predicted point has no sample time and is never stored');
+  assert.equal(JSON.stringify(steady), frozen, 'input untouched');
+  const fast = [{ x: 0, y: 0, t: 0 }, { x: 30, y: 0, t: 4 }, { x: 60, y: 0, t: 8 }];
+  assert.ok(Math.abs(extrapolateTail(fast)[0].x - 69) < 1e-9, 'capped at 9px however fast');
+  const turning = [{ x: 0, y: 0, t: 0 }, { x: 4, y: 0, t: 4 }, { x: 4, y: 4, t: 8 }];
+  assert.deepEqual(extrapolateTail(turning), [], 'a corner is not guessed past');
+  const slowing = [{ x: 0, y: 0, t: 0 }, { x: 8, y: 0, t: 4 }, { x: 10, y: 0, t: 8 }];
+  assert.deepEqual(extrapolateTail(slowing), [], 'a stroke about to stop gets no tail');
+  const resting = [{ x: 0, y: 0, t: 0 }, { x: 0.05, y: 0, t: 4 }, { x: 0.1, y: 0, t: 8 }];
+  assert.deepEqual(extrapolateTail(resting), []);
+  const stale = [{ x: 0, y: 0, t: 0 }, { x: 4, y: 0, t: 4 }, { x: 8, y: 0, t: 80 }];
+  assert.deepEqual(extrapolateTail(stale), [], 'a gap in the samples is not a velocity');
+  assert.deepEqual(extrapolateTail([pt(0, 0), pt(4, 0), pt(8, 0)]), [], 'no sample times, no guess');
+  assert.deepEqual(extrapolateTail([steady[0], steady[1]]), []);
+});
+
+test('solid fill invariants: light, heavy and tapering strokes stay covered between samples', () => {
+  const sweep = [];
+  for (let i = 0; i <= 40; i++) sweep.push(pt(i * 6, Math.sin(i / 3) * 20, i / 40));
+  for (const smoothing of ['off', 'low', 'medium', 'high']) {
+    const samples = paintSamples(sweep, smoothing);
+    assert.equal(centerlineCovered(samples), true, `no gap between discs (${smoothing})`);
+    assert.ok(samples.every((s) => s.w >= strokeWidth(0) - 1e-9), 'never thinner than the pen at zero pressure');
+  }
+  const lift = paintSamples([pt(0, 0, 0.7), pt(6, 0, 0.6), pt(12, 0, 0.3), pt(18, 0, 0)], 'off');
+  assert.ok(lift.at(-1).w < lift[0].w, 'the stroke tapers as the pencil lifts');
+  assert.equal(centerlineCovered(lift), true);
+});
+
+test('fill runs: every dropped sample lies within the tolerance of its run, ends and turns are kept, and a growing stroke keeps its start', () => {
+  const radius = (s) => Math.max(0.8, s.w / 2);
+  const offRun = (a, b, p) => {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 > 1e-9 ? Math.min(1, Math.max(0, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2)) : 0;
+    return Math.max(Math.hypot(a.x + dx * t - p.x, a.y + dy * t - p.y), Math.abs(radius(a) + (radius(b) - radius(a)) * t - radius(p)));
+  };
+  const coil = [];
+  for (let i = 0; i <= 300; i++) coil.push(pt(i * 0.9 + Math.cos(i / 9) * 22, Math.sin(i / 9) * 22, 0.3 + 0.25 * Math.sin(i / 31)));
+  const dense = paintSamples(coil, 'medium');
+  const runs = simplifySamples(dense);
+  assert.ok(runs.length < dense.length / 3, `far fewer pieces: ${runs.length} of ${dense.length}`);
+  assert.equal(runs[0], dense[0], 'the first sample is kept');
+  assert.equal(runs.at(-1), dense.at(-1), 'the last sample is kept');
+  let k = 0;
+  for (let i = 0; i < dense.length; i++) {
+    if (dense[i] === runs[k]) {
+      k++;
+      continue;
+    }
+    // dense[i] lies between kept runs[k - 1] and runs[k].
+    assert.ok(offRun(runs[k - 1], runs[k], dense[i]) <= 0.05 + 1e-9, `sample ${i} is within 0.05px of its run`);
+  }
+  assert.equal(k, runs.length, 'kept samples are the originals, in order');
+  for (let i = 1; i < runs.length; i++) {
+    const gap = dense.indexOf(runs[i]) - dense.indexOf(runs[i - 1]);
+    assert.ok(gap <= 32, 'no run is longer than 32 samples');
+  }
+
+  // A straight, even line is a handful of runs; a hairpin keeps its tip.
+  const straight = paintSamples([pt(0, 0, 0.4), pt(60, 0, 0.4)], 'off');
+  const line = simplifySamples(straight);
+  assert.ok(line.length <= Math.ceil(straight.length / 32) + 4, `a straight line is a few runs: ${line.length} of ${straight.length}`);
+  const hairpin = paintSamples([pt(0, 0, 0.4), pt(20, 0, 0.4), pt(0, 0.5, 0.4)], 'off');
+  const tipX = Math.max(...hairpin.map((s) => s.x));
+  assert.ok(Math.max(...simplifySamples(hairpin).map((s) => s.x)) >= tipX - 0.05, 'the turn of a hairpin is not cut off');
+
+  // As the stroke grows, everything before the last kept sample stays put.
+  for (const cut of [40, 120, 250]) {
+    const head = simplifySamples(dense.slice(0, cut)).slice(0, -1);
+    assert.deepEqual(head, runs.slice(0, head.length), `the first ${head.length} runs of a ${cut}-sample prefix stay`);
+  }
+  assert.deepEqual(simplifySamples([dense[0]]), [dense[0]], 'a dot stays a dot');
+  assert.deepEqual(simplifySamples([]), []);
 });

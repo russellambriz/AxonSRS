@@ -251,16 +251,23 @@ import leaves no partial cards and appears on the Recovery screen.
     does not change Scribble.
   - **Write** (Alt+D or D on the study screen) swaps the answer box for a
     handwriting pad. Nothing is recognised: after **Check**, your ink is shown
-    next to the correct answer and you grade it (Again = wrong, otherwise
-    Hard, Good or Easy). Strokes are smoothed and follow pressure. A light
-    touch lays down more ink than a straight line through the pressure
-    number, and leaning in still thickens the stroke; a reported pressure
-    of 0 stays light, so a stroke can taper as the pencil lifts. Each
-    bit of the stroke is a round disc joined to the next, so a loop stays
-    solid instead of the fill punching a hole. Fast strokes keep every
-    coalesced sample, and a long gap is filled only while the ink is drawn,
-    so the discs stay close and a quick flick does not facet. The saved
-    points stay as the pencil reported them.
+    next to the correct answer and you check it yourself (**Not correct**,
+    **Correct on my own**, or **I needed help or saw the answer**). Strokes
+    are smoothed and follow pressure. A light touch lays down more ink than
+    a straight line through the pressure number, and leaning in still
+    thickens the stroke, more gently towards the top so a firm hand does
+    not bloom; a reported pressure of 0 stays light, so a stroke can taper
+    as the pencil lifts. A quick light tap draws a round, readable dot (an
+    i or a full stop). The stroke is round discs joined by straight runs,
+    all one fill turning the same way, so a loop stays solid, the inside
+    has no lighter seams, and only the outer edge is anti-aliased. The ink
+    lands exactly under the tip (the pad's dashed frame is drawn around the
+    canvas, not inside it). Fast strokes keep every coalesced sample, and a
+    long gap is filled only while the ink is drawn, so a quick flick does
+    not facet; the saved points stay as the pencil reported them. Finished strokes are kept on their own layer and
+    each frame repaints only the tiles around the tip, so a page of writing
+    or one very long stroke stays as quick as the first line, and lifting
+    the pencil never changes a shade of what was drawn.
     **Smoothing** (Off, Low, Medium, High) is on the pen row in Create with
     Pencil and the card editor, and under Settings → Study. Medium is the
     default. It steadies the line and the width when the ink is drawn. The
@@ -268,17 +275,23 @@ import leaves no partial cards and appears on the Recovery screen.
     steadily, and the tip still follows Pencil prediction. The choice is
     remembered on this device. When the
     browser reports tilt (or altitude), a flatter pencil draws a wider line;
-    twist only nudges that. A short predicted tail keeps the ink near the tip
-    and is replaced as real samples arrive. It works with Apple Pencil,
+    twist only nudges that. The browser's predicted points keep the ink at
+    the tip; where it gives none (Safari), Axon runs a short tail ahead of a
+    steady stroke (at most 9px, about 14ms), never past a turn or a stroke
+    that is slowing to a stop. The tail is replaced as real samples arrive
+    and is never saved. It works with Apple Pencil,
     including hover on Pencil Pro and other hover-capable iPads (a small dot
-    shows where the tip will land), any stylus, a finger or a mouse. A
-    palm-sized touch, or a second finger, does not start a stroke, so a
-    resting hand is ignored even before a pencil has been seen; one finger
-    still writes. Once a
-    pencil has touched the pad on this device, palm and finger touches are
-    ignored from the first stroke of later sessions. **Settings → Study →
-    Pencil only** ignores every touch even before that. While a pencil stroke
-    is down, other pointers are ignored. **Eraser** removes each whole stroke
+    the width of the line shows where the tip will land), any stylus, a
+    finger or a mouse. A palm-sized touch, or a second finger, does not
+    start a stroke, so a resting hand is ignored even before a pencil has
+    been seen; one finger still writes. Once a pencil has touched the pad on
+    this device, palm and finger touches on the pad are ignored from the
+    first stroke of later sessions. **Settings → Study → Pencil only**
+    ignores every touch even before that. While a pencil stroke is down,
+    other pointers are ignored, and a touch anywhere else on the page (a
+    palm resting on **Clear** or **Check**) does nothing, then or for a
+    moment (0.45s) after the pencil lifts. A pencil tap, or a mouse or
+    trackpad click, ends that moment at once. **Eraser** removes each whole stroke
     it touches, so **Undo stroke** can put it back; **Clear** wipes the pad.
     The ink colour is the text colour. On a wide study screen (900px and up,
     such as iPad landscape) the prompt stays on the left and a tall pad fills
@@ -287,9 +300,12 @@ import leaves no partial cards and appears on the Recovery screen.
     timing and are left out of research comparisons. A wrong one asks you to
     **write the correct answer once** (or **Skip retyping**). When the answer
     itself is handwriting, that writing appears on the pad as a faint
-    graphite wash, at the size it was written, in the middle of the page.
-    The moment your pencil lays down ink, the model lifts so the new stroke
-    is the mark; undo or clear back to an empty page and it returns. That is the
+    graphite wash (a pale one on a dark pad, so it never disappears), at
+    the size it was written (only ever shrunk to fit), a little above the
+    middle of the page. The moment your pencil lays down ink, the model
+    lifts so the new stroke is the mark; undo or clear back to an empty
+    page and it returns. A short typed answer (plain text, not maths) is
+    shown the same way in a handwriting font. That is the
     same copy event as retyping, never a second review, and it follows
     Settings → Study → Retype after a mistake. The review ink is shown only
     during feedback and is not saved or synced. **Type** switches back; the
@@ -337,7 +353,8 @@ import leaves no partial cards and appears on the Recovery screen.
     Drawings go through the same image checks and the 5 MB limit, offline.
     In the card editor, a back that is only a drawing is the same kind of
     card. Reviewing one shows the handwriting, asks you to write your
-    answer in ink, and you grade it yourself (Again, Hard, Good or Easy).
+    answer in ink, and you check it yourself (Not correct, Correct on my
+    own, or I needed help or saw the answer).
     It is not matched, it does not calibrate timing, and it is left out of
     research comparisons. A card that still has a typed answer is unchanged.
   - Apple Pencil Pro squeeze, double-tap, barrel roll and haptics are not
@@ -896,8 +913,9 @@ committed).
   skew, corrections, undo, queues (limits, siblings, catch-up, postpone,
   drills), time zones and DST, statistics, planning, research, sync merge,
   encryption, compression, Gist client, chunking, backups, GitHub Pages paths,
-  handwriting geometry (smoothing, pressure and tilt width, predicted
-  samples, eraser hit-testing, undo and redo), and pencil-card composition
+  handwriting geometry (smoothing, pressure curve and tilt width, tap dots,
+  predicted samples and Axon's own short tail, the fill runs, eraser
+  hit-testing, undo and redo), and pencil-card composition
   (a typed answer is matched; a side that is only ink is self-graded;
   the card editor starts a blank Basic side on ink only for a touch device).
 - **Browser**: persistence across reloads; a synthetic v1→v2 schema
@@ -914,9 +932,14 @@ committed).
   sync through a mocked Gist API;   responsive layout at 1280, 834, 390 and
   320 px (light and dark) with checks for horizontal scroll, unnamed controls
   and touch-target size; handwriting smoothing, hover, palm rejection
-  (including a palm-sized touch and a second finger), eraser, wide ink
-  layout, the copy step after a missed ink answer (faint model, lift on
-  the first stroke, undo brings it back), a
+  (including a palm-sized touch and a second finger) and the palm guard,
+  the cached ink layer (undo is exact, a theme switch repaints), live ink
+  matching a repaint from scratch while each frame costs only the tip, a
+  solid inside with no lighter seams, tap dots, eraser, wide ink layout,
+  the copy step after a missed ink answer (a soft graphite model at its
+  written size, pale on a dark pad, lifted on the first stroke, back after
+  undo or Clear, for an ink card or a short typed answer, still one copy
+  event), a
   sketch inserted from the card editor, the Create with Pencil studio
   (draw, undo, redo, save and next, landscape and 320px), saved cards
   opened from the studio (thumbnails, flip, swipe, edit, delete and undo), an ink-only
@@ -939,7 +962,7 @@ installation prompts, speech recognition and system TTS voices are
 
 | Component | Version | Notes |
 | --- | --- | --- |
-| App | 1.0.16 | cache `axon-v17` |
+| App | 1.0.17 | cache `axon-v18` |
 | Scheduler | ts-fsrs 5.4.2 (FSRS-6, default parameters) + `axon-fuzz@1` | reference-checked against py-fsrs 6.3.2 |
 | Grading rules | `axon-fluency@1.1.0` | thresholds above; recorded on every review |
 | Reading/warm-up heuristic | `axon-reading@2` | can be disabled |
