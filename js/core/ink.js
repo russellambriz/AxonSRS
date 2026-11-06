@@ -1,9 +1,9 @@
 /**
  * Pure geometry for the handwriting pad: pressure/tilt width, a light
- * streamline on the points used to draw, midpoint quadratic curves, and
- * separating real pointer samples from the predicted tail, and
- * stroke-level eraser hit-testing. No DOM. Stored points are never
- * rewritten; smoothing is a render step.
+ * streamline on the points used to draw, midpoint quadratic curves,
+ * separating real pointer samples from the predicted tail, placing the
+ * faint trace, and stroke-level eraser hit-testing. No DOM. Stored points
+ * are never rewritten; smoothing and gap-filling are render steps.
  */
 
 /** Eraser disc radius in CSS pixels. A hit removes the whole stroke. */
@@ -316,13 +316,25 @@ export function smoothStroke(points) {
   return segs;
 }
 
+/**
+ * How far apart drawn samples may sit. A fast pointermove can jump tens of
+ * pixels between coalesced events; the discs are joined, but a long chord
+ * still looks faceted. Stay under the stroke radius.
+ */
+const SAMPLE_STEP = 0.72;
+const MAX_STEPS = 480;
+
+function stepCount(dist, min) {
+  return Math.max(min, Math.min(MAX_STEPS, Math.ceil(dist / SAMPLE_STEP)));
+}
+
 /** Polyline samples of one smoothed segment, including both endpoints. */
 export function segmentSamples(seg) {
   if (!seg) return [];
   if (seg.type === 'dot') return [{ x: seg.x, y: seg.y, w: seg.w }];
   if (seg.type === 'line') {
     const dist = Math.hypot(seg.x1 - seg.x0, seg.y1 - seg.y0);
-    const steps = Math.max(1, Math.min(64, Math.ceil(dist / 0.8)));
+    const steps = stepCount(dist, 1);
     const out = [];
     for (let s = 0; s <= steps; s++) {
       const t = s / steps;
@@ -335,7 +347,7 @@ export function segmentSamples(seg) {
     return out;
   }
   const dist = Math.hypot(seg.x1 - seg.x0, seg.y1 - seg.y0) + Math.hypot(seg.cx - seg.x0, seg.cy - seg.y0);
-  const steps = Math.max(4, Math.min(64, Math.ceil(dist / 0.8)));
+  const steps = stepCount(dist, 8);
   const out = [];
   for (let s = 0; s <= steps; s++) {
     const t = s / steps;
@@ -371,6 +383,51 @@ export function centerlineCovered(samples) {
   return true;
 }
 
+function lerp(a, b, t) {
+  return a + (b - a) * t;
+}
+
+/**
+ * Points to draw between raw samples that landed far apart. The saved
+ * stroke is unchanged: this only gives the stabilizer and the curves a
+ * short step, so a fast flick does not kink where the predicted tail
+ * eases back onto the real points.
+ */
+function fillGaps(points, maxGap = 3.5) {
+  const pts = points || [];
+  if (pts.length < 2) return pts;
+  let sparse = false;
+  for (let i = 1; i < pts.length; i++) {
+    if (Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y) > maxGap + 0.01) {
+      sparse = true;
+      break;
+    }
+  }
+  if (!sparse) return pts;
+  const out = [pts[0]];
+  const keys = ['p', 'scale', 'tiltX', 'tiltY', 'altitude', 'azimuth', 'twist'];
+  for (let i = 1; i < pts.length; i++) {
+    const a = pts[i - 1];
+    const b = pts[i];
+    const dist = Math.hypot(b.x - a.x, b.y - a.y);
+    const n = Math.min(120, Math.floor(dist / maxGap));
+    for (let k = 1; k <= n; k++) {
+      const t = k / (n + 1);
+      const q = { x: lerp(a.x, b.x, t), y: lerp(a.y, b.y, t) };
+      for (const key of keys) {
+        const av = a[key];
+        const bv = b[key];
+        if (typeof av === 'number' && typeof bv === 'number') q[key] = lerp(av, bv, t);
+        else if (typeof bv === 'number') q[key] = bv;
+        else if (typeof av === 'number') q[key] = av;
+      }
+      out.push(q);
+    }
+    out.push(b);
+  }
+  return out;
+}
+
 /** A tap is drawn at least this pressure, so a dotted i or a full stop reads. */
 const DOT_PRESSURE = 0.45;
 /** CSS px. A stroke that never leaves this disc is a dot, not a line. */
@@ -390,7 +447,7 @@ export function paintSamples(points, smoothing = 'medium') {
     const w = Math.max(...pts.map(widthOf), strokeWidth(DOT_PRESSURE) * scale);
     return [{ x: pts[0].x, y: pts[0].y, w }];
   }
-  const stable = stabilizeStroke(pts, smoothing);
+  const stable = stabilizeStroke(fillGaps(pts), smoothing);
   const out = [];
   for (const seg of smoothStroke(stable)) {
     for (const p of segmentSamples(seg)) {
@@ -453,11 +510,12 @@ function sameSpot(a, b) {
 }
 
 /**
- * Split a pointermove into samples that belong on the stroke and a
+ * Split a pointer event into samples that belong on the stroke and a
  * predicted tail that must not be stored. Coalesced samples that actually
- * moved are all kept (nothing is dropped). An exact repeat of the previous
- * position is skipped so a resting pen does not add an empty segment.
- * Predicted points are never returned in `real`.
+ * moved are all kept, in order (nothing is dropped). An exact repeat of
+ * the previous position is skipped so a resting pen does not add an empty
+ * segment. Predicted points are never returned in `real`. A long gap
+ * between these samples is filled only while drawing.
  */
 export function splitPointerSamples(previous, coalesced, predicted) {
   const real = [];
@@ -521,6 +579,47 @@ export function extrapolateTail(points, { horizonMs = 14, maxPx = 9 } = {}) {
   }
   const { t, ...rest } = c;
   return [{ ...rest, x: c.x + dx, y: c.y + dy, predicted: true }];
+}
+
+/**
+ * Where a saved handwriting image sits on the pad. The bitmap is device
+ * pixels, so it is drawn at its CSS size (`bitmap / dpr`) and only scaled
+ * down to leave a margin. A small word stays a word, centered, a little
+ * above the middle of the page where the pencil starts.
+ */
+export function ghostPlacement({ imageWidth = 0, imageHeight = 0, padWidth = 0, padHeight = 0, dpr = 1, margin = 0.08 } = {}) {
+  const px = finite(dpr, 1) > 0 ? finite(dpr, 1) : 1;
+  const iw = finite(imageWidth, 0) / px;
+  const ih = finite(imageHeight, 0) / px;
+  const padW = finite(padWidth, 0);
+  const padH = finite(padHeight, 0);
+  if (iw < 1 || ih < 1 || padW < 1 || padH < 1) return null;
+  const inset = clamp(finite(margin, 0.08), 0, 0.4);
+  const maxW = padW * (1 - inset * 2);
+  const maxH = padH * (1 - inset * 2);
+  const scale = Math.min(1, maxW / iw, maxH / ih);
+  const w = iw * scale;
+  const h = ih * scale;
+  return {
+    x: (padW - w) / 2,
+    y: Math.max(0, (padH - h) * 0.42),
+    w,
+    h,
+    scale,
+  };
+}
+
+/**
+ * A resting palm or a second finger. One ordinary touch (the primary
+ * pointer, with a finger-sized contact) is still a pen. Width and height
+ * are CSS pixels from the pointer event; a palm is much wider than a finger.
+ */
+export function isPalmTouch(e) {
+  if (!e || e.pointerType !== 'touch') return false;
+  const w = finite(e.width, 0);
+  const h = finite(e.height, 0);
+  if (w >= 80 || h >= 80) return true;
+  return e.isPrimary === false;
 }
 
 function distToSegment(px, py, ax, ay, bx, by) {

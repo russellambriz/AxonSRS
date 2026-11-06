@@ -262,7 +262,9 @@ import leaves no partial cards and appears on the Recovery screen.
     all one fill turning the same way, so a loop stays solid, the inside
     has no lighter seams, and only the outer edge is anti-aliased. The ink
     lands exactly under the tip (the pad's dashed frame is drawn around the
-    canvas, not inside it). Finished strokes are kept on their own layer and
+    canvas, not inside it). Fast strokes keep every coalesced sample, and a
+    long gap is filled only while the ink is drawn, so a quick flick does
+    not facet; the saved points stay as the pencil reported them. Finished strokes are kept on their own layer and
     each frame repaints only the tiles around the tip, so a page of writing
     or one very long stroke stays as quick as the first line, and lifting
     the pencil never changes a shade of what was drawn.
@@ -280,14 +282,16 @@ import leaves no partial cards and appears on the Recovery screen.
     and is never saved. It works with Apple Pencil,
     including hover on Pencil Pro and other hover-capable iPads (a small dot
     the width of the line shows where the tip will land), any stylus, a
-    finger or a mouse. Once a pencil has touched the pad on this device, palm
-    and finger touches on the pad are ignored from the first stroke of later
-    sessions. **Settings → Study → Pencil only** ignores every touch even
-    before that. While a pencil stroke is down, other pointers are ignored,
-    and a touch anywhere else on the page (a palm resting on **Clear** or
-    **Check**) does nothing, then or for a moment (0.45s) after the pencil
-    lifts. A pencil tap, or a mouse or trackpad click, ends that moment at
-    once. **Eraser** removes each whole stroke
+    finger or a mouse. A palm-sized touch, or a second finger, does not
+    start a stroke, so a resting hand is ignored even before a pencil has
+    been seen; one finger still writes. Once a pencil has touched the pad on
+    this device, palm and finger touches on the pad are ignored from the
+    first stroke of later sessions. **Settings → Study → Pencil only**
+    ignores every touch even before that. While a pencil stroke is down,
+    other pointers are ignored, and a touch anywhere else on the page (a
+    palm resting on **Clear** or **Check**) does nothing, then or for a
+    moment (0.45s) after the pencil lifts. A pencil tap, or a mouse or
+    trackpad click, ends that moment at once. **Eraser** removes each whole stroke
     it touches, so **Undo stroke** can put it back; **Clear** wipes the pad.
     The ink colour is the text colour. On a wide study screen (900px and up,
     such as iPad landscape) the prompt stays on the left and a tall pad fills
@@ -295,12 +299,13 @@ import leaves no partial cards and appears on the Recovery screen.
     the first stroke. These answers are self-judged, so they never calibrate
     timing and are left out of research comparisons. A wrong one asks you to
     **write the correct answer once** (or **Skip retyping**). When the answer
-    itself is handwriting, that writing appears faintly on the pad, in the
-    accent colour so it never looks like your own ink, at the size it was
-    written (only ever shrunk to fit) and centred, so you can trace it. As
-    you start tracing it steps further back so your ink leads, and **Clear**
-    brings it back. A short typed answer (plain text, not maths) is shown
-    the same way in a handwriting font. That is the
+    itself is handwriting, that writing appears on the pad as a faint
+    graphite wash (a pale one on a dark pad, so it never disappears), at
+    the size it was written (only ever shrunk to fit), a little above the
+    middle of the page. The moment your pencil lays down ink, the model
+    lifts so the new stroke is the mark; undo or clear back to an empty
+    page and it returns. A short typed answer (plain text, not maths) is
+    shown the same way in a handwriting font. That is the
     same copy event as retyping, never a second review, and it follows
     Settings → Study → Retype after a mistake. The review ink is shown only
     during feedback and is not saved or synced. **Type** switches back; the
@@ -889,8 +894,8 @@ Day-to-day reviews write one event each.
 ## Testing
 
 ```bash
-npm test               # 237 unit tests (node --test), ~5 s
-npm run test:browser   # 56 browser tests (Playwright + Chromium)
+npm test               # 240 unit tests (node --test), ~5 s
+npm run test:browser   # 57 browser tests (Playwright + Chromium)
 npm run check          # pre-cache list is current + unit tests
 ```
 
@@ -926,13 +931,15 @@ committed).
   unchanged); two-device
   sync through a mocked Gist API;   responsive layout at 1280, 834, 390 and
   320 px (light and dark) with checks for horizontal scroll, unnamed controls
-  and touch-target size; handwriting smoothing, hover, palm rejection and
-  the palm guard, the cached ink layer (undo is exact, a theme switch
-  repaints), live ink matching a repaint from scratch while each frame
-  costs only the tip, a solid inside with no lighter seams, tap dots,
-  eraser, wide ink layout, the copy step after a missed ink answer (a faint
-  accent model at its written size that steps back while tracing, for an
-  ink card or a short typed answer, still one copy event), a
+  and touch-target size; handwriting smoothing, hover, palm rejection
+  (including a palm-sized touch and a second finger) and the palm guard,
+  the cached ink layer (undo is exact, a theme switch repaints), live ink
+  matching a repaint from scratch while each frame costs only the tip, a
+  solid inside with no lighter seams, tap dots, eraser, wide ink layout,
+  the copy step after a missed ink answer (a soft graphite model at its
+  written size, pale on a dark pad, lifted on the first stroke, back after
+  undo or Clear, for an ink card or a short typed answer, still one copy
+  event), a
   sketch inserted from the card editor, the Create with Pencil studio
   (draw, undo, redo, save and next, landscape and 320px), saved cards
   opened from the studio (thumbnails, flip, swipe, edit, delete and undo), an ink-only
@@ -955,7 +962,7 @@ installation prompts, speech recognition and system TTS voices are
 
 | Component | Version | Notes |
 | --- | --- | --- |
-| App | 1.0.14 | cache `axon-v15` |
+| App | 1.0.17 | cache `axon-v18` |
 | Scheduler | ts-fsrs 5.4.2 (FSRS-6, default parameters) + `axon-fuzz@1` | reference-checked against py-fsrs 6.3.2 |
 | Grading rules | `axon-fluency@1.1.0` | thresholds above; recorded on every review |
 | Reading/warm-up heuristic | `axon-reading@2` | can be disabled |

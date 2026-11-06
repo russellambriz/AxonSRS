@@ -1784,6 +1784,9 @@ function traceableText(cur) {
   return text;
 }
 
+/** How solid the model to trace is at its darkest, before the pad's own fade. */
+const TRACE_WASH = 168 / 255;
+
 /** The answer in the device's handwriting face, as an alpha mask for the write-on ghost (device pixels). */
 function textTrace(text) {
   const ratio = window.devicePixelRatio || 1;
@@ -1800,6 +1803,7 @@ function textTrace(text) {
   g.scale(ratio, ratio);
   g.font = font;
   g.fillStyle = '#fff';
+  g.globalAlpha = TRACE_WASH;
   g.textBaseline = 'middle';
   g.fillText(text, 12, hh / 2);
   return c;
@@ -1810,7 +1814,7 @@ function inkMediaId(content) {
   return /axon-media:([^)\s]+)/.exec(text)?.[1] || null;
 }
 
-/** Paper-backed handwriting PNG → an alpha mask of the ink. The pad tints it with the theme accent, so the trace reads in light and dark. */
+/** Paper-backed handwriting PNG → an alpha mask of the ink. The pad tints it for the theme (graphite on light, a pale wash on dark), so the trace reads in both. */
 function traceImage(blob) {
   return new Promise((resolve, reject) => {
     const url = URL.createObjectURL(blob);
@@ -1827,11 +1831,15 @@ function traceImage(blob) {
         // Paper (light) → transparent, ink (dark, any pen colour) → opaque,
         // with a smooth edge so the anti-aliasing of the original survives.
         const lum = (d[i] + d[i + 1] + d[i + 2]) / 3;
-        const k = Math.max(0, Math.min(1, (236 - lum) / 150));
+        const ink = Math.max(0, Math.min(1, (236 - lum) / 150));
+        // A soft wash: paper drops out and the stroke eases in, capped well
+        // below solid, so the model reads as a guide rather than a second
+        // copy of the ink. White here; the pad tints it for the theme.
+        const wash = ink * ink * (3 - 2 * ink);
         d[i] = 255;
         d[i + 1] = 255;
         d[i + 2] = 255;
-        d[i + 3] = Math.round(k * k * (3 - 2 * k) * 255);
+        d[i + 3] = Math.round(wash * TRACE_WASH * 255);
       }
       g.putImageData(frame, 0, 0);
       URL.revokeObjectURL(url);

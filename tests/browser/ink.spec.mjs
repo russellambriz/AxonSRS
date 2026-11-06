@@ -215,7 +215,7 @@ export const tests = [
     },
   },
   {
-    name: 'write-on: the model is faint, accent-tinted, at its written size and centred; it steps back while tracing, returns on Clear, and is one copy event',
+    name: 'write-on: the model is a soft graphite wash (pale on a dark pad) at its written size and centred; it lifts once ink lands, returns on Clear, and is one copy event',
     async run({ browser, url }) {
       const ctx = await newContext(browser, { viewport: { width: 820, height: 1180 }, hasTouch: true });
       const page = await openApp(ctx, url);
@@ -253,7 +253,7 @@ export const tests = [
       await waitPhase(page, ['grading']);
       await page.getByRole('button', { name: /^Not correct/ }).click();
       assert.equal(await waitPhase(page, ['retype']), 'retype');
-      await page.waitForFunction(() => document.querySelector('.ink-pad')?.dataset.ghost === 'shown');
+      await page.waitForFunction(() => document.querySelector('.ink-pad')?.dataset.ghost === '1');
       const measure = () => page.evaluate(() => {
         const c = document.querySelector('.ink-canvas');
         const r = c.getBoundingClientRect();
@@ -281,18 +281,19 @@ export const tests = [
       });
       const shown = await measure();
       assert.equal(shown.strokes, '0', 'the ghost is not a stroke');
-      assert.ok(shown.maxA >= 60 && shown.maxA <= 95, `faint: max alpha ${shown.maxA} should be about a third`);
-      assert.ok(shown.rgb[2] > shown.rgb[0] + 40, `tinted with the accent (blue-violet), not black: ${shown.rgb}`);
+      // 0.62 of a wash capped at 168/255: about 104 at the darkest.
+      assert.ok(shown.maxA >= 90 && shown.maxA <= 118, `a soft wash, not solid ink: max alpha ${shown.maxA}`);
+      assert.ok(shown.rgb.every((v, i) => Math.abs(v - [58, 52, 46][i]) <= 14), `graphite on a light pad: ${shown.rgb}`);
       assert.ok(shown.w > 190 && shown.w < 245, `drawn at the size it was written (${shown.w.toFixed(0)}px), not stretched across the pad`);
       assert.ok(Math.abs(shown.cx - shown.padW / 2) < 8, 'centred across');
-      // Trace: the model steps back under the new ink.
+      // Trace: ink lands and the model lifts so the new stroke is the mark.
       await page.evaluate(() => {
         const c = document.querySelector('.ink-canvas');
         const r = c.getBoundingClientRect();
         const fire = (name, x) => c.dispatchEvent(new PointerEvent(name, { pointerType: 'pen', pointerId: 6, clientX: r.left + x, clientY: r.top + 12, pressure: 0.5, buttons: name === 'pointerup' ? 0 : 1, bubbles: true, cancelable: true }));
         fire('pointerdown', 20); fire('pointermove', 40); fire('pointerup', 40);
       });
-      assert.equal(await page.getAttribute('.ink-pad', 'data-ghost'), 'tracing');
+      assert.equal(await page.getAttribute('.ink-pad', 'data-ghost'), 'lift');
       const ghostAlphaNow = await page.evaluate(({ x, y }) => {
         const c = document.querySelector('.ink-canvas');
         const r = c.getBoundingClientRect();
@@ -302,17 +303,17 @@ export const tests = [
         for (let i = 3; i < d.length; i += 4) m = Math.max(m, d[i]);
         return m;
       }, { x: shown.cx, y: shown.cy - 14 });
-      assert.ok(ghostAlphaNow < shown.maxA - 15, `the model recedes while tracing (${ghostAlphaNow} vs ${shown.maxA})`);
+      assert.ok(ghostAlphaNow < shown.maxA / 2, `the model lifts once ink lands (${ghostAlphaNow} vs ${shown.maxA})`);
       // Clear: a fresh go, the model back at full strength.
       await page.getByRole('button', { name: 'Clear' }).click();
-      assert.equal(await page.getAttribute('.ink-pad', 'data-ghost'), 'shown');
+      assert.equal(await page.getAttribute('.ink-pad', 'data-ghost'), '1');
       assert.equal(await page.getAttribute('.ink-canvas', 'data-strokes'), '0');
       // Dark theme: the ghost is re-tinted and still visible.
       await page.evaluate(() => document.documentElement.setAttribute('data-theme', 'dark'));
       await page.waitForTimeout(40);
       const dark = await measure();
-      assert.ok(dark.maxA >= 60, 'still visible on a dark pad');
-      assert.notDeepEqual(dark.rgb, shown.rgb, 'tint follows the theme');
+      assert.ok(dark.maxA >= 90, 'still visible on a dark pad');
+      assert.ok(dark.rgb.every((v) => v > 180), `a pale wash on a dark pad, not graphite that would vanish: ${dark.rgb}`);
       await page.evaluate(() => {
         const c = document.querySelector('.ink-canvas');
         const r = c.getBoundingClientRect();
@@ -359,7 +360,7 @@ export const tests = [
         assert.equal(await missOnce(), 'retype');
         const isText = prompt.includes('Peru');
         if (isText) {
-          await page.waitForFunction(() => document.querySelector('.ink-pad')?.dataset.ghost === 'shown');
+          await page.waitForFunction(() => document.querySelector('.ink-pad')?.dataset.ghost === '1');
           await page.getByText('Trace the correct answer once').first().waitFor();
           const alpha = await page.evaluate(() => {
             const c = document.querySelector('.ink-canvas');
@@ -368,7 +369,7 @@ export const tests = [
             for (let i = 3; i < d.length; i += 4) m = Math.max(m, d[i]);
             return m;
           });
-          assert.ok(alpha > 40 && alpha < 100, `the written-out answer is faint (${alpha})`);
+          assert.ok(alpha > 80 && alpha < 120, `the written-out answer is the same soft wash (${alpha})`);
           seen.text = true;
         } else {
           await page.waitForTimeout(80);

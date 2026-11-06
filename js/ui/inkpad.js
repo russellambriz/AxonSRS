@@ -3,7 +3,9 @@
  * finger or a mouse. Nothing is recognised; the ink is shown back next to
  * the correct answer so the learner can grade it. Once a pen has touched
  * the pad on this device, finger and palm touches are ignored from then
- * on, including the first stroke of a later session. Settings → Study →
+ * on, including the first stroke of a later session. A palm-sized touch
+ * or a second finger is ignored even before that, so a resting hand does
+ * not start a stroke; one finger still writes. Settings → Study →
  * Pencil only ignores every touch even before a pen is seen. While a pen
  * stroke is down, every other pointer is ignored. Eraser removes each
  * whole stroke it touches, so Undo stroke can put that stroke back.
@@ -28,7 +30,7 @@ import { h } from './dom.js';
 import { icon } from './icons.js';
 import { local } from './local.js';
 import { reducedMotion } from './appearance.js';
-import { eraseStrokes, ERASER_RADIUS, extrapolateTail, paintSamples, pointWidth, redoInkAction, simplifySamples, SMOOTHING_LEVELS, smoothingLevel, splitPointerSamples, undoInkAction } from '../core/ink.js';
+import { eraseStrokes, ERASER_RADIUS, extrapolateTail, ghostPlacement, isPalmTouch, paintSamples, pointWidth, redoInkAction, simplifySamples, SMOOTHING_LEVELS, smoothingLevel, splitPointerSamples, undoInkAction } from '../core/ink.js';
 
 const HINT = 'Write your answer, then check it';
 /** Set after a pen has touched a pad on this device. */
@@ -40,9 +42,9 @@ export const SMOOTHING_KEY = 'axon-ink-smoothing';
 const SMOOTHING_EVENT = 'axon-ink-smoothing';
 /** After the pencil lifts, a touch elsewhere is still treated as the palm for this long. */
 export const PALM_WINDOW_MS = 450;
-/** Write-on ghost: how strongly it shows before the first stroke, and while tracing. */
-export const GHOST_ALPHA = 0.32;
-export const GHOST_TRACING_ALPHA = 0.2;
+/** Write-on ghost: full on an empty page, a whisper once ink is down (before the trace's own soft wash). */
+export const GHOST_ALPHA = 0.62;
+export const GHOST_LIFT_ALPHA = 0.16;
 
 export function inkSmoothing() {
   return smoothingLevel(local.get(SMOOTHING_KEY)).id;
@@ -122,8 +124,8 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
   let plate = null;
   let plateMediaId = null;
   let plateUrl = null;
-  // Write-on ghost: an alpha mask of the model handwriting, tinted with the
-  // theme accent when drawn.
+  // Write-on ghost: an alpha mask of the model handwriting, tinted for the
+  // theme when drawn.
   let ghost = null;
   let ghostTint = null;
   let ghostTintColor = null;
@@ -137,10 +139,10 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
   const hintEl = tools ? h('span', { class: 'faint small ink-hint' }, HINT) : null;
   const el = h('div', { class: 'ink-pad', dataset: { predicted: '0', hover: '0', penSeen: penSeen ? '1' : '0', ghost: '0', palm: '0' } }, stage, tools ? h('div', { class: 'ink-tools' }, hintEl, h('div', { class: 'row tight' }, undoBtn, eraserBtn, clearBtn)) : null);
 
-  /** Touch is ignored after a pen has been used here, or whenever Pencil only is on. Any second pointer is ignored while a stroke — a pen stroke in particular — is active. */
+  /** Touch is ignored after a pen has been used here, whenever Pencil only is on, or when the contact is a palm or an extra finger. Any second pointer is ignored while a stroke — a pen stroke in particular — is active. */
   function ignored(e) {
     if (current && e.pointerId !== current.id) return true;
-    if (e.pointerType === 'touch' && (penSeen || pencilOnly())) return true;
+    if (e.pointerType === 'touch' && (penSeen || pencilOnly() || isPalmTouch(e))) return true;
     return false;
   }
 
@@ -281,7 +283,9 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
    * each end of a run, a link along it) is one subpath of a single fill,
    * all wound the same way, clipped to the tile: the union stays solid (one
    * outline round a whole stroke self-intersects on a loop and punches
-   * holes) and each pixel is anti-aliased once, at the edge. The
+   * holes) and each pixel is anti-aliased once, at the edge. A second fill
+   * of the same pieces, one device pixel in, keeps the inside solid where a
+   * browser anti-aliases the overlaps approximately. The
    * rasterizer chooses how it anti-aliases from the size of the path it is
    * given, so filling a whole stroke at once would shade the same edge
    * differently at 100 samples and at 1500. Per tile, a pixel only ever
@@ -322,9 +326,11 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     return Math.hypot(s.x - p.x, s.y - p.y) >= 0.01;
   }
 
-  function tracePiece(g, samples, i, link) {
+  /** Add disc i, or the link into i, to the path; `inset` (CSS px) shrinks it for the core pass. */
+  function tracePiece(g, samples, i, link, inset = 0) {
     const s = samples[i];
-    const r = sampleRadius(s);
+    const r = sampleRadius(s) - inset;
+    if (r <= 0) return;
     if (!link) {
       g.moveTo(s.x + r, s.y);
       g.arc(s.x, s.y, r, 0, Math.PI * 2);
@@ -334,7 +340,8 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     const dx = s.x - p.x;
     const dy = s.y - p.y;
     const len = Math.hypot(dx, dy);
-    const r0 = sampleRadius(p);
+    const r0 = sampleRadius(p) - inset;
+    if (r0 <= 0) return;
     const nx = -dy / len;
     const ny = dx / len;
     // Turning the same way as the discs (arc 0 → 2π). Wound the other way,
@@ -403,6 +410,13 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
       g.setTransform(dpr, 0, 0, dpr, 0, 0);
       g.beginPath();
       for (const code of codes) tracePiece(g, samples, code >> 1, (code & 1) === 1);
+      g.fill();
+      // The core: the same pieces one device pixel in. Browsers anti-alias
+      // a union of overlapping subpaths approximately and can leave a
+      // lighter row inside the ink; the core is solid there. It stays a
+      // pixel clear of the outline, so the edge is still anti-aliased once.
+      g.beginPath();
+      for (const code of codes) tracePiece(g, samples, code >> 1, (code & 1) === 1, 1 / dpr);
       g.fill();
       g.restore();
     }
@@ -509,7 +523,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     g.drawImage(plate, (r.width - w) / 2, (r.height - hh) / 2, w, hh);
   }
 
-  /** The ghost tint: the theme accent, so the model reads in light and dark and never looks like your own ink. */
+  /** The ghost tint (--ink-ghost): graphite on a light pad, a pale wash on a dark one, so the model reads in both. */
   function ghostColor() {
     return token('--ink-ghost') || inkColor();
   }
@@ -533,26 +547,23 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
   }
 
   /**
-   * The model handwriting, centred, at the size it was written (its PNG is
-   * in device pixels), only ever shrunk to fit — never blown up and blurred.
+   * The model handwriting at the size it was written (its PNG is in device
+   * pixels), only ever shrunk to leave a margin — never blown up and
+   * blurred — centred, a little above the middle where the pencil starts.
    */
   function drawGhost(g) {
     if (!ghost || ghostAlpha <= 0.002) return;
     const tint = tintedGhost();
     const r = cssSize();
-    if (!tint || !r.width || !r.height) return;
-    const iw = tint.width / ghost.ratio;
-    const ih = tint.height / ghost.ratio;
-    const fit = Math.min(1, (r.width * 0.92) / iw, (r.height * 0.88) / ih);
-    const w = iw * fit;
-    const hh = ih * fit;
-    const strength = Number.parseFloat(token('--ink-ghost-strength')) || 1;
+    if (!tint) return;
+    const place = ghostPlacement({ imageWidth: tint.width, imageHeight: tint.height, padWidth: r.width, padHeight: r.height, dpr: ghost.ratio });
+    if (!place) return;
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.save();
-    g.globalAlpha = Math.min(1, ghostAlpha * strength);
+    g.globalAlpha = ghostAlpha;
     g.imageSmoothingEnabled = true;
     g.imageSmoothingQuality = 'high';
-    g.drawImage(tint, (r.width - w) / 2, (r.height - hh) / 2, w, hh);
+    g.drawImage(tint, place.x, place.y, place.w, place.h);
     g.restore();
   }
 
@@ -584,7 +595,17 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
   /* ------------------------------------------------------------- the ghost */
 
   function setGhostState() {
-    el.dataset.ghost = !ghost ? '0' : ghostTarget < GHOST_ALPHA ? 'tracing' : 'shown';
+    el.dataset.ghost = !ghost ? '0' : ghostTarget < GHOST_ALPHA ? 'lift' : '1';
+  }
+
+  function writingNow() {
+    return strokes.length > 0 || queued.length > 0 || !!current?.stroke;
+  }
+
+  /** Full while the page is empty, lifted once ink lands, back when the page is empty again. */
+  function syncGhost(ms = 200) {
+    const to = !ghost ? 0 : writingNow() ? GHOST_LIFT_ALPHA : GHOST_ALPHA;
+    if (to !== ghostTarget) fadeGhost(to, ms);
   }
 
   /** Ease the ghost to `to` (ease-out), or jump there when motion is reduced. */
@@ -643,6 +664,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
   }
 
   function update() {
+    syncGhost();
     canvas.dataset.strokes = String(strokes.length);
     canvas.dataset.points = String(strokes.reduce((n, s) => n + s.pts.length, 0) + queued.length);
     const busy = !!current;
@@ -809,21 +831,25 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
       update();
       return;
     }
-    const stroke = { pts: [pointerFrom(e)], color: pen.color };
+    // Coalesced history on the down event, in order, so a fast stroke does
+    // not start as one dot and then a jump. The predicted tail is not stored.
+    const { real, tail } = ingest(e);
+    const stroke = { pts: real.length ? real : [pointerFrom(e)], color: pen.color };
     strokes.push(stroke);
     current = { id: e.pointerId, type: e.pointerType, stroke };
     resetLive();
     queued = [];
-    setPredicted([]);
-    // Tracing begins: the model steps back so the new ink leads.
-    if (ghost && ghostTarget >= GHOST_ALPHA) fadeGhost(GHOST_TRACING_ALPHA, 220);
+    setPredicted(tail);
     update();
     composite();
     onStroke(e);
   });
 
   canvas.addEventListener('pointermove', (e) => {
-    if (ignored(e)) return;
+    if (ignored(e)) {
+      if (e.pointerType === 'touch') e.preventDefault();
+      return;
+    }
     if (current?.erasing) {
       if (e.pointerId !== current.id) return;
       e.preventDefault();
@@ -912,8 +938,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     setPlate(null);
     redraw();
     drawOverlay();
-    // A fresh page: the model comes back to full strength for another go.
-    if (ghost && ghostTarget < GHOST_ALPHA) fadeGhost(GHOST_ALPHA, 200);
+    // A fresh page: update() brings the model back to full strength for another go.
     update();
   }
 
@@ -927,12 +952,13 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     /** Show a saved drawing under new strokes. `url` is revoked when replaced. */
     setPlate,
     /**
-     * Faint model to trace: an image whose alpha is the ink. It is tinted
-     * with the theme accent, shown at the size it was written
-     * (`pixelRatio` = device pixels per CSS pixel of the image, this
-     * device's by default), fades in, and steps back once tracing starts.
-     * Not a stroke, so Clear and Done still see an empty pad, and never
-     * part of a snapshot.
+     * Faint model to trace: an image whose alpha is the ink, tinted for the
+     * theme and shown at the size it was written (`pixelRatio` = device
+     * pixels per CSS pixel of the image, this device's by default). It is
+     * full while the page is empty and lifts as soon as ink lands, so the
+     * new stroke is the mark; Undo or Clear back to an empty page brings it
+     * back. Not a stroke, so Clear and Done still see an empty pad, and
+     * never part of a snapshot.
      */
     setGhost(image, { pixelRatio = null } = {}) {
       cancelAnimationFrame(ghostRaf);
@@ -949,7 +975,8 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
       }
       ghost = { mask: image, ratio: pixelRatio > 0 ? pixelRatio : (window.devicePixelRatio || 1) };
       ghostAlpha = 0;
-      fadeGhost(strokes.length ? GHOST_TRACING_ALPHA : GHOST_ALPHA, 280);
+      ghostTarget = 0;
+      syncGhost(280);
     },
     strokeCount: () => strokes.length,
     clear,

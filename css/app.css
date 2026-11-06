@@ -1265,9 +1265,8 @@ body.studying, body.penciling { overflow: hidden; }
   /* Read by the pad as tokens: custom properties switch with the theme at
      once, where a transitioning colour would lag a frame or two. */
   --ink: var(--text);
-  --ink-ghost: var(--accent);
-  /* Multiplies the ghost's opacity: a faint accent needs a little more on a dark pad. */
-  --ink-ghost-strength: 1;
+  /* The model to trace: a soft graphite wash on a light pad. */
+  --ink-ghost: #3a342e;
   color: var(--ink);
   touch-action: none;
   -webkit-user-select: none;
@@ -1275,9 +1274,10 @@ body.studying, body.penciling { overflow: hidden; }
   -webkit-touch-callout: none;
   cursor: crosshair;
 }
-:root[data-theme='dark'] .ink-canvas { --ink-ghost-strength: 1.4; }
+/* On a dark pad graphite would vanish: the same wash in a pale warm grey. */
+:root[data-theme='dark'] .ink-canvas { --ink-ghost: #e6dfd5; }
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme='light']) .ink-canvas { --ink-ghost-strength: 1.4; }
+  :root:not([data-theme='light']) .ink-canvas { --ink-ghost: #e6dfd5; }
 }
 /* The dashed edge is drawn over the pad, not on the canvas: a border on the
    canvas shifts the ink off the pencil tip and resamples the bitmap. */
