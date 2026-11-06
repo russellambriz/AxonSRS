@@ -8,7 +8,12 @@ import { newContext, openApp, seedDeck, idbAll, inApp, startReview, waitPhase, a
 async function writeMode(page) {
   await page.getByRole('button', { name: 'Write' }).click();
   await page.locator('.ink-canvas').waitFor();
-  await page.waitForFunction(() => document.querySelector('.ink-canvas')?.width > 0);
+  // Sized to its box (not the default 300×150 bitmap), so CSS px map to known device pixels.
+  await page.waitForFunction(() => {
+    const c = document.querySelector('.ink-canvas');
+    const r = c?.getBoundingClientRect();
+    return Boolean(r?.width) && c.width === Math.round(r.width * (window.devicePixelRatio || 1));
+  });
 }
 
 /** A pen stroke along a gentle wave, dispatched synchronously. */
@@ -132,7 +137,7 @@ export const tests = [
     },
   },
   {
-    name: 'palm guard: a touch on Clear while the pencil writes or just after it lifts is ignored; a later tap and a pencil tap work',
+    name: 'palm guard: a touch on Clear while the pencil writes or just after it lifts is ignored; a later tap, a pencil tap and a tap after a trackpad click work',
     async run({ browser, url }) {
       const ctx = await newContext(browser, { viewport: { width: 820, height: 1180 }, hasTouch: true });
       const page = await openApp(ctx, url);
@@ -167,9 +172,16 @@ export const tests = [
         pen('pointerup', 60);
         tap('pen');
         log.push(strokes());
+        // A trackpad click right after a stroke means the hand moved on: the next touch is a tap.
+        pen('pointerdown', 20);
+        pen('pointermove', 60);
+        pen('pointerup', 60);
+        document.body.dispatchEvent(new PointerEvent('pointerdown', { pointerType: 'mouse', pointerId: 1, bubbles: true, cancelable: true }));
+        tap('touch');
+        log.push(strokes());
         return { log, palm: Number(c.closest('.ink-pad').dataset.palm) };
       });
-      assert.deepEqual(out.log, [1, 1, 0, 0], `palm taps while and just after writing are ignored; a later tap and a pencil tap clear: ${out.log}`);
+      assert.deepEqual(out.log, [1, 1, 0, 0, 0], `palm taps while and just after writing are ignored; a later tap, a pencil tap and a tap after a trackpad click clear: ${out.log}`);
       assert.equal(out.palm, 2, 'two palm touches were caught');
       assertNoErrors(page);
       await ctx.close();
@@ -378,6 +390,141 @@ export const tests = [
       assert.equal(events.filter((e) => e.type === 'review').length, 2, 'one review per card');
       assert.ok(events.filter((e) => e.type === 'review').every((e) => e.response.method === 'self'));
       assert.equal(events.filter((e) => e.type === 'copy' && !e.bypassed).length, 2, 'one copy event per miss');
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
+  {
+    name: 'live ink is exact and cheap: a long looping stroke drawn frame by frame matches a repaint from scratch, and a frame costs the ink near the tip, not the stroke\'s length',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser, { viewport: { width: 1180, height: 820 }, hasTouch: true, deviceScaleFactor: 2 });
+      const page = await openApp(ctx, url);
+      await seedDeck(page, { cards: [['Exact', 'x']] });
+      await startReview(page);
+      await writeMode(page);
+      const res = await page.evaluate(async () => {
+        const c = document.querySelector('.ink-canvas');
+        const r = c.getBoundingClientRect();
+        const raf = () => new Promise((res) => requestAnimationFrame(res));
+        const fire = (name, i, p) => c.dispatchEvent(new PointerEvent(name, {
+          pointerType: 'pen', pointerId: 81,
+          clientX: r.left + 40 + i * 0.9 + Math.cos(i / 9) * 22,
+          clientY: r.top + 120 + Math.sin(i / 9) * 22 + Math.sin(i / 70) * 30,
+          pressure: p, buttons: name === 'pointerup' ? 0 : 1, bubbles: true, cancelable: true,
+        }));
+        const g = c.getContext('2d');
+        const pixels = () => g.getImageData(0, 0, c.width, c.height).data;
+        const orig = CanvasRenderingContext2D.prototype.arc;
+        let arcs = 0;
+        let early = 0;
+        let late = 0;
+        CanvasRenderingContext2D.prototype.arc = function (...a) { arcs += 1; return orig.apply(this, a); };
+        fire('pointerdown', 0, 0.2);
+        for (let i = 1; i <= 600; i++) {
+          fire('pointermove', i, 0.3 + 0.25 * Math.sin(i / 31));
+          if (i % 6 === 0) {
+            arcs = 0;
+            await raf();
+            // The coil is periodic: the ink near the tip is as dense at the start as at the end.
+            if (i > 100 && i <= 200) early = Math.max(early, arcs);
+            if (i > 500) late = Math.max(late, arcs);
+          }
+        }
+        fire('pointerup', 600, 0);
+        const live = pixels();
+        // The same smoothing announced again forces a repaint of every stroke from scratch.
+        arcs = 0;
+        window.dispatchEvent(new CustomEvent('axon-ink-smoothing'));
+        const whole = arcs;
+        CanvasRenderingContext2D.prototype.arc = orig;
+        const full = pixels();
+        let maxDiff = 0;
+        let inked = 0;
+        for (let k = 0; k < live.length; k++) {
+          const d = Math.abs(live[k] - full[k]);
+          if (d > maxDiff) maxDiff = d;
+          if (k % 4 === 3 && full[k] > 0) inked++;
+        }
+        return { maxDiff, inked, early, late, whole };
+      });
+      assert.ok(res.inked > 5000, 'a long stroke was drawn');
+      assert.ok(res.maxDiff <= 2, `incremental live ink differs from a full repaint by up to ${res.maxDiff}/255`);
+      assert.ok(res.late < res.whole / 3, `a frame late in the stroke painted ${res.late} of its ${res.whole} discs; it should only touch the tip`);
+      assert.ok(res.late < res.early * 1.6, `a frame costs the ink near the tip, not the stroke's length: ${res.early} discs early, ${res.late} late`);
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
+  {
+    name: 'solid fill: inside written loops, turns and heavy strokes there are no lighter rows or pinholes, only the edge is anti-aliased',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser, { viewport: { width: 1180, height: 820 }, hasTouch: true, deviceScaleFactor: 2 });
+      const page = await openApp(ctx, url);
+      await seedDeck(page, { cards: [['Solid', 'x']] });
+      await startReview(page);
+      await writeMode(page);
+      const res = await page.evaluate(async () => {
+        const { paintSamples } = await import('./js/core/ink.js');
+        const c = document.querySelector('.ink-canvas');
+        const r = c.getBoundingClientRect();
+        const raf = () => new Promise((done) => requestAnimationFrame(done));
+        const written = [];
+        let id = 90;
+        const stroke = async (fn, n, pressure) => {
+          const pid = id++;
+          const pts = [];
+          const fire = (name, t, p) => {
+            const [x, y] = fn(t);
+            pts.push({ x, y, p, scale: 1 });
+            c.dispatchEvent(new PointerEvent(name, { pointerType: 'pen', pointerId: pid, clientX: r.left + x, clientY: r.top + y, pressure: p, buttons: name === 'pointerup' ? 0 : 1, bubbles: true, cancelable: true }));
+          };
+          fire('pointerdown', 0, pressure(0));
+          for (let i = 1; i <= n; i++) {
+            fire('pointermove', i / n, pressure(i / n));
+            if (i % 3 === 0) await raf();
+          }
+          fire('pointerup', 1, 0);
+          written.push(pts);
+        };
+        const bell = (lo, hi) => (t) => lo + (hi - lo) * Math.sin(Math.PI * t);
+        // Cursive turns, tight o loops and a heavy wave: where many pieces overlap.
+        await stroke((t) => { const a = t * Math.PI * 6; return [60 + t * 220 + Math.cos(a) * -16, 150 - Math.abs(Math.sin(a / 2)) * 60]; }, 160, bell(0.15, 0.55));
+        for (let k = 0; k < 3; k++) await stroke((t) => { const a = t * Math.PI * 2.1 - 0.4; return [360 + k * 60 + Math.cos(a) * 18, 110 + Math.sin(a) * 18]; }, 50, bell(0.2, 0.5));
+        await stroke((t) => [40 + t * 330, 230 + Math.sin(t * Math.PI * 4) * 14], 90, bell(0.4, 1));
+        const g = c.getContext('2d');
+        const dpr = c.width / r.width;
+        const W = c.width;
+        const d = g.getImageData(0, 0, W, c.height).data;
+        // A device pixel whose centre is 1.25 CSS px inside a disc of the stroke is ink, fully:
+        // anything lighter there is a hole, not anti-aliasing.
+        const seen = new Set();
+        let checked = 0;
+        let dim = 0;
+        let worst = 255;
+        for (const pts of written) {
+          const samples = paintSamples(pts, 'medium');
+          for (const s of samples.slice(8, -8)) {
+            const inner = Math.max(0.8, s.w / 2) - 1.25;
+            if (inner <= 0.3) continue;
+            for (let py = Math.floor((s.y - inner) * dpr); py <= Math.ceil((s.y + inner) * dpr); py++) {
+              for (let px = Math.floor((s.x - inner) * dpr); px <= Math.ceil((s.x + inner) * dpr); px++) {
+                if (Math.hypot((px + 0.5) / dpr - s.x, (py + 0.5) / dpr - s.y) > inner) continue;
+                const k = py * W + px;
+                if (seen.has(k)) continue;
+                seen.add(k);
+                checked++;
+                const a = d[k * 4 + 3];
+                if (a < 250) dim++;
+                worst = Math.min(worst, a);
+              }
+            }
+          }
+        }
+        return { checked, dim, worst };
+      });
+      assert.ok(res.checked > 3000, `enough of the inside was checked: ${res.checked} pixels`);
+      // The earlier dense fill left 21 such pixels here, down to 212/255: faint lighter rows across the ink.
+      assert.ok(res.dim <= 8 && res.worst >= 222, `the inside of the ink is solid: ${res.dim} of ${res.checked} pixels lighter, the faintest at ${res.worst}/255`);
       assertNoErrors(page);
       await ctx.close();
     },

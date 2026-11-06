@@ -402,6 +402,52 @@ export function paintSamples(points, smoothing = 'medium') {
   return out;
 }
 
+/**
+ * The pieces the fill is built from: the dense samples with every sample
+ * dropped that lies within `tol` CSS px (in position and in radius) of the
+ * straight run between its neighbours that are kept. Each run is drawn as
+ * a disc at both ends and a link between them, so the shape moves by at
+ * most `tol`, but a pixel row crosses far fewer overlapping edges: the
+ * browser anti-aliases a union of many overlapping subpaths approximately,
+ * and a dense stroke shows faint lighter rows inside the ink.
+ *
+ * It works left to right and never looks back past the last kept sample,
+ * so as a stroke grows, everything up to that sample stays exactly as it
+ * was (the live layer only repaints from there). A run is at most `maxRun`
+ * samples long.
+ */
+export function simplifySamples(samples, tol = 0.05, maxRun = 32) {
+  const list = samples || [];
+  if (list.length < 3) return list.slice();
+  const out = [list[0]];
+  let a = 0;
+  for (let b = 2; b < list.length; b++) {
+    if (b - a > maxRun || !runFits(list, a, b, tol)) {
+      a = b - 1;
+      out.push(list[a]);
+    }
+  }
+  out.push(list[list.length - 1]);
+  return out;
+}
+
+function runFits(list, a, b, tol) {
+  const A = list[a];
+  const B = list[b];
+  const dx = B.x - A.x;
+  const dy = B.y - A.y;
+  const len2 = dx * dx + dy * dy;
+  const ra = Math.max(0.8, A.w / 2);
+  const rb = Math.max(0.8, B.w / 2);
+  for (let i = a + 1; i < b; i++) {
+    const P = list[i];
+    const t = len2 > 1e-9 ? clamp(((P.x - A.x) * dx + (P.y - A.y) * dy) / len2, 0, 1) : 0;
+    if (Math.hypot(A.x + dx * t - P.x, A.y + dy * t - P.y) > tol) return false;
+    if (Math.abs(ra + (rb - ra) * t - Math.max(0.8, P.w / 2)) > tol) return false;
+  }
+  return true;
+}
+
 function sameSpot(a, b) {
   return Math.hypot(a.x - b.x, a.y - b.y) < 0.15 && Math.abs(finite(a.p, 0.5) - finite(b.p, 0.5)) < 0.02;
 }

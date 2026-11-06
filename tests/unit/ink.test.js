@@ -1,7 +1,7 @@
 // Handwriting geometry: smoothing, pressure/tilt width, predicted samples, eraser hits.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { strokeWidth, shapedPressure, extrapolateTail, pencilFlatness, smoothStroke, paintSamples, stabilizeStroke, ribbonPolygon, ribbonEdges, centerlineCovered, smoothingLevel, splitPointerSamples, strokeHits, eraseStrokes, ERASER_RADIUS, pointWidth, undoInkAction, redoInkAction } from '../../js/core/ink.js';
+import { strokeWidth, shapedPressure, extrapolateTail, pencilFlatness, smoothStroke, paintSamples, simplifySamples, stabilizeStroke, ribbonPolygon, ribbonEdges, centerlineCovered, smoothingLevel, splitPointerSamples, strokeHits, eraseStrokes, ERASER_RADIUS, pointWidth, undoInkAction, redoInkAction } from '../../js/core/ink.js';
 
 const pt = (x, y, p = 0.5, extra = {}) => ({ x, y, p, ...extra });
 
@@ -269,4 +269,51 @@ test('solid fill invariants: light, heavy and tapering strokes stay covered betw
   const lift = paintSamples([pt(0, 0, 0.7), pt(6, 0, 0.6), pt(12, 0, 0.3), pt(18, 0, 0)], 'off');
   assert.ok(lift.at(-1).w < lift[0].w, 'the stroke tapers as the pencil lifts');
   assert.equal(centerlineCovered(lift), true);
+});
+
+test('fill runs: every dropped sample lies within the tolerance of its run, ends and turns are kept, and a growing stroke keeps its start', () => {
+  const radius = (s) => Math.max(0.8, s.w / 2);
+  const offRun = (a, b, p) => {
+    const dx = b.x - a.x;
+    const dy = b.y - a.y;
+    const len2 = dx * dx + dy * dy;
+    const t = len2 > 1e-9 ? Math.min(1, Math.max(0, ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2)) : 0;
+    return Math.max(Math.hypot(a.x + dx * t - p.x, a.y + dy * t - p.y), Math.abs(radius(a) + (radius(b) - radius(a)) * t - radius(p)));
+  };
+  const coil = [];
+  for (let i = 0; i <= 300; i++) coil.push(pt(i * 0.9 + Math.cos(i / 9) * 22, Math.sin(i / 9) * 22, 0.3 + 0.25 * Math.sin(i / 31)));
+  const dense = paintSamples(coil, 'medium');
+  const runs = simplifySamples(dense);
+  assert.ok(runs.length < dense.length / 3, `far fewer pieces: ${runs.length} of ${dense.length}`);
+  assert.equal(runs[0], dense[0], 'the first sample is kept');
+  assert.equal(runs.at(-1), dense.at(-1), 'the last sample is kept');
+  let k = 0;
+  for (let i = 0; i < dense.length; i++) {
+    if (dense[i] === runs[k]) {
+      k++;
+      continue;
+    }
+    // dense[i] lies between kept runs[k - 1] and runs[k].
+    assert.ok(offRun(runs[k - 1], runs[k], dense[i]) <= 0.05 + 1e-9, `sample ${i} is within 0.05px of its run`);
+  }
+  assert.equal(k, runs.length, 'kept samples are the originals, in order');
+  for (let i = 1; i < runs.length; i++) {
+    const gap = dense.indexOf(runs[i]) - dense.indexOf(runs[i - 1]);
+    assert.ok(gap <= 32, 'no run is longer than 32 samples');
+  }
+
+  // A straight, even line is a handful of runs; a hairpin keeps its tip.
+  const line = simplifySamples(paintSamples([pt(0, 0, 0.4), pt(60, 0, 0.4)], 'off'));
+  assert.ok(line.length <= 5, `a straight line is a few runs: ${line.length}`);
+  const hairpin = paintSamples([pt(0, 0, 0.4), pt(20, 0, 0.4), pt(0, 0.5, 0.4)], 'off');
+  const tipX = Math.max(...hairpin.map((s) => s.x));
+  assert.ok(Math.max(...simplifySamples(hairpin).map((s) => s.x)) >= tipX - 0.05, 'the turn of a hairpin is not cut off');
+
+  // As the stroke grows, everything before the last kept sample stays put.
+  for (const cut of [40, 120, 250]) {
+    const head = simplifySamples(dense.slice(0, cut)).slice(0, -1);
+    assert.deepEqual(head, runs.slice(0, head.length), `the first ${head.length} runs of a ${cut}-sample prefix stay`);
+  }
+  assert.deepEqual(simplifySamples([dense[0]]), [dense[0]], 'a dot stays a dot');
+  assert.deepEqual(simplifySamples([]), []);
 });

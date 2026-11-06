@@ -28,7 +28,7 @@ import { h } from './dom.js';
 import { icon } from './icons.js';
 import { local } from './local.js';
 import { reducedMotion } from './appearance.js';
-import { eraseStrokes, ERASER_RADIUS, extrapolateTail, paintSamples, pointWidth, redoInkAction, SMOOTHING_LEVELS, smoothingLevel, splitPointerSamples, undoInkAction } from '../core/ink.js';
+import { eraseStrokes, ERASER_RADIUS, extrapolateTail, paintSamples, pointWidth, redoInkAction, simplifySamples, SMOOTHING_LEVELS, smoothingLevel, splitPointerSamples, undoInkAction } from '../core/ink.js';
 
 const HINT = 'Write your answer, then check it';
 /** Set after a pen has touched a pad on this device. */
@@ -94,6 +94,13 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
   const inkLayer = document.createElement('canvas');
   const lctx = inkLayer.getContext('2d');
   let layerColor = null;
+  // The stroke under the pencil. Only the tiles around the part that
+  // changed since the last frame are repainted, so a frame costs the moving
+  // tip, not the length of the stroke.
+  const liveLayer = document.createElement('canvas');
+  const vctx = liveLayer.getContext('2d');
+  let liveSamples = null;
+  let liveColor = null;
   const stage = h('div', { class: 'ink-stage' }, canvas, overlay);
   const strokes = [];
   const history = [];
@@ -173,6 +180,11 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     guardSeenConnected = true;
     if (e.pointerType === 'pen') {
       swallowClickUntil = 0;
+      return;
+    }
+    // A mouse or trackpad click is deliberate: the writing hand has moved on.
+    if (e.pointerType === 'mouse') {
+      lastPenUp = -Infinity;
       return;
     }
     if (e.pointerType !== 'touch' || e.target === canvas || !(penSeen || pencilOnly())) return;
@@ -264,39 +276,191 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
   }
 
   /**
-   * One stroke as a single fill. One outline around the whole stroke
-   * self-intersects on a loop (o, e, s) and the fill then punches holes.
-   * Each disc and each link is its own subpath, all wound the same way, so
-   * the union stays solid and is anti-aliased once, at its edge. Live ink,
-   * the ink layer and the PNG copy all use this.
+   * Ink is painted on a fixed grid of device-pixel tiles. Within a tile,
+   * every disc and link that reaches it (see simplifySamples: a disc at
+   * each end of a run, a link along it) is one subpath of a single fill,
+   * all wound the same way, clipped to the tile: the union stays solid (one
+   * outline round a whole stroke self-intersects on a loop and punches
+   * holes) and each pixel is anti-aliased once, at the edge. The
+   * rasterizer chooses how it anti-aliases from the size of the path it is
+   * given, so filling a whole stroke at once would shade the same edge
+   * differently at 100 samples and at 1500. Per tile, a pixel only ever
+   * depends on the stroke near it: a tile repainted under the pencil, at
+   * the lift, after an undo or for the PNG comes out the same, and a long
+   * stroke costs linear time instead of quadratic.
    */
-  function fillStroke(g, pts, color) {
-    const samples = paintSamples(pts, smoothingId);
-    if (!samples.length) return;
-    g.setTransform(dpr, 0, 0, dpr, 0, 0);
-    g.fillStyle = color;
-    g.beginPath();
-    for (let i = 0; i < samples.length; i++) {
-      const s = samples[i];
-      const r = Math.max(0.8, s.w / 2);
+  const TILE = 64;
+
+  function sampleRadius(s) {
+    return Math.max(0.8, s.w / 2);
+  }
+
+  /** Device-pixel box of disc i (link === false) or of the link from i-1 to i, padded so its anti-aliased edge is inside. */
+  function pieceBox(samples, i, link) {
+    const s = samples[i];
+    const r = sampleRadius(s);
+    let x0 = s.x - r;
+    let y0 = s.y - r;
+    let x1 = s.x + r;
+    let y1 = s.y + r;
+    if (link) {
+      // The link lies inside its two end discs, so their boxes bound it.
+      const p = samples[i - 1];
+      const r0 = sampleRadius(p);
+      x0 = Math.min(x0, p.x - r0);
+      y0 = Math.min(y0, p.y - r0);
+      x1 = Math.max(x1, p.x + r0);
+      y1 = Math.max(y1, p.y + r0);
+    }
+    return [x0 * dpr - 1, y0 * dpr - 1, x1 * dpr + 1, y1 * dpr + 1];
+  }
+
+  function hasLink(samples, i) {
+    if (i === 0) return false;
+    const s = samples[i];
+    const p = samples[i - 1];
+    return Math.hypot(s.x - p.x, s.y - p.y) >= 0.01;
+  }
+
+  function tracePiece(g, samples, i, link) {
+    const s = samples[i];
+    const r = sampleRadius(s);
+    if (!link) {
       g.moveTo(s.x + r, s.y);
       g.arc(s.x, s.y, r, 0, Math.PI * 2);
-      if (i === 0) continue;
-      const p = samples[i - 1];
-      const dx = s.x - p.x;
-      const dy = s.y - p.y;
-      const len = Math.hypot(dx, dy);
-      if (len < 0.01) continue;
-      const nx = -dy / len;
-      const ny = dx / len;
-      const r0 = Math.max(0.8, p.w / 2);
-      g.moveTo(p.x + nx * r0, p.y + ny * r0);
-      g.lineTo(s.x + nx * r, s.y + ny * r);
-      g.lineTo(s.x - nx * r, s.y - ny * r);
-      g.lineTo(p.x - nx * r0, p.y - ny * r0);
-      g.closePath();
+      return;
     }
-    g.fill();
+    const p = samples[i - 1];
+    const dx = s.x - p.x;
+    const dy = s.y - p.y;
+    const len = Math.hypot(dx, dy);
+    const r0 = sampleRadius(p);
+    const nx = -dy / len;
+    const ny = dx / len;
+    // Turning the same way as the discs (arc 0 → 2π). Wound the other way,
+    // a rasterizer that sums signed area cancels a link against a disc and
+    // leaves a hole where exactly one of each overlaps.
+    g.moveTo(p.x - nx * r0, p.y - ny * r0);
+    g.lineTo(s.x - nx * r, s.y - ny * r);
+    g.lineTo(s.x + nx * r, s.y + ny * r);
+    g.lineTo(p.x + nx * r0, p.y + ny * r0);
+    g.closePath();
+  }
+
+  /**
+   * Paint samples tile by tile. `only` (a device-pixel box) limits the
+   * work to the tiles it touches, and with `wipe` those tiles are cleared
+   * first, so a tile the stroke has left (a withdrawn tail) ends up empty.
+   */
+  function paintTiles(g, samples, color, only = null, wipe = false) {
+    const W = g.canvas.width;
+    const H = g.canvas.height;
+    if (!W || !H) return;
+    const cols = Math.ceil(W / TILE);
+    const rows = Math.ceil(H / TILE);
+    let tx0 = 0;
+    let ty0 = 0;
+    let tx1 = cols - 1;
+    let ty1 = rows - 1;
+    if (only) {
+      tx0 = Math.max(tx0, Math.floor(only[0] / TILE));
+      ty0 = Math.max(ty0, Math.floor(only[1] / TILE));
+      tx1 = Math.min(tx1, Math.floor(only[2] / TILE));
+      ty1 = Math.min(ty1, Math.floor(only[3] / TILE));
+    }
+    if (tx1 < tx0 || ty1 < ty0) return;
+    g.setTransform(1, 0, 0, 1, 0, 0);
+    if (wipe) g.clearRect(tx0 * TILE, ty0 * TILE, (tx1 - tx0 + 1) * TILE, (ty1 - ty0 + 1) * TILE);
+    // Each tile's pieces, in stroke order: disc i is 2i, the link into i is 2i+1.
+    const tiles = new Map();
+    const put = (box, code) => {
+      const a = Math.max(tx0, Math.floor(box[0] / TILE));
+      const b = Math.min(tx1, Math.floor(box[2] / TILE));
+      const c = Math.max(ty0, Math.floor(box[1] / TILE));
+      const d = Math.min(ty1, Math.floor(box[3] / TILE));
+      for (let ty = c; ty <= d; ty++) {
+        for (let tx = a; tx <= b; tx++) {
+          const key = ty * cols + tx;
+          const list = tiles.get(key);
+          if (list) list.push(code);
+          else tiles.set(key, [code]);
+        }
+      }
+    };
+    for (let i = 0; i < samples.length; i++) {
+      put(pieceBox(samples, i, false), i * 2);
+      if (hasLink(samples, i)) put(pieceBox(samples, i, true), i * 2 + 1);
+    }
+    g.fillStyle = color;
+    for (const [key, codes] of tiles) {
+      const tx = key % cols;
+      const ty = (key - tx) / cols;
+      g.save();
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.beginPath();
+      g.rect(tx * TILE, ty * TILE, TILE, TILE);
+      g.clip();
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.beginPath();
+      for (const code of codes) tracePiece(g, samples, code >> 1, (code & 1) === 1);
+      g.fill();
+      g.restore();
+    }
+  }
+
+  /** What the fill paints for these points: the smoothed samples, thinned to the runs that matter. */
+  function strokeSamples(pts) {
+    return simplifySamples(paintSamples(pts, smoothingId));
+  }
+
+  function fillStroke(g, pts, color) {
+    paintTiles(g, strokeSamples(pts), color);
+  }
+
+  const sameSample = (a, b) => a.x === b.x && a.y === b.y && a.w === b.w;
+
+  /**
+   * Bring the live layer up to date with the stroke under the pencil (and
+   * its predicted tail). Samples that did not move since the last frame are
+   * left alone; the tiles around the ones that did (new and old positions,
+   * so a withdrawn tail is wiped) are repainted. A tile left alone holds
+   * the same pieces it was painted with, so the layer always matches
+   * painting the whole stroke from scratch.
+   */
+  function updateLive(samples, color) {
+    // A new colour (a theme switch mid-stroke) repaints every tile, not just the tip.
+    if (color !== liveColor) resetLive();
+    liveColor = color;
+    const prev = liveSamples || [];
+    let i = 0;
+    const n = Math.min(prev.length, samples.length);
+    while (i < n && sameSample(prev[i], samples[i])) i++;
+    liveSamples = samples;
+    if (i === samples.length && i === prev.length) return;
+    // A changed sample also moves the link from the one before it.
+    const from = Math.max(0, i - 1);
+    const box = [Infinity, Infinity, -Infinity, -Infinity];
+    const grow = (list) => {
+      for (let k = from; k < list.length; k++) {
+        const s = list[k];
+        const r = sampleRadius(s) * dpr + 2;
+        box[0] = Math.min(box[0], s.x * dpr - r);
+        box[1] = Math.min(box[1], s.y * dpr - r);
+        box[2] = Math.max(box[2], s.x * dpr + r);
+        box[3] = Math.max(box[3], s.y * dpr + r);
+      }
+    };
+    grow(samples);
+    grow(prev);
+    if (!(box[2] > box[0])) return;
+    paintTiles(vctx, samples, color, box, true);
+  }
+
+  function resetLive() {
+    liveSamples = null;
+    liveColor = null;
+    vctx.setTransform(1, 0, 0, 1, 0, 0);
+    vctx.clearRect(0, 0, liveLayer.width, liveLayer.height);
   }
 
   /** Repaint every finished stroke into the ink layer (after undo, erase, resize, or a theme or smoothing change). */
@@ -311,11 +475,23 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     }
   }
 
-  /** Paint one stroke that just finished onto the ink layer. */
+  /**
+   * The stroke that just finished joins the ink layer. The live layer is
+   * brought up to date without the predicted tail (only the tiles at the
+   * tip change) and copied across: its tiles hold the same pieces a repaint
+   * would paint, so an undo or a theme switch later moves nothing, and
+   * lifting the pencil costs the same after a long stroke as after a dot.
+   */
   function commitInk(stroke) {
-    if (!inkLayer.width || !inkLayer.height) return;
+    if (!inkLayer.width || !inkLayer.height) {
+      resetLive();
+      return;
+    }
     if (layerColor === null) layerColor = inkColor();
-    fillStroke(lctx, stroke.pts, stroke.color || layerColor);
+    updateLive(strokeSamples(stroke.pts), stroke.color || layerColor);
+    lctx.setTransform(1, 0, 0, 1, 0, 0);
+    lctx.drawImage(liveLayer, 0, 0);
+    resetLive();
   }
 
   function drawPlate(g) {
@@ -393,12 +569,15 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     ctx.drawImage(inkLayer, 0, 0);
     if (current?.stroke) {
       const s = current.stroke;
-      fillStroke(ctx, predicted.length ? s.pts.concat(predicted) : s.pts, s.color || inkColor());
+      updateLive(strokeSamples(predicted.length ? s.pts.concat(predicted) : s.pts), s.color || inkColor());
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.drawImage(liveLayer, 0, 0);
     }
   }
 
   function redraw() {
     repaintInk();
+    resetLive();
     composite();
   }
 
@@ -584,6 +763,9 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     overlay.height = hPx;
     inkLayer.width = w;
     inkLayer.height = hPx;
+    liveLayer.width = w;
+    liveLayer.height = hPx;
+    liveSamples = null;
     applyQueued();
     redraw();
     drawOverlay();
@@ -630,6 +812,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     const stroke = { pts: [pointerFrom(e)], color: pen.color };
     strokes.push(stroke);
     current = { id: e.pointerId, type: e.pointerType, stroke };
+    resetLive();
     queued = [];
     setPredicted([]);
     // Tracing begins: the model steps back so the new ink leads.
@@ -799,7 +982,8 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
       drawPlate(cg);
       cg.setTransform(1, 0, 0, 1, 0, 0);
       cg.drawImage(inkLayer, 0, 0);
-      if (current?.stroke) fillStroke(cg, current.stroke.pts, current.stroke.color || inkColor());
+      // composite() just brought the live layer up to date without the tail.
+      if (current?.stroke) cg.drawImage(liveLayer, 0, 0);
       if (current && saved.length) {
         setPredicted(saved);
         composite();
