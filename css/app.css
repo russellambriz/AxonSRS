@@ -1267,6 +1267,11 @@ body.studying, body.penciling { overflow: hidden; }
 .study:not([data-phase='question']) .confidence-pick { display: none; }
 .self-check .btn kbd { margin-left: 6px; }
 /* Handwriting pad (ink answers are self-graded, never recognised) */
+/* iPad Safari: no rubber-band scroll, long-press callout or double-tap zoom
+   on the study screen, and with the pad open no text selection from a
+   resting palm. Scoped here so the editor and import keep text selection. */
+.study { overscroll-behavior: none; touch-action: manipulation; -webkit-touch-callout: none; }
+.study.ink-mode { -webkit-user-select: none; user-select: none; }
 .ink-pad { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
 .ink-stage { position: relative; width: 100%; height: clamp(150px, 32dvh, 420px); min-width: 0; }
 .ink-canvas {
@@ -1749,24 +1754,6 @@ button.pencil-saved:disabled { color: var(--text-3); text-decoration: none; curs
 .pencil-dot { width: 16px; height: 16px; border-radius: 50%; }
 .pencil-nib { width: 22px; border-radius: 999px; background: var(--text); display: block; }
 .pencil-width[aria-pressed='true'] .pencil-nib { background: var(--accent-text); }
-.pencil-smooth-group { flex: 1 1 160px; }
-.pencil-smooth {
-  min-height: 36px;
-  padding: 0 10px;
-  border-radius: 999px;
-  border: 1.5px solid transparent;
-  background: transparent;
-  color: var(--text-2);
-  font: inherit;
-  font-size: 0.82rem;
-  font-weight: 650;
-  cursor: pointer;
-}
-.pencil-smooth[aria-pressed='true'] {
-  background: var(--surface);
-  color: var(--text);
-  box-shadow: var(--shadow-1);
-}
 .pencil-panel {
   min-width: 0;
   min-height: 0;
@@ -1859,6 +1846,5 @@ button.pencil-saved:disabled { color: var(--text-3); text-decoration: none; curs
   .row-check { min-width: 44px; min-height: 44px; }
   .editor-side-toggle button { min-height: 44px; }
   button.pencil-saved { min-height: 44px; }
-  .pencil-smooth { min-height: 44px; }
   .card-row input[type='checkbox'] { width: 22px; height: 22px; }
 }

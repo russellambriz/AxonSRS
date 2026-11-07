@@ -1,7 +1,7 @@
 // Handwriting geometry: smoothing, pressure/tilt width, predicted samples, eraser hits.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { strokeWidth, shapedPressure, extrapolateTail, pencilFlatness, smoothStroke, paintSamples, simplifySamples, stabilizeStroke, ribbonPolygon, ribbonEdges, centerlineCovered, smoothingLevel, splitPointerSamples, strokeHits, eraseStrokes, ERASER_RADIUS, pointWidth, undoInkAction, redoInkAction, ghostPlacement, isPalmTouch } from '../../js/core/ink.js';
+import { strokeWidth, shapedPressure, extrapolateTail, pencilFlatness, smoothStroke, paintSamples, simplifySamples, stabilizeStroke, ribbonPolygon, ribbonEdges, centerlineCovered, splitPointerSamples, OneEuroFilter, ONE_EURO, traceTarget, traceCoverage, traceAdvanceDelay, TRACE, strokeHits, eraseStrokes, ERASER_RADIUS, pointWidth, undoInkAction, redoInkAction, ghostPlacement, isPalmTouch } from '../../js/core/ink.js';
 
 const pt = (x, y, p = 0.5, extra = {}) => ({ x, y, p, ...extra });
 
@@ -91,19 +91,16 @@ test('the stabilizer calms a jittery stroke without moving its ends or the saved
   const raw = [];
   for (let i = 0; i < 12; i++) raw.push(pt(i * 4, i % 2 ? 8 : 0, i % 2 ? 0.95 : 0.15));
   const snapshot = raw.map((p) => ({ ...p }));
-  assert.equal(smoothingLevel('nope').id, 'medium');
   assert.equal(stabilizeStroke(raw, 'off'), raw);
-  const medium = stabilizeStroke(raw, 'medium');
-  const high = stabilizeStroke(raw, 'high');
+  const medium = stabilizeStroke(raw);
   assert.deepEqual(raw, snapshot, 'saved points stay raw');
   assert.equal(medium[0].x, raw[0].x);
   assert.equal(medium.at(-1).x, raw.at(-1).x);
   assert.equal(medium.at(-1).y, raw.at(-1).y);
   assert.ok(Math.abs(medium[5].y) < Math.abs(raw[5].y), 'an interior wobble is pulled in');
-  assert.ok(Math.abs(high[5].y) < Math.abs(medium[5].y), 'high steadies more than medium');
   const jump = (pts) => pts.slice(1).reduce((sum, p, i) => sum + Math.abs(p.p - pts[i].p), 0);
   assert.ok(jump(medium) < jump(raw), 'pressure changes taper instead of flickering');
-  const painted = paintSamples(raw, 'high');
+  const painted = paintSamples(raw);
   assert.equal(painted[0].x, raw[0].x);
   assert.equal(painted.at(-1).x, raw.at(-1).x);
   assert.equal(painted.at(-1).y, raw.at(-1).y);
@@ -120,7 +117,7 @@ test('a pencil curve is sampled finely and its edge does not kink', () => {
     const a = (i / 12) * Math.PI;
     raw.push(pt(Math.cos(a) * 70, Math.sin(a) * 70, i % 2 ? 0.85 : 0.35));
   }
-  const samples = paintSamples(raw, 'medium');
+  const samples = paintSamples(raw);
   let maxStep = 0;
   for (let i = 1; i < samples.length; i++) {
     maxStep = Math.max(maxStep, Math.hypot(samples[i].x - samples[i - 1].x, samples[i].y - samples[i - 1].y));
@@ -139,7 +136,7 @@ test('a pencil curve is sampled finely and its edge does not kink', () => {
     maxTurn = Math.max(maxTurn, Math.acos(dot));
   }
   assert.ok(maxTurn < Math.PI / 3, `edge kink of ${maxTurn.toFixed(2)} rad`);
-  assert.notEqual(JSON.stringify(raw[3]), JSON.stringify(stabilizeStroke(raw, 'medium')[3] || raw[3]));
+  assert.notEqual(JSON.stringify(raw[3]), JSON.stringify(stabilizeStroke(raw)[3] || raw[3]));
 });
 
 test('a tight loop stays covered, so the stroke cannot go hollow between samples', () => {
@@ -148,7 +145,7 @@ test('a tight loop stays covered, so the stroke cannot go hollow between samples
     const a = (i / 28) * Math.PI * 2;
     raw.push(pt(Math.cos(a) * 16, Math.sin(a) * 16, 0.4));
   }
-  const samples = paintSamples(raw, 'medium');
+  const samples = paintSamples(raw);
   assert.equal(centerlineCovered(samples), true);
   assert.ok(samples.length > raw.length);
 });
@@ -156,7 +153,7 @@ test('a tight loop stays covered, so the stroke cannot go hollow between samples
 test('a fast sparse stroke stays finely sampled and covered, and the saved points stay put', () => {
   const raw = [pt(0, 0, 0.2), pt(180, 40, 0.95), pt(40, 120, 0.25, { tiltX: 20 })];
   const snapshot = raw.map((p) => ({ ...p }));
-  const samples = paintSamples(raw, 'medium');
+  const samples = paintSamples(raw);
   assert.deepEqual(raw, snapshot, 'gap filling is a render step');
   let maxStep = 0;
   for (let i = 1; i < samples.length; i++) {
@@ -302,7 +299,7 @@ test('without browser prediction, a steady stroke gets a short capped tail ahead
 test('solid fill invariants: light, heavy and tapering strokes stay covered between samples', () => {
   const sweep = [];
   for (let i = 0; i <= 40; i++) sweep.push(pt(i * 6, Math.sin(i / 3) * 20, i / 40));
-  for (const smoothing of ['off', 'low', 'medium', 'high']) {
+  for (const smoothing of ['off', 'auto']) {
     const samples = paintSamples(sweep, smoothing);
     assert.equal(centerlineCovered(samples), true, `no gap between discs (${smoothing})`);
     assert.ok(samples.every((s) => s.w >= strokeWidth(0) - 1e-9), 'never thinner than the pen at zero pressure');
@@ -323,7 +320,7 @@ test('fill runs: every dropped sample lies within the tolerance of its run, ends
   };
   const coil = [];
   for (let i = 0; i <= 300; i++) coil.push(pt(i * 0.9 + Math.cos(i / 9) * 22, Math.sin(i / 9) * 22, 0.3 + 0.25 * Math.sin(i / 31)));
-  const dense = paintSamples(coil, 'medium');
+  const dense = paintSamples(coil);
   const runs = simplifySamples(dense);
   assert.ok(runs.length < dense.length / 3, `far fewer pieces: ${runs.length} of ${dense.length}`);
   assert.equal(runs[0], dense[0], 'the first sample is kept');
@@ -358,4 +355,75 @@ test('fill runs: every dropped sample lies within the tolerance of its run, ends
   }
   assert.deepEqual(simplifySamples([dense[0]]), [dense[0]], 'a dot stays a dot');
   assert.deepEqual(simplifySamples([]), []);
+});
+
+test('One-Euro filter: a slow stroke is steadied hard, a fast one is followed closely', () => {
+  // A ±2 px wobble at 240 Hz on a line moving at `speed` px/s. Error is the
+  // filtered position against the true line, after the first quarter second.
+  const run = (speed) => {
+    const f = new OneEuroFilter();
+    let sum = 0;
+    let n = 0;
+    let lag = 0;
+    for (let i = 0; i < 240; i++) {
+      const t = i * (1000 / 240);
+      const x = (speed * t) / 1000;
+      const out = f.filter(x + (i % 2 ? 2 : -2), t);
+      if (i >= 60) {
+        sum += (out - x) ** 2;
+        n++;
+        lag = x - out;
+      }
+    }
+    return { rms: Math.sqrt(sum / n), lag };
+  };
+  const slow = run(20);
+  const fast = run(1500);
+  assert.ok(slow.rms < 1, `a slow stroke's wobble is damped (${slow.rms.toFixed(2)} px of 2)`);
+  const fixed = (() => {
+    // The same wobble through a plain low-pass at the slow cutoff, for comparison.
+    const f = new OneEuroFilter(ONE_EURO.minCutoff, 0, ONE_EURO.dCutoff);
+    let out = 0;
+    for (let i = 0; i < 240; i++) out = f.filter((1500 * i) / 240 + (i % 2 ? 2 : -2), i * (1000 / 240));
+    return (1500 * 239) / 240 - out;
+  })();
+  assert.ok(fast.lag < fixed / 4, `a fast stroke trails far less than a fixed filter would (${fast.lag.toFixed(1)} vs ${fixed.toFixed(1)} px)`);
+  const f = new OneEuroFilter();
+  assert.equal(f.filter(5, 0), 5, 'the first sample passes through');
+  assert.equal(ONE_EURO.minCutoff, 1.3);
+  assert.equal(ONE_EURO.beta, 0.018);
+});
+
+test('stored points without sample times still smooth (assumed 120 Hz) and are never changed', () => {
+  const raw = [{ x: 0, y: 0, p: 0.5 }, { x: 5, y: 4, p: 0.5 }, { x: 10, y: -4, p: 0.5 }, { x: 15, y: 4, p: 0.5 }, { x: 20, y: 0, p: 0.5 }];
+  const copy = structuredClone(raw);
+  const out = stabilizeStroke(raw);
+  assert.deepEqual(raw, copy);
+  assert.ok(out.every((p) => Number.isFinite(p.x) && Number.isFinite(p.y)));
+  assert.equal(out[0].x, 0);
+  assert.equal(out.at(-1).x, 20);
+});
+
+test('trace coverage: a long answer needs 75% and moves on 450 ms after the lift', () => {
+  const target = traceTarget({ left: 100, right: 340, top: 50, bottom: 90 });
+  assert.equal(target.compact, false);
+  const line = (x0, x1) => ({ pts: Array.from({ length: 60 }, (_, i) => ({ x: x0 + ((x1 - x0) * i) / 59, y: 70 })) });
+  assert.equal(traceAdvanceDelay(target, [line(100, 200)]), null, 'under half covered');
+  assert.ok(traceCoverage(target, [line(100, 200)]) < TRACE.required);
+  assert.equal(traceAdvanceDelay(target, [line(90, 220), line(220, 350)]), TRACE.advanceMs);
+  assert.equal(traceAdvanceDelay(target, [line(90, 350)]), TRACE.shortAdvanceMs, 'one stroke so far waits longer');
+  assert.equal(traceAdvanceDelay(target, [{ pts: [{ x: 200, y: 400 }] }]), null, 'ink far from the model does not count');
+});
+
+test('trace coverage: a short answer (narrower than 65 px) needs 85% and waits 900 ms, so a + or = is not cut off', () => {
+  const target = traceTarget({ left: 100, right: 140, top: 50, bottom: 90 });
+  assert.equal(target.compact, true);
+  // The bar of a '+' alone spans the box but the box is padded 12 px each side.
+  const bar = { pts: Array.from({ length: 30 }, (_, i) => ({ x: 100 + (40 * i) / 29, y: 70 })) };
+  assert.equal(traceAdvanceDelay(target, [bar]), null, 'the first stroke alone is not enough');
+  const wide = { pts: Array.from({ length: 30 }, (_, i) => ({ x: 88 + (64 * i) / 29, y: 70 })) };
+  assert.equal(traceAdvanceDelay(target, [wide]), TRACE.shortAdvanceMs);
+  assert.equal(traceAdvanceDelay(target, [wide, bar]), TRACE.shortAdvanceMs, 'short answers always wait 900 ms');
+  assert.equal(traceTarget(null), null);
+  assert.equal(traceTarget({ left: 5, right: 5, top: 0, bottom: 1 }), null);
 });

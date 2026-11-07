@@ -10,7 +10,9 @@
  * stroke is down, every other pointer is ignored. Eraser removes each
  * whole stroke it touches, so Undo stroke can put that stroke back.
  *
- * Strokes are smoothed with midpoint quadratics and batched onto one
+ * Strokes are steadied by a One-Euro filter (hard on slow, careful
+ * writing, almost none on a fast stroke, so there is no smoothing setting),
+ * drawn with midpoint quadratics and batched onto one
  * animation frame. Finished strokes are painted once into a cached ink
  * layer, so a frame only composites that layer and redraws the stroke
  * under the pencil: drawing stays as fast on a full page as on an empty
@@ -30,57 +32,23 @@ import { h } from './dom.js';
 import { icon } from './icons.js';
 import { local } from './local.js';
 import { reducedMotion } from './appearance.js';
-import { eraseStrokes, ERASER_RADIUS, extrapolateTail, ghostPlacement, isPalmTouch, paintSamples, pointWidth, redoInkAction, simplifySamples, SMOOTHING_LEVELS, smoothingLevel, splitPointerSamples, undoInkAction } from '../core/ink.js';
+import { eraseStrokes, ERASER_RADIUS, extrapolateTail, ghostPlacement, isPalmTouch, paintSamples, pointWidth, redoInkAction, simplifySamples, splitPointerSamples, undoInkAction } from '../core/ink.js';
 
 const HINT = 'Write your answer, then check it';
 /** Set after a pen has touched a pad on this device. */
 export const PEN_SEEN_KEY = 'axon-pen-seen';
 /** Settings → Study. When '1', the pad ignores all touch input. */
 export const PENCIL_ONLY_KEY = 'axon-pencil-only';
-/** Per device. Off, low, medium (default) or high. Render only. */
-export const SMOOTHING_KEY = 'axon-ink-smoothing';
-const SMOOTHING_EVENT = 'axon-ink-smoothing';
+/** window event: repaint every pad's strokes from scratch. */
+export const REPAINT_EVENT = 'axon-ink-repaint';
 /** After the pencil lifts, a touch elsewhere is still treated as the palm for this long. */
 export const PALM_WINDOW_MS = 450;
 /** Write-on ghost: full on an empty page, a whisper once ink is down (before the trace's own soft wash). */
 export const GHOST_ALPHA = 0.62;
 export const GHOST_LIFT_ALPHA = 0.16;
-
-export function inkSmoothing() {
-  return smoothingLevel(local.get(SMOOTHING_KEY)).id;
-}
-
-export function setInkSmoothing(id) {
-  const next = smoothingLevel(id).id;
-  local.set(SMOOTHING_KEY, next);
-  window.dispatchEvent(new CustomEvent(SMOOTHING_EVENT));
-  return next;
-}
-
-/** The Off / Low / Medium / High control used next to the pen colours. */
-export function smoothingButtons({ prefix = '' } = {}) {
-  const host = h('div', { class: 'pencil-choices pencil-smooth-group', role: 'group', 'aria-label': `${prefix}Smoothing`.trim() });
-  const paint = () => {
-    const current = inkSmoothing();
-    host.replaceChildren(...SMOOTHING_LEVELS.map((level) => h('button', {
-      type: 'button',
-      class: 'pencil-smooth',
-      'aria-label': `${prefix}Smoothing ${level.label}`.replace(/\s+/g, ' ').trim(),
-      'aria-pressed': String(level.id === current),
-      onclick: () => setInkSmoothing(level.id),
-    }, level.label)));
-  };
-  const onSmoothing = () => {
-    if (!host.isConnected) {
-      window.removeEventListener(SMOOTHING_EVENT, onSmoothing);
-      return;
-    }
-    paint();
-  };
-  paint();
-  window.addEventListener(SMOOTHING_EVENT, onSmoothing);
-  return host;
-}
+/** Two-finger tap to undo: both fingers down and up within this long, moving less than the slop. */
+export const TWO_FINGER_TAP_MS = 350;
+const TWO_FINGER_SLOP_PX = 14;
 
 function pencilOnly() {
   return local.get(PENCIL_ONLY_KEY) === '1';
@@ -124,7 +92,6 @@ export function inkPad({ onStroke = () => {}, onChange = null, onEdit = null, to
   let predicted = [];
   let hover = null;
   let rafId = 0;
-  let smoothingId = inkSmoothing();
   let lastPenUp = -Infinity;
   let swallowClickUntil = 0;
   let plate = null;
@@ -166,16 +133,17 @@ export function inkPad({ onStroke = () => {}, onChange = null, onEdit = null, to
       : 'Handwriting pad. Write your answer with Apple Pencil, a stylus or a finger.');
   }
   syncLabel();
-  const onSmoothing = () => {
+  // Repaint every finished stroke from scratch (the browser tests check the
+  // cached ink layer against a full repaint this way).
+  const onRepaint = () => {
     if (!canvas.isConnected) {
-      window.removeEventListener(SMOOTHING_EVENT, onSmoothing);
+      window.removeEventListener(REPAINT_EVENT, onRepaint);
       return;
     }
-    smoothingId = inkSmoothing();
     redraw();
     drawOverlay();
   };
-  window.addEventListener(SMOOTHING_EVENT, onSmoothing);
+  window.addEventListener(REPAINT_EVENT, onRepaint);
 
   /* ------------------------------------------------------------ palm guard */
 
@@ -430,7 +398,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, onEdit = null, to
 
   /** What the fill paints for these points: the smoothed samples, thinned to the runs that matter. */
   function strokeSamples(pts) {
-    return simplifySamples(paintSamples(pts, smoothingId));
+    return simplifySamples(paintSamples(pts));
   }
 
   function fillStroke(g, pts, color) {
@@ -483,7 +451,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, onEdit = null, to
     vctx.clearRect(0, 0, liveLayer.width, liveLayer.height);
   }
 
-  /** Repaint every finished stroke into the ink layer (after undo, erase, resize, or a theme or smoothing change). */
+  /** Repaint every finished stroke into the ink layer (after undo, erase, resize or a theme change). */
   function repaintInk() {
     lctx.setTransform(1, 0, 0, 1, 0, 0);
     lctx.clearRect(0, 0, inkLayer.width, inkLayer.height);
@@ -599,6 +567,38 @@ export function inkPad({ onStroke = () => {}, onChange = null, onEdit = null, to
   }
 
   /* ------------------------------------------------------------- the ghost */
+
+  /** The box (in the mask's own pixels) of the visible part of an alpha mask, or null to use the whole image. */
+  function inkBounds(image) {
+    try {
+      const w = image.width;
+      const hh = image.height;
+      if (!w || !hh) return null;
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = hh;
+      const g = c.getContext('2d');
+      if (!g) return null;
+      g.drawImage(image, 0, 0);
+      const d = g.getImageData(0, 0, w, hh).data;
+      let left = w;
+      let right = -1;
+      let top = hh;
+      let bottom = -1;
+      for (let y = 0; y < hh; y++) {
+        for (let x = 0; x < w; x++) {
+          if (d[(y * w + x) * 4 + 3] < 24) continue;
+          if (x < left) left = x;
+          if (x > right) right = x;
+          if (y < top) top = y;
+          if (y > bottom) bottom = y;
+        }
+      }
+      return right < 0 ? null : { left, right: right + 1, top, bottom: bottom + 1 };
+    } catch {
+      return null;
+    }
+  }
 
   function setGhostState() {
     el.dataset.ghost = !ghost ? '0' : ghostTarget < GHOST_ALPHA ? 'lift' : '1';
@@ -817,14 +817,15 @@ export function inkPad({ onStroke = () => {}, onChange = null, onEdit = null, to
     return splitPointerSamples(previous, eventList(e, 'getCoalescedEvents').map(pointerFrom), eventList(e, 'getPredictedEvents').map(pointerFrom));
   }
 
-  canvas.addEventListener('pointerdown', (e) => {
+  /** A pointer coming down on the pad, or forwarded from elsewhere (the pen landing as the pad opens). Returns true when a stroke or an erase began. */
+  function down(e) {
     if (e.pointerType === 'pen') rememberPen();
     if (ignored(e)) {
       // Keep a resting palm from scrolling the page, but do not start a stroke.
       if (e.pointerType === 'touch') e.preventDefault();
-      return;
+      return false;
     }
-    if (e.button > 0) return;
+    if (e.button > 0) return false;
     e.preventDefault();
     try {
       canvas.setPointerCapture(e.pointerId);
@@ -837,7 +838,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, onEdit = null, to
       current = { id: e.pointerId, type: e.pointerType, erasing: true };
       eraseWith(e);
       update();
-      return;
+      return true;
     }
     // Coalesced history on the down event, in order, so a fast stroke does
     // not start as one dot and then a jump. The predicted tail is not stored.
@@ -851,7 +852,9 @@ export function inkPad({ onStroke = () => {}, onChange = null, onEdit = null, to
     update();
     composite();
     onStroke(e);
-  });
+    return true;
+  }
+  canvas.addEventListener('pointerdown', (e) => { down(e); });
 
   canvas.addEventListener('pointermove', (e) => {
     if (ignored(e)) {
@@ -926,6 +929,40 @@ export function inkPad({ onStroke = () => {}, onChange = null, onEdit = null, to
   });
   // iOS: no magnifier, selection or scrolling while writing.
   canvas.addEventListener('touchstart', (e) => e.preventDefault(), { passive: false });
+
+  /* ----------------------------------------------- two-finger tap = Undo */
+
+  // Only where fingers do not draw (a pencil has been used here, or Pencil
+  // only is on), so the first finger never leaves a stroke behind. A quick
+  // tap of two fingers that barely move, away from a pencil stroke, undoes
+  // the last edit, as in Notes.
+  let tap = null;
+  const touchPoint = (t) => ({ x: t.clientX, y: t.clientY });
+  canvas.addEventListener('touchstart', (e) => {
+    if (!(penSeen || pencilOnly())) return;
+    const now = performance.now();
+    if (!tap || e.touches.length === 1) tap = { start: now, max: e.touches.length, moved: false, at: new Map() };
+    tap.max = Math.max(tap.max, e.touches.length);
+    for (const t of e.changedTouches) tap.at.set(t.identifier, touchPoint(t));
+  }, { passive: true });
+  canvas.addEventListener('touchmove', (e) => {
+    if (!tap) return;
+    for (const t of e.changedTouches) {
+      const from = tap.at.get(t.identifier);
+      if (from && Math.hypot(t.clientX - from.x, t.clientY - from.y) > TWO_FINGER_SLOP_PX) tap.moved = true;
+    }
+  }, { passive: true });
+  const tapEnd = (e) => {
+    if (!tap || e.touches.length) return;
+    const t = tap;
+    tap = null;
+    if (e.type === 'touchcancel' || t.max !== 2 || t.moved) return;
+    const now = performance.now();
+    if (now - t.start > TWO_FINGER_TAP_MS || current || now - lastPenUp < PALM_WINDOW_MS) return;
+    if (undo()) el.dataset.twoFingerUndo = String(Number(el.dataset.twoFingerUndo || 0) + 1);
+  };
+  canvas.addEventListener('touchend', tapEnd, { passive: true });
+  canvas.addEventListener('touchcancel', tapEnd, { passive: true });
   if (typeof ResizeObserver === 'function') new ResizeObserver(resize).observe(stage);
 
   function setPlate(image, id = null, url = null) {
@@ -984,10 +1021,31 @@ export function inkPad({ onStroke = () => {}, onChange = null, onEdit = null, to
         composite();
         return;
       }
-      ghost = { mask: image, ratio: pixelRatio > 0 ? pixelRatio : (window.devicePixelRatio || 1) };
+      ghost = { mask: image, ratio: pixelRatio > 0 ? pixelRatio : (window.devicePixelRatio || 1), bounds: inkBounds(image) };
       ghostAlpha = 0;
       ghostTarget = 0;
       syncGhost(280);
+    },
+    /**
+     * Where the ghost's ink sits on the pad, in CSS px ({ left, right, top,
+     * bottom }), or null with no ghost. Used to tell when a trace has
+     * covered the model.
+     */
+    ghostBox() {
+      if (!ghost) return null;
+      const m = ghost.mask;
+      const r = cssSize();
+      const place = ghostPlacement({ imageWidth: m.width, imageHeight: m.height, padWidth: r.width, padHeight: r.height, dpr: ghost.ratio });
+      if (!place) return null;
+      const b = ghost.bounds || { left: 0, top: 0, right: m.width, bottom: m.height };
+      const k = place.scale / ghost.ratio;
+      return { left: place.x + b.left * k, right: place.x + b.right * k, top: place.y + b.top * k, bottom: place.y + b.bottom * k };
+    },
+    /** Start a stroke from a pen-down that landed elsewhere (the pad opening under the pencil). True when a stroke began. */
+    beginStroke(e) {
+      const r = canvas.getBoundingClientRect();
+      if (!r.width || !r.height || e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return false;
+      return down(e);
     },
     strokeCount: () => strokes.length,
     clear,

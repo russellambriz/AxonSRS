@@ -268,12 +268,11 @@ import leaves no partial cards and appears on the Recovery screen.
     each frame repaints only the tiles around the tip, so a page of writing
     or one very long stroke stays as quick as the first line, and lifting
     the pencil never changes a shade of what was drawn.
-    **Smoothing** (Off, Low, Medium, High) is on the pen row in Create with
-    Pencil and the card editor, and under Settings → Study. Medium is the
-    default. It steadies the line and the width when the ink is drawn. The
-    saved points stay as they were sampled, so older cards just draw more
-    steadily, and the tip still follows Pencil prediction. The choice is
-    remembered on this device. When the
+    Smoothing is automatic: a **One-Euro filter** steadies a slow, careful
+    stroke hard and follows a fast stroke almost at once, so there is no
+    setting to pick. It works when the ink is drawn; the saved points stay
+    as they were sampled, so older cards just draw more steadily, and the
+    tip still follows Pencil prediction. When the
     browser reports tilt (or altitude), a flatter pencil draws a wider line;
     twist only nudges that. The browser's predicted points keep the ink at
     the tip; where it gives none (Safari), Axon runs a short tail ahead of a
@@ -305,11 +304,27 @@ import leaves no partial cards and appears on the Recovery screen.
     middle of the page. The moment your pencil lays down ink, the model
     lifts so the new stroke is the mark; undo or clear back to an empty
     page and it returns. A short typed answer (plain text, not maths) is
-    shown the same way in a handwriting font. That is the
+    shown the same way in a handwriting font. Once your strokes cover the
+    model (75% of its width, or 85% for a one- or two-character answer),
+    the trace finishes by itself 0.45s after the pencil lifts, or 0.9s for
+    a short answer or a single stroke, so the second stroke of a +, = or t
+    is never cut off; writing again holds it. **Done** still works. That is the
     same copy event as retyping, never a second review, and it follows
     Settings → Study → Retype after a mistake. The review ink is shown only
     during feedback and is not saved or synced. **Type** switches back; the
-    choice is remembered on the device.
+    choice is remembered on the device. With **Settings → Review flow →
+    Switch to Pencil automatically** (on by default), Apple Pencil touching
+    the card opens the pad and keeps that first stroke, and hovering the
+    pencil over the card opens it when the answer box is empty and no key
+    has been pressed for 3 seconds. Typing a letter on an empty pad goes
+    back to the keyboard. The answer box itself is left to Scribble. Typed
+    text and ink are both kept, as with the manual switch. Where fingers do
+    not draw (after a pencil has been used, or with Pencil only), a quick
+    two-finger tap on the pad is **Undo stroke**. Each handwritten review
+    records a few numbers with it: time to the first stroke (capped at 30s
+    so time away does not count), strokes, pauses over 2s between strokes,
+    and undo, erase and clear counts. They never include the strokes and
+    never choose the grade; you still grade the answer yourself.
   - In the card editor, **Draw** next to **Image** opens the same pad.
     **Insert** stores the sketch as a PNG with the same type and size checks
     as any other image, on the front or the back, and it works offline.

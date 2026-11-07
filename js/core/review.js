@@ -150,6 +150,8 @@ export function planReview(ctx) {
     flags,
     research,
     selfJudged: !!trial.selfJudged,
+    // Handwriting measurements: plain numbers only (never strokes), recorded with the review, not used to grade it.
+    ink: inkRecord(trial.ink),
     // Enough unit context to reverse this transition exactly (undo).
     prevUnitMeta: {
       lastScheduled: unit.lastScheduled || null,
@@ -419,5 +421,20 @@ export function exposureEvent({ id, type, now, deviceId, seq, unit, card, sessio
     deckId: card?.deckId || unit?.deckId || null,
     studyDay,
     ...data,
+  };
+}
+
+/** The known scalar fields of a handwriting trial's measurements, or null. */
+export function inkRecord(t) {
+  if (!t || typeof t !== 'object') return null;
+  const n = (v) => (Number.isFinite(v) ? Math.round(v) : null);
+  return {
+    ttfsMs: n(t.ttfsMs),
+    ttfsCapped: !!t.ttfsCapped,
+    strokes: n(t.strokes) ?? 0,
+    hesitationGaps: n(t.hesitationGaps) ?? 0,
+    undoCount: n(t.undoCount) ?? 0,
+    eraseCount: n(t.eraseCount) ?? 0,
+    clearCount: n(t.clearCount) ?? 0,
   };
 }
