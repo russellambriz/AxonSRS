@@ -196,7 +196,7 @@ export const tests = [
       // Move mask 1 a little (drag its body).
       await drag(0.2, 0.2, 0.25, 0.22);
       await page.getByPlaceholder('Describe the image for screen readers').fill('Diagram of the heart');
-      await page.getByRole('button', { name: 'Add card' }).click();
+      await page.getByRole('button', { name: 'Add card' }).first().click();
       await page.getByText('Card added').waitFor();
       const [card] = await idbAll(page, 'cards');
       assert.equal(card.occlusion.masks.length, 2);

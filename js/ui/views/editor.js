@@ -61,6 +61,10 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
   const original = structuredClone(card);
   const draft = structuredClone(card);
   let dirty = false;
+  let saving = false;
+  let saveBlocked = true;
+  let focusTimer = 0;
+  const saveButtons = [];
   const markDirty = () => {
     dirty = true;
     schedulePreview();
@@ -107,7 +111,7 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
   let lastFocused = null;
   for (const t of [frontInput, backInput, hintInput, explInput]) t.addEventListener('focus', () => { lastFocused = t; });
 
-  const occlusionHost = h('div', { class: 'stack' });
+  const occlusionHost = h('div', { class: 'stack editor-occlusion' });
   const frontInk = inkField({ which: 'front', label: 'Front', textarea: frontInput, initial: draft.front, onChange: () => { applyKind(); markDirty(); } });
   const backInk = inkField({ which: 'back', label: 'Back', textarea: backInput, initial: draft.back, onChange: () => { applyKind(); markDirty(); } });
   const frontField = h('div', { class: 'field' }, h('div', { class: 'row between' }, frontLabel, h('div', { class: 'row tight' }, frontInk.toggle, clozeBtn, imageBtn, drawBtn)), frontInk.host, frontInput, frontHint);
@@ -180,18 +184,45 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
 
   const errorsEl = h('div', { class: 'stack' });
   const previewEl = h('div', { class: 'stack' });
-  const saveBtn = button(isNew ? 'Add card' : 'Save', { kind: 'primary', onclick: () => save(false) });
-  const saveNextBtn = isNew ? button('Add & next', { onclick: () => save(true) }) : null;
-  const footer = h('div', { class: 'row end' },
+
+  function syncSaveButtons() {
+    const blocked = saving || saveBlocked;
+    for (const btn of saveButtons) {
+      btn.disabled = blocked;
+      if (saving) btn.setAttribute('aria-busy', 'true');
+      else btn.removeAttribute('aria-busy');
+    }
+  }
+
+  /** Header, after-Back, and footer controls all call the same save(). */
+  function saveAction(label, addAnother, { primary = false } = {}) {
+    const btn = button(label, { kind: primary ? 'primary' : '', onclick: () => save(addAnother) });
+    btn.classList.add('quick-add-btn');
+    saveButtons.push(btn);
+    return btn;
+  }
+
+  const footerAdd = saveAction(isNew ? 'Add card' : 'Save', false, { primary: !isNew });
+  const footerNext = isNew ? saveAction('Add & next', true, { primary: true }) : null;
+  const footer = h('div', { class: 'row end editor-footer' },
     !isNew && !embedded ? button('Duplicate', { iconName: 'copy', onclick: duplicate }) : null,
     !isNew && !embedded ? button('Delete card', { kind: 'danger', iconName: 'trash', onclick: remove }) : null,
     h('span', { class: 'grow' }),
     button('Cancel', { onclick: cancel }),
-    saveNextBtn, saveBtn);
+    isNew ? footerAdd : null,
+    isNew ? footerNext : footerAdd);
+
+  // New cards: the fast loop sits on the Back. Occlusion hides that field, so the buttons follow the image instead.
+  const inlineQuick = isNew && !embedded
+    ? h('div', { class: 'editor-quick-add', role: 'group', 'aria-label': 'Add this card' },
+      saveAction('Add & next', true, { primary: true }),
+      saveAction('Add card', false))
+    : null;
 
   const form = h('div', { class: 'stack' },
     h('div', { class: 'row' }, h('div', { class: 'field grow' }, h('label', {}, 'Deck'), deckSelect), h('div', { class: 'field' }, h('div', { class: 'label' }, 'Type'), kindControl)),
     frontField, occlusionHost, backField,
+    inlineQuick,
     h('div', { class: 'grid-2' }, field('Answer mode', modeSelect), field('Task type', taskSelect, 'Calculation and multi-step cards aren’t graded Hard just for taking longer.')),
     field('Hint', hintInput),
     field('Explanation / worked solution', explInput, 'Viewing it before answering counts as assistance.'),
@@ -204,8 +235,16 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
       h('span', {}, h('strong', {}, 'Create with Pencil'), h('span', {}, 'Print your handwriting on the card, or type an answer Axon can check.'))));
   }
   container.append(h('div', { class: 'editor-grid' }, h('section', { class: 'panel' }, form), h('section', { class: 'panel', 'aria-label': 'Preview' }, h('h3', {}, 'Preview'), previewEl)));
-  if (!embedded) outlet.append(pg.root);
-  else outlet.append(container);
+  if (!embedded) {
+    const headerActions = isNew
+      ? h('div', { class: 'actions quick-add', role: 'group', 'aria-label': 'Add this card' },
+        saveAction('Add card', false),
+        saveAction('Add & next', true, { primary: true }))
+      : h('div', { class: 'actions quick-add', role: 'group', 'aria-label': 'Save this card' },
+        saveAction('Save', false, { primary: true }));
+    pg.header.append(headerActions);
+    outlet.append(pg.root);
+  } else outlet.append(container);
 
   // ---------------- media ----------------
   async function storeImage(file) {
@@ -425,8 +464,8 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
     if (draft.explanation) blocks.push(h('div', { class: 'stack', style: { gap: '6px' } }, h('div', { class: 'faint tiny', style: { textTransform: 'uppercase', fontWeight: 600 } }, 'Explanation'), richBlock(draft.explanation, { class: 'preview-box', media: mediaFetcher })));
     replace(previewEl, blocks.length ? blocks : h('p', { class: 'faint' }, 'Start typing to see a preview.'));
     replace(errorsEl, [...issues.map((e) => callout('danger', e)), ...notes.map((n) => callout('warning', n))]);
-    saveBtn.disabled = issues.length > 0;
-    if (saveNextBtn) saveNextBtn.disabled = issues.length > 0;
+    saveBlocked = issues.length > 0;
+    syncSaveButtons();
   }
 
   // ---------------- actions ----------------
@@ -464,13 +503,17 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
   }
 
   async function save(addAnother) {
-    await applyInkFields();
-    const v = validateCard(draft);
-    if (!v.valid) {
-      renderPreview();
-      return;
-    }
+    if (saving) return;
+    saving = true;
+    syncSaveButtons();
+    let navigating = false;
     try {
+      await applyInkFields();
+      const v = validateCard(draft);
+      if (!v.valid) {
+        renderPreview();
+        return;
+      }
       let resets = new Map();
       if (!isNew) {
         const changes = classifyEdit(original, draft, deck());
@@ -495,13 +538,20 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
       }
       if (addAnother) {
         toast('Card added');
+        navigating = true;
         app.router.navigate(`/card/new?deck=${draft.deckId}&kind=${draft.kind}`);
         return;
       }
       toast(isNew ? 'Card added' : 'Saved');
+      navigating = true;
       app.navigate(`/deck/${saved.deckId}`);
     } catch (err) {
       errorToast(err);
+    } finally {
+      if (!navigating) {
+        saving = false;
+        if (saveButtons.some((btn) => btn.isConnected)) syncSaveButtons();
+      }
     }
   }
 
@@ -591,26 +641,38 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
   const historyHost = h('div', { class: 'stack loose' });
   if (!isNew && !embedded) container.append(h('h2', {}, 'Scheduling & history'), historyHost);
 
+  function frontUsesInk() {
+    return draft.kind === 'basic' && frontInk.isInk();
+  }
+
+  /** Put the caret on the new card's Front. An ink front stays unfocused so the touch keyboard does not open. */
+  function focusStartField() {
+    if (focus === 'hint') {
+      hintInput.focus();
+      hintInput.scrollIntoView({ block: 'center' });
+      return;
+    }
+    if (frontUsesInk()) {
+      const el = document.activeElement;
+      if (el && (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA')) el.blur();
+      return;
+    }
+    frontInput.focus();
+  }
+
   applyKind();
   renderAudio();
   renderRelated();
   renderPreview();
   renderHistory();
-  if (!embedded) {
-    setTimeout(() => {
-      const target = focus === 'hint' ? hintInput : (frontInk.isInk() ? null : frontInput);
-      if (target) {
-        target.focus();
-        if (focus) target.scrollIntoView({ block: 'center' });
-      }
-    }, 30);
-  }
+  if (!embedded) focusTimer = setTimeout(focusStartField, 30);
   if (!embedded) app.leaveGuard = async () => (!dirty || confirmDialog({ title: 'Leave without saving?', message: 'Your changes to this card will be lost.', confirmLabel: 'Leave', danger: true }));
   return {
     el: container,
     destroy: () => {
       app.leaveGuard = null;
       schedulePreview.cancel();
+      clearTimeout(focusTimer);
     },
   };
 }

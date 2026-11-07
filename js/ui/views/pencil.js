@@ -77,8 +77,17 @@ export async function view(outlet, _params, query) {
   const undoBtn = h('button', { type: 'button', class: 'btn ghost', disabled: true, onclick: () => { active().undo(); refresh(); } }, icon('undo'), 'Undo stroke');
   const redoBtn = h('button', { type: 'button', class: 'btn ghost', disabled: true, onclick: () => { active().redo(); refresh(); } }, icon('redo'), 'Redo stroke');
   const clearBtn = h('button', { type: 'button', class: 'btn ghost', disabled: true, onclick: () => { active().clear(); refresh(); } }, icon('trash'), 'Clear');
-  const nextBtn = h('button', { type: 'button', class: 'btn primary pencil-next', onclick: () => saveCard(true) }, 'Save & flip');
-  const doneBtn = h('button', { type: 'button', class: 'btn', onclick: () => saveCard(false) }, 'Done');
+  const saveButtons = [];
+  function savePair(extraClass = '', { flipFirst = true } = {}) {
+    const next = h('button', { type: 'button', class: 'btn primary pencil-next', onclick: () => saveCard(true) }, 'Save & flip');
+    const done = h('button', { type: 'button', class: 'btn', onclick: () => saveCard(false) }, 'Done');
+    saveButtons.push(next, done);
+    return h('div', { class: ['pencil-actions', extraClass], role: 'group', 'aria-label': 'Save this card' }, ...(flipFirst ? [next, done] : [done, next]));
+  }
+  const headerActions = savePair('pencil-top-actions', { flipFirst: false });
+  const backActions = savePair('pencil-quick');
+  backActions.hidden = true;
+  const panelActions = savePair();
 
   const colorHost = h('div', { class: 'pencil-choices', role: 'group', 'aria-label': 'Pen colour' });
   const widthHost = h('div', { class: 'pencil-choices', role: 'group', 'aria-label': 'Pen width' });
@@ -123,6 +132,7 @@ export async function view(outlet, _params, query) {
       ? 'This ink is the front of the card.'
       : (handwritten ? 'This ink is the answer. It is printed on the card, not turned into text.' : 'Optional note. The typed answer is what Axon checks.');
     ghostEl.textContent = side === 'front' ? 'Sketch the prompt' : (handwritten ? 'Write the answer' : 'Optional note');
+    backActions.hidden = side !== 'back';
     requestAnimationFrame(() => active().resize());
     refresh();
   }
@@ -179,6 +189,10 @@ export async function view(outlet, _params, query) {
     backPad.clear();
     showSide('front');
     statusEl.textContent = '';
+    if (handwritten) {
+      const el = document.activeElement;
+      if (el === promptInput || el === answerInput) el.blur();
+    } else promptInput.focus({ preventScroll: true });
   }
 
   async function loadPlate(pad, id) {
@@ -252,8 +266,10 @@ export async function view(outlet, _params, query) {
       return;
     }
     saving = true;
-    nextBtn.disabled = true;
-    doneBtn.disabled = true;
+    for (const btn of saveButtons) {
+      btn.disabled = true;
+      btn.setAttribute('aria-busy', 'true');
+    }
     try {
       const frontImage = await storeDrawing(frontPad, 'handwritten-prompt.png', 'Handwritten prompt');
       const backAlt = handwritten ? 'Handwritten answer' : 'Handwritten note';
@@ -295,8 +311,10 @@ export async function view(outlet, _params, query) {
       announce(err?.message || 'The card could not be saved.', { assertive: true });
     } finally {
       saving = false;
-      nextBtn.disabled = false;
-      doneBtn.disabled = false;
+      for (const btn of saveButtons) {
+        btn.disabled = false;
+        btn.removeAttribute('aria-busy');
+      }
       refresh();
     }
   }
@@ -324,19 +342,21 @@ export async function view(outlet, _params, query) {
       h('div', { class: 'pencil-heading' },
         h('h1', {}, 'Create with Pencil'),
         library.button),
+      headerActions,
       h('div', { class: 'pencil-sides', role: 'group', 'aria-label': 'Card side' }, frontBtn, backBtn),
       h('div', { class: 'pencil-deck' }, deckSelect)),
     h('div', { class: 'pencil-body' },
       h('div', { class: 'pencil-stage' },
         h('div', { class: 'pencil-paper' }, frontPad.el, backPad.el, ghostEl),
         noteEl,
+        backActions,
         h('div', { class: 'pencil-tools' }, colorHost, widthHost, smoothingButtons(), h('span', { class: 'pencil-tool-gap' }), eraserBtn, undoBtn, redoBtn, clearBtn)),
       h('aside', { class: 'pencil-panel', 'aria-label': 'Text' },
         h('div', { class: 'pencil-kinds', role: 'group', 'aria-label': 'How the answer is stored' }, handBtn, typeBtn),
         h('label', { class: 'pencil-field' }, h('span', {}, 'Prompt text ', h('span', { class: 'faint' }, 'optional')), promptInput),
         h('div', { class: 'pencil-graded' }, typedBlock, inkBlock),
         statusEl,
-        h('div', { class: 'pencil-actions' }, nextBtn, doneBtn))),
+        panelActions)),
     library.tray,
     library.viewer);
 

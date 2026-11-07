@@ -53,7 +53,7 @@ export const tests = [
       });
       await page.getByRole('button', { name: 'Insert' }).click();
       await page.waitForFunction(() => document.querySelectorAll('textarea')[1].value.includes('axon-media:'));
-      await page.getByRole('button', { name: 'Add card' }).click();
+      await page.getByRole('button', { name: 'Add card' }).first().click();
       await page.getByText('Card added').waitFor();
       const [card] = await idbAll(page, 'cards');
       assert.match(card.front.join('\n'), /axon-media:sha256-/);
