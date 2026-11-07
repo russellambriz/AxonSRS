@@ -23,6 +23,7 @@ import { percent } from '../dom.js';
 import { inkPad } from '../inkpad.js';
 import { PAPER, isInkAnswer, penColor } from '../../core/pencil.js';
 import { inkField } from '../inkfield.js';
+import { guardQuickSave } from '../palmguard.js';
 
 const IMAGE_TYPES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp', 'image/avif'];
 const AUDIO_TYPES = /^audio\/(mpeg|mp4|ogg|webm|wav|x-wav|aac)$/;
@@ -195,9 +196,10 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
   }
 
   /** Header, after-Back, and footer controls all call the same save(). */
-  function saveAction(label, addAnother, { primary = false } = {}) {
+  function saveAction(label, addAnother, { primary = false, palm = null } = {}) {
     const btn = button(label, { kind: primary ? 'primary' : '', onclick: () => save(addAnother) });
     btn.classList.add('quick-add-btn');
+    if (palm) guardQuickSave(btn, { header: palm === 'header' });
     saveButtons.push(btn);
     return btn;
   }
@@ -215,8 +217,8 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
   // New cards: the fast loop sits on the Back. Occlusion hides that field, so the buttons follow the image instead.
   const inlineQuick = isNew && !embedded
     ? h('div', { class: 'editor-quick-add', role: 'group', 'aria-label': 'Add this card' },
-      saveAction('Add & next', true, { primary: true }),
-      saveAction('Add card', false))
+      saveAction('Add & next', true, { primary: true, palm: 'lift' }),
+      saveAction('Add card', false, { palm: 'lift' }))
     : null;
 
   const form = h('div', { class: 'stack' },
@@ -238,10 +240,10 @@ export async function editorView(outlet, card, { isNew, embedded = false, onDone
   if (!embedded) {
     const headerActions = isNew
       ? h('div', { class: 'actions quick-add', role: 'group', 'aria-label': 'Add this card' },
-        saveAction('Add card', false),
-        saveAction('Add & next', true, { primary: true }))
+        saveAction('Add card', false, { palm: 'header' }),
+        saveAction('Add & next', true, { primary: true, palm: 'header' }))
       : h('div', { class: 'actions quick-add', role: 'group', 'aria-label': 'Save this card' },
-        saveAction('Save', false, { primary: true }));
+        saveAction('Save', false, { primary: true, palm: 'header' }));
     pg.header.append(headerActions);
     outlet.append(pg.root);
   } else outlet.append(container);

@@ -143,4 +143,80 @@ export const tests = [
       await ctx.close();
     },
   },
+  {
+    name: 'quick-add palm guard: a finger misses the new save buttons while the pen is down or near, and a pen, mouse or key still adds the card',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser, { viewport: { width: 1100, height: 900 }, hasTouch: true });
+      const page = await openApp(ctx, url);
+      const deckId = await seedDeck(page, { name: 'Palm', cards: [] });
+      await page.evaluate((id) => { location.hash = `#/card/new?deck=${id}`; }, deckId);
+      await page.getByRole('button', { name: 'Front: Type' }).click();
+      await page.getByRole('button', { name: 'Back: Type' }).click();
+      const fill = async (front, back) => {
+        await page.locator('textarea').nth(0).fill(front);
+        await page.locator('textarea').nth(1).fill(back);
+        await page.waitForFunction(() => [...document.querySelectorAll('.view-header .quick-add button, .editor-quick-add button')].every((b) => !b.disabled));
+      };
+      const act = (ops) => page.evaluate(async (ops) => {
+        const pad = document.querySelector('.editor-ink-host .ink-canvas');
+        const pen = (name, buttons) => pad.dispatchEvent(new PointerEvent(name, {
+          pointerType: 'pen', pointerId: 41, bubbles: true, cancelable: true,
+          buttons, pressure: buttons ? 0.6 : 0, clientX: 12, clientY: 12,
+        }));
+        const tap = (sel, type) => {
+          const el = document.querySelector(sel);
+          const id = type === 'pen' ? 42 : type === 'mouse' ? 3 : 77;
+          el.dispatchEvent(new PointerEvent('pointerdown', { pointerType: type, pointerId: id, bubbles: true, cancelable: true, buttons: 1 }));
+          el.dispatchEvent(new PointerEvent('pointerup', { pointerType: type, pointerId: id, bubbles: true, cancelable: true, buttons: 0 }));
+          el.click();
+        };
+        for (const op of ops) {
+          if (op === 'down') pen('pointerdown', 1);
+          else if (op === 'up') pen('pointerup', 0);
+          else if (op === 'hover') pen('pointermove', 0);
+          else if (op.tap) tap(op.tap, op.type);
+          else if (op.wait) await new Promise((r) => setTimeout(r, op.wait));
+        }
+      }, ops);
+      const header = '.view-header .quick-add .btn.primary';
+      const under = '.editor-quick-add .btn.primary';
+      const count = async () => (await idbAll(page, 'cards')).length;
+      const settled = async (n) => {
+        await page.waitForFunction(() => document.querySelector('textarea')?.value === '');
+        assert.equal(await count(), n);
+      };
+
+      await fill('Capital of Peru', 'Lima');
+      await act(['down', { tap: header, type: 'touch' }, { tap: under, type: 'touch' }]);
+      assert.equal(await count(), 0, 'a finger misses both new buttons while the pen is down');
+      await act(['up', { tap: header, type: 'touch' }, { tap: under, type: 'touch' }, { wait: 900 }, { tap: header, type: 'touch' }]);
+      assert.equal(await count(), 0, 'a finger misses them just after the pen lifts, and the header still ignores one a moment later');
+      await act([{ tap: header, type: 'pen' }]);
+      await settled(1);
+
+      await fill('Capital of Chile', 'Santiago');
+      await act([{ wait: 1100 }, 'hover', { tap: header, type: 'touch' }]);
+      assert.equal(await count(), 1, 'the header ignores a finger while the pen is hovering');
+      await act([{ tap: under, type: 'touch' }]);
+      await settled(2);
+
+      await fill('Capital of Ecuador', 'Quito');
+      await act(['down', { tap: header, type: 'mouse' }]);
+      await settled(3);
+
+      await fill('Capital of Colombia', 'Bogotá');
+      await act(['down']);
+      await page.locator(header).focus();
+      await page.keyboard.press('Space');
+      await settled(4);
+
+      await fill('Capital of Bolivia', 'Sucre');
+      await page.locator('textarea').nth(0).focus();
+      await page.keyboard.press('Control+Enter');
+      await page.waitForFunction((id) => location.hash === `#/deck/${id}`, deckId);
+      assert.equal(await count(), 5, 'Ctrl+Enter still adds the card while the pen is down');
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
 ];

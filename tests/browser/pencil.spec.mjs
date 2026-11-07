@@ -332,4 +332,63 @@ export const tests = [
       await ctx.close();
     },
   },
+  {
+    name: 'pencil quick-add palm guard: a finger misses Save & flip on the top bar and under the page while the pen writes',
+    async run({ browser, url }) {
+      const ctx = await newContext(browser, { viewport: { width: 1100, height: 800 }, hasTouch: true });
+      const page = await openApp(ctx, url);
+      const deckId = await seedDeck(page, { name: 'Palm pencil', cards: [] });
+      await page.evaluate((id) => { location.hash = `#/pencil?deck=${id}`; }, deckId);
+      await page.getByRole('heading', { name: 'Create with Pencil' }).waitFor();
+      await page.waitForFunction(() => [...document.querySelectorAll('.pencil-paper .ink-canvas')].some((c) => c.width > 0));
+      const drawCard = async () => {
+        await stroke(page, { y: 40, id: 4 });
+        await page.getByRole('button', { name: 'Back' }).click();
+        await page.waitForFunction(() => document.querySelector('.pencil-studio')?.dataset.side === 'back');
+        await stroke(page, { y: 90, id: 8 });
+      };
+      const act = (ops) => page.evaluate(async (ops) => {
+        const pad = [...document.querySelectorAll('.pencil-paper .ink-canvas')].find((el) => el.getBoundingClientRect().width > 0);
+        const pen = (name, buttons) => pad.dispatchEvent(new PointerEvent(name, {
+          pointerType: 'pen', pointerId: 41, bubbles: true, cancelable: true,
+          buttons, pressure: buttons ? 0.6 : 0, clientX: pad.getBoundingClientRect().left + 20, clientY: pad.getBoundingClientRect().top + 20,
+        }));
+        const tap = (sel, type) => {
+          const el = document.querySelector(sel);
+          const id = type === 'pen' ? 42 : 77;
+          el.dispatchEvent(new PointerEvent('pointerdown', { pointerType: type, pointerId: id, bubbles: true, cancelable: true, buttons: 1 }));
+          el.dispatchEvent(new PointerEvent('pointerup', { pointerType: type, pointerId: id, bubbles: true, cancelable: true, buttons: 0 }));
+          el.click();
+        };
+        for (const op of ops) {
+          if (op === 'down') pen('pointerdown', 1);
+          else if (op === 'up') pen('pointerup', 0);
+          else if (op === 'hover') pen('pointermove', 0);
+          else if (op.tap) tap(op.tap, op.type);
+          else if (op.wait) await new Promise((r) => setTimeout(r, op.wait));
+        }
+      }, ops);
+      const header = '.pencil-top-actions .btn.primary';
+      const under = '.pencil-quick .btn.primary';
+      const count = async () => (await idbAll(page, 'cards')).length;
+
+      await drawCard();
+      await act(['down', { tap: header, type: 'touch' }, { tap: under, type: 'touch' }]);
+      assert.equal(await count(), 0, 'a finger misses both buttons while the pen is down');
+      await act(['up', { tap: header, type: 'touch' }, { tap: under, type: 'touch' }, { wait: 900 }, { tap: header, type: 'touch' }]);
+      assert.equal(await count(), 0, 'a finger misses them just after the pen lifts, and the top bar still ignores one a moment later');
+      await act([{ tap: under, type: 'touch' }]);
+      await page.waitForFunction(() => document.querySelector('.pencil-studio')?.dataset.side === 'front');
+      assert.equal(await count(), 1, 'the button under the page accepts a finger once the pen has been up');
+
+      await drawCard();
+      await act([{ wait: 1100 }, 'hover', { tap: header, type: 'touch' }]);
+      assert.equal(await count(), 1, 'the top bar ignores a finger while the pen hovers');
+      await act([{ tap: header, type: 'pen' }]);
+      await page.waitForFunction(() => document.querySelector('.pencil-prompt')?.value === '' && document.querySelector('.pencil-studio')?.dataset.side === 'front');
+      assert.equal(await count(), 2, 'a pen tap on the top bar still saves');
+      assertNoErrors(page);
+      await ctx.close();
+    },
+  },
 ];

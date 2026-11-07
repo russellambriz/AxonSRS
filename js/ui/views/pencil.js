@@ -15,6 +15,7 @@ import { inkPad, smoothingButtons } from '../inkpad.js';
 import { createCard } from '../../core/model.js';
 import { PAPER, PEN_COLORS, PEN_WIDTHS, composePencilCard, imageRejectReason, penColor, penWidth, splitPencilSide } from '../../core/pencil.js';
 import { pencilLibrary } from '../pencilreel.js';
+import { guardQuickSave } from '../palmguard.js';
 
 export async function view(outlet, _params, query) {
   await app.cache.ensure();
@@ -78,14 +79,18 @@ export async function view(outlet, _params, query) {
   const redoBtn = h('button', { type: 'button', class: 'btn ghost', disabled: true, onclick: () => { active().redo(); refresh(); } }, icon('redo'), 'Redo stroke');
   const clearBtn = h('button', { type: 'button', class: 'btn ghost', disabled: true, onclick: () => { active().clear(); refresh(); } }, icon('trash'), 'Clear');
   const saveButtons = [];
-  function savePair(extraClass = '', { flipFirst = true } = {}) {
+  function savePair(extraClass = '', { flipFirst = true, palm = null } = {}) {
     const next = h('button', { type: 'button', class: 'btn primary pencil-next', onclick: () => saveCard(true) }, 'Save & flip');
     const done = h('button', { type: 'button', class: 'btn', onclick: () => saveCard(false) }, 'Done');
+    if (palm) {
+      guardQuickSave(next, { header: palm === 'header' });
+      guardQuickSave(done, { header: palm === 'header' });
+    }
     saveButtons.push(next, done);
     return h('div', { class: ['pencil-actions', extraClass], role: 'group', 'aria-label': 'Save this card' }, ...(flipFirst ? [next, done] : [done, next]));
   }
-  const headerActions = savePair('pencil-top-actions', { flipFirst: false });
-  const backActions = savePair('pencil-quick');
+  const headerActions = savePair('pencil-top-actions', { flipFirst: false, palm: 'header' });
+  const backActions = savePair('pencil-quick', { palm: 'lift' });
   backActions.hidden = true;
   const panelActions = savePair();
 
