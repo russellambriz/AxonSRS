@@ -1884,9 +1884,7 @@ class StudyScreen {
   async leave() {
     if (this.phase === 'submitting') return;
     if (!(await this.confirmDraftSaved())) return;
-    // A saved unfinished answer means the learner is coming back to it: not abandoned.
-    const keptDraft = this.drafts?.status === 'saved' && !isBlankDraft(this.drafts.state);
-    if (!keptDraft) await this.logAbandon('left');
+    await this.logAbandon('left');
     this.leaving = true;
     if (this.session.index < this.session.queue.length) {
       this.session = { ...this.session, status: 'paused', pausedAt: Date.now() };
