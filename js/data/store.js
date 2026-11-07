@@ -20,6 +20,20 @@ import { createBaseline, addSample, removeSample, mergeBaselines } from '../core
 import { studyDay, systemTimeZone } from '../core/time.js';
 import { schedulerParams } from '../core/scheduler.js';
 import { dailyActivity, retractActivity } from '../core/stats.js';
+import { draftBelongsTo, readDraft, DRAFT_VERSION } from '../core/draft.js';
+
+/**
+ * Write a session record. Whatever `draft` the caller's copy carries is
+ * ignored: the stored draft is kept only while it still belongs to the
+ * session's current attempt, so a review, skip, undo, finish or abandon
+ * that moves the session on retires it in the same transaction.
+ */
+async function putSessionInTx(t, session, now) {
+  const { draft: _ignored, ...rest } = session;
+  const stored = await t.get('sessions', session.id);
+  const keep = stored?.draft && draftBelongsTo(stored.draft, rest) ? stored.draft : null;
+  await t.put('sessions', keep ? { ...rest, draft: keep, updatedAt: now } : { ...rest, updatedAt: now });
+}
 
 const UNIT_REVIEW_FIELDS = ['state', 'headEventId', 'lastReviewAt', 'perf', 'practiceSinceLast', 'lastPracticeAt', 'lastScheduled', 'introducedDay', 'leech', 'leechSince', 'suspended', 'suspendedAt', 'siblingExposedAt'];
 const TRASH_DAYS = 30;
@@ -623,7 +637,7 @@ export class AxonStore {
         const base = (await t.get('calibration', key)) || createBaseline(key);
         await t.put('calibration', addSample(base, plan.calibration.sample));
       }
-      if (session) await t.put('sessions', { ...session, updatedAt: now });
+      if (session) await putSessionInTx(t, session, now);
       return { duplicate: false, event };
     });
     this.emit('review', { unitId: plan.unit.id, eventId: plan.event.id });
@@ -652,7 +666,7 @@ export class AxonStore {
         await t.put('cards', record);
         await t.put('revisions', revision);
       }
-      if (session) await t.put('sessions', { ...session, updatedAt: now });
+      if (session) await putSessionInTx(t, session, now);
       return { duplicate: false, event };
     });
     this.emit('review', { unitId: plan.unit.id, correction: true });
@@ -676,7 +690,7 @@ export class AxonStore {
         const u = await t.get('units', p.unitId);
         if (u) await t.put('units', { ...u, ...p.patch, updatedAt: now });
       }
-      if (session) await t.put('sessions', { ...session, updatedAt: now });
+      if (session) await putSessionInTx(t, session, now);
       return out;
     });
     if (saved.length) this.emit('events', { count: saved.length });
@@ -686,11 +700,41 @@ export class AxonStore {
   /* ---------------- sessions ---------------- */
 
   saveSession(session) {
-    return this.tx(['sessions'], 'readwrite', (t) => t.put('sessions', { ...session, updatedAt: Date.now() }));
+    return this.tx(['sessions'], 'readwrite', (t) => putSessionInTx(t, session, Date.now()));
   }
 
   getSession(id) {
     return this.get('sessions', id);
+  }
+
+  /**
+   * Save the unfinished answer for the session's current attempt.
+   * Compare-and-swap: `baseRev` must be the revision the caller last saw
+   * (0 for none), and the draft is stored as baseRev + 1. Resolves with
+   *  - { status: 'saved', rev }      committed (durability 'strict')
+   *  - { status: 'conflict', rev }   another writer (tab) saved first
+   *  - { status: 'consumed' }        the attempt is over (answer submitted,
+   *                                  skipped, session moved on): not saved
+   *  - { status: 'missing' }         no such session
+   * Rejects only on a storage failure.
+   */
+  saveDraft(sessionId, draft, { baseRev = 0 } = {}) {
+    return this.tx(['sessions'], 'readwrite', async (t) => {
+      const s = await t.get('sessions', sessionId);
+      if (!s) return { status: 'missing' };
+      if (!draftBelongsTo(draft, s)) return { status: 'consumed' };
+      const currentRev = s.draft?.key === draft.key ? (s.draft.rev || 0) : 0;
+      if (currentRev !== baseRev) return { status: 'conflict', rev: currentRev };
+      const rev = baseRev + 1;
+      await t.put('sessions', { ...s, draft: { ...draft, v: DRAFT_VERSION, rev, savedAt: Date.now() } });
+      return { status: 'saved', rev };
+    });
+  }
+
+  /** The stored draft of a session (see js/core/draft.js), or null. */
+  async getDraft(sessionId) {
+    const s = await this.get('sessions', sessionId);
+    return s?.draft && draftBelongsTo(s.draft, s) ? readDraft(s.draft) : null;
   }
 
   async activeSessions() {
