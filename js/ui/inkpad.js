@@ -86,7 +86,13 @@ function pencilOnly() {
   return local.get(PENCIL_ONLY_KEY) === '1';
 }
 
-export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = {}) {
+/**
+ * `onEdit(kind)` runs after each finished edit the learner makes — a stroke
+ * lifted, an erase finished, Undo, Redo or the Clear button — never during
+ * a stroke and never for clear()/loadStrokes() called by code. It is where a
+ * caller saves the ink (see strokesData/loadStrokes).
+ */
+export function inkPad({ onStroke = () => {}, onChange = null, onEdit = null, tools = true } = {}) {
   const canvas = h('canvas', { class: 'ink-canvas', role: 'img', 'aria-label': 'Handwriting pad. Write your answer with Apple Pencil, a stylus or a finger.', dataset: { strokes: '0', points: '0' } });
   const overlay = h('canvas', { class: 'ink-overlay', 'aria-hidden': 'true' });
   const ctx = canvas.getContext('2d');
@@ -135,7 +141,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
 
   const undoBtn = tools ? h('button', { class: 'btn small ghost', type: 'button', disabled: true, onclick: () => undo() }, icon('undo'), 'Undo stroke') : null;
   const eraserBtn = tools ? h('button', { class: 'btn small ghost', type: 'button', 'aria-pressed': 'false', onclick: () => setEraser(!erasing) }, icon('eraser'), 'Eraser') : null;
-  const clearBtn = tools ? h('button', { class: 'btn small ghost', type: 'button', disabled: true, onclick: () => clear() }, icon('trash'), 'Clear') : null;
+  const clearBtn = tools ? h('button', { class: 'btn small ghost', type: 'button', disabled: true, onclick: () => { clear(); onEdit?.('clear'); } }, icon('trash'), 'Clear') : null;
   const hintEl = tools ? h('span', { class: 'faint small ink-hint' }, HINT) : null;
   const el = h('div', { class: 'ink-pad', dataset: { predicted: '0', hover: '0', penSeen: penSeen ? '1' : '0', ghost: '0', palm: '0' } }, stage, tools ? h('div', { class: 'ink-tools' }, hintEl, h('div', { class: 'row tight' }, undoBtn, eraserBtn, clearBtn)) : null);
 
@@ -698,6 +704,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     redoStack.push(action);
     redraw();
     update();
+    onEdit?.('undo');
     return true;
   }
 
@@ -708,6 +715,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     history.push(action);
     redraw();
     update();
+    onEdit?.('redo');
     return true;
   }
 
@@ -881,13 +889,15 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     if (!current || e.pointerId !== current.id) return;
     if (current.erasing) {
       eraseWith(e);
-      if (eraseLog?.length) remember({ kind: 'erase', items: eraseLog });
+      const erased = !!eraseLog?.length;
+      if (erased) remember({ kind: 'erase', items: eraseLog });
       eraseLog = null;
       eraserAt = null;
       current = null;
       drawOverlay();
       redraw();
       update();
+      if (erased) onEdit?.('erase');
       return;
     }
     const finished = current.stroke;
@@ -903,6 +913,7 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     commitInk(finished);
     composite();
     update();
+    onEdit?.('stroke');
   };
   canvas.addEventListener('pointerup', end);
   canvas.addEventListener('pointercancel', end);
@@ -980,6 +991,37 @@ export function inkPad({ onStroke = () => {}, onChange = null, tools = true } = 
     },
     strokeCount: () => strokes.length,
     clear,
+    /**
+     * The finished strokes as plain data: points in CSS pixels of the pad
+     * (x, y, pressure and the optional pen fields), plus each stroke's
+     * colour. Never the stroke under the pencil, the ghost or a predicted
+     * tail. `width`/`height` are the pad's CSS size when copied.
+     */
+    strokesData() {
+      const r = canvas.getBoundingClientRect();
+      return {
+        strokes: strokes.map((s) => ({ ...s, pts: s.pts.map((p) => ({ ...p })) })),
+        width: Math.round(r.width) || null,
+        height: Math.round(r.height) || null,
+      };
+    },
+    /**
+     * Replace the page with saved strokes (from strokesData), keeping them
+     * editable: each one can be undone, erased or cleared like a stroke
+     * just written. Points keep their CSS-pixel positions, the same as a
+     * live resize. Does not call onEdit.
+     */
+    loadStrokes(list) {
+      clear();
+      for (const s of list || []) {
+        if (!s || !Array.isArray(s.pts) || !s.pts.length) continue;
+        const stroke = { ...s, pts: s.pts.map((p) => ({ ...p })) };
+        strokes.push(stroke);
+        history.push({ kind: 'add', stroke });
+      }
+      redraw();
+      update();
+    },
     /** Prompt under the pad, for example the retype instruction. */
     setHint(text) {
       if (hintEl) hintEl.textContent = text || HINT;

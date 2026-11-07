@@ -7,13 +7,18 @@
   "license": "MIT",
   "scripts": {
     "test": "node --test \"tests/unit/*.test.js\"",
+    "test:dom": "node --test --test-force-exit --test-timeout=20000 \"tests/dom/*.test.mjs\"",
     "test:browser": "node tests/browser/run.mjs",
-    "test:all": "npm test && npm run test:browser",
+    "test:all": "npm test && npm run test:dom && npm run test:browser",
     "serve": "node tests/serve.mjs",
     "check": "node tools/update-precache.mjs --check && npm test",
     "release": "node tools/bump-version.mjs"
   },
   "engines": {
     "node": ">=20"
+  },
+  "devDependencies": {
+    "fake-indexeddb": "^6.2.7",
+    "jsdom": "^26.1.0"
   }
 }
