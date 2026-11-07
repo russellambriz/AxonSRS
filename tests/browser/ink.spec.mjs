@@ -433,9 +433,9 @@ export const tests = [
         }
         fire('pointerup', 600, 0);
         const live = pixels();
-        // The same smoothing announced again forces a repaint of every stroke from scratch.
+        // A repaint of every stroke from scratch, to compare with the cached layer.
         arcs = 0;
-        window.dispatchEvent(new CustomEvent('axon-ink-smoothing'));
+        window.dispatchEvent(new CustomEvent('axon-ink-repaint'));
         const whole = arcs;
         CanvasRenderingContext2D.prototype.arc = orig;
         const full = pixels();
@@ -503,7 +503,7 @@ export const tests = [
         let dim = 0;
         let worst = 255;
         for (const pts of written) {
-          const samples = paintSamples(pts, 'medium');
+          const samples = paintSamples(pts);
           for (const s of samples.slice(8, -8)) {
             const inner = Math.max(0.8, s.w / 2) - 1.25;
             if (inner <= 0.3) continue;

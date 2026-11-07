@@ -45,6 +45,8 @@ import { inkPad } from '../inkpad.js';
 import { isInkSide } from '../../core/pencil.js';
 import { currentAttempt, isBlankDraft } from '../../core/draft.js';
 import { DraftKeeper } from '../../study/drafts.js';
+import { ModalityController, InkTelemetry, AUTO_MODALITY_KEY } from '../../study/modality.js';
+import { traceTarget, traceAdvanceDelay } from '../../core/ink.js';
 
 /** The session as the screen keeps it: the stored draft lives only in the store and the draft keeper. */
 function withoutDraft(session) {
@@ -97,6 +99,9 @@ class StudyScreen {
     this.focusStartActive = 0;
     this.revealedInSession = new Set();
     this.drafts = null;
+    this.modality = new ModalityController();
+    this.inkStats = new InkTelemetry();
+    this.traceTimer = null;
     this.gradingConfig = mergeGradingConfig({ ...(store.global.gradingOverrides || {}), hintCeiling: store.global.gradingOverrides?.hintCeiling || 'good' });
     this.destroyed = false;
   }
@@ -225,13 +230,23 @@ class StudyScreen {
     this.actionsEl = h('div', { class: 'actions' });
     this.ink = inkPad({
       onStroke: () => {
+        // A new stroke on the trace waits for the learner to lift again.
+        this.cancelTraceAdvance();
         // Retyping the correct answer is copying, not a new attempt, so it does not move the trial clock.
         if (this.phase !== 'question') return;
         this.trial.onInkStroke();
+        this.inkStats.strokeStarted();
         this.cancelAutoAdvance();
       },
       // A finished stroke, erase, Undo or Clear on the answer (never the correction trace) is saved at once.
-      onEdit: () => this.saveDraft({ ink: this.ink.strokesData() }, { immediate: true }),
+      onEdit: (kind) => {
+        if (this.phase === 'retype') {
+          this.checkTrace();
+          return;
+        }
+        if (this.phase === 'question') this.inkStats.edited(kind);
+        this.saveDraft({ ink: this.ink.strokesData() }, { immediate: true });
+      },
     });
     this.confEl = h('div', { class: 'confidence-pick', role: 'group', 'aria-label': 'How sure are you? Optional' });
     // Saving / Saved / Couldn't save for the unfinished answer. Errors are announced; progress is not.
@@ -259,7 +274,28 @@ class StudyScreen {
       this.cancelAutoAdvance();
       this.userTappedElsewhere = !this.composer.contains(e.target);
     }, { ...sig, capture: true });
-    document.addEventListener('keydown', () => this.cancelAutoAdvance(), { ...sig, capture: true });
+    document.addEventListener('keydown', (e) => {
+      this.cancelAutoAdvance();
+      this.modality.noteKey(e);
+    }, { ...sig, capture: true });
+    // Typing or Pencil, from what the learner picks up (js/study/modality.js).
+    this.root.addEventListener('pointermove', (e) => {
+      if (this.modality.shouldOpenOnHover(e, this.modalityState())) this.setInkMode(true, { auto: true });
+    }, { ...sig, capture: true, passive: true });
+    this.root.addEventListener('pointerdown', (e) => {
+      if (!this.modality.shouldOpenOnPenDown(e, this.modalityState())) return;
+      this.setInkMode(true, { auto: true });
+      // The pad is open now: the stroke the pencil started goes on it.
+      this.ink.resize();
+      if (this.ink.beginStroke(e)) e.stopPropagation();
+    }, { ...sig, capture: true });
+    // Shortcuts run first (capture) and stop the keys they use, so a bare
+    // letter that is a shortcut never lands here.
+    document.addEventListener('keydown', (e) => {
+      if (!this.modality.shouldTypeOnKey(e, { ...this.modalityState(), inkEmpty: this.ink.isEmpty() })) return;
+      // Focused before the key's text is inserted, so the letter lands in the box.
+      this.setInkMode(false, { auto: true });
+    }, sig);
     // With the handwriting pad the answer field is not focused, so Enter
     // (from a hardware keyboard) checks or continues from anywhere.
     document.addEventListener('keydown', (e) => {
@@ -320,6 +356,7 @@ class StudyScreen {
     app.shortcuts.enableScope('study-manual', false);
     cancelAnimationFrame(this.timerRaf);
     clearTimeout(this.autoTimer);
+    clearTimeout(this.traceTimer);
     this.releaseLock?.();
     app.setBusy('study', null);
     app.leaveGuard = null;
@@ -493,6 +530,8 @@ class StudyScreen {
     this.renderSaveState('idle');
     this.renderConfidence();
     this.input.value = '';
+    this.cancelTraceAdvance();
+    this.inkStats.reset();
     this.ink.clear();
     this.ink.setGhost(null);
     this.ink.setHint('Write your answer, then check it');
@@ -938,7 +977,7 @@ class StudyScreen {
     if (!cur || this.phase !== 'question') return;
     const raw = this.trial.finish('');
     cur.ink = { image: this.ink.isEmpty() ? null : this.ink.snapshot(), strokes: this.ink.strokeCount() };
-    cur.trial = { ...this.trialRecord(raw, '', { kind: 'handwriting', confidence: 0.95, source: 'ink', evidence: ['written on the handwriting pad'] }, { ...this.trial.assistance }), selfJudged: true };
+    cur.trial = { ...this.trialRecord(raw, '', { kind: 'handwriting', confidence: 0.95, source: 'ink', evidence: ['written on the handwriting pad'] }, { ...this.trial.assistance }), selfJudged: true, ink: this.inkStats.summary(raw.latencyMs) };
     cur.raw = raw;
     if (revealed) {
       cur.dontKnow = true;
@@ -1418,7 +1457,23 @@ class StudyScreen {
       announce('This card’s answer is handwriting. You grade it yourself.');
       return;
     }
-    this.inkMode = !this.inkMode;
+    this.setInkMode(!this.inkMode);
+  }
+
+  /** What the automatic Typing/Pencil switch needs to know. */
+  modalityState() {
+    return {
+      enabled: local.get(AUTO_MODALITY_KEY) !== '0',
+      usingInk: this.usingInk(),
+      canSwitch: this.phase === 'question' && !!this.current && !this.current.inkAnswer,
+      typedEmpty: !this.input.value.trim(),
+    };
+  }
+
+  /** Switch between typing and the pad, by hand (Write/Type, ⌥D) or automatically. The ink and the typed text both stay. */
+  setInkMode(on, { auto = false } = {}) {
+    if (this.phase !== 'question' || this.current?.inkAnswer || this.inkMode === !!on) return;
+    this.inkMode = !!on;
     local.set('axon-ink-mode', this.inkMode ? '1' : '0');
     this.root.classList.toggle('ink-mode', this.usingInk());
     // The ink and the typed text both stay: switching is not erasing.
@@ -1427,7 +1482,7 @@ class StudyScreen {
     if (this.inkMode) {
       this.input.blur();
       requestAnimationFrame(() => this.ink.resize());
-      announce('Handwriting pad. Write your answer, then check it and grade yourself.');
+      announce(auto ? 'Handwriting pad.' : 'Handwriting pad. Write your answer, then check it and grade yourself.');
     } else {
       this.focusInput(true);
       announce('Typing.');
@@ -1487,8 +1542,34 @@ class StudyScreen {
     announce('The correct handwriting is faintly on the page. Trace it once. This is not another review.');
   }
 
+  /**
+   * After each stroke on a trace: once the strokes cover enough of the faint
+   * model, Done happens by itself a moment after the pencil lifts (longer
+   * for a one- or two-character answer, so a second stroke is never cut
+   * off). Writing again cancels it. Without a model there is nothing to
+   * measure, so Done stays a tap.
+   */
+  checkTrace() {
+    this.cancelTraceAdvance();
+    const cur = this.current;
+    if (this.phase !== 'retype' || !cur?.ink) return;
+    const target = traceTarget(this.ink.ghostBox());
+    const delay = traceAdvanceDelay(target, this.ink.strokesData().strokes);
+    if (delay == null) return;
+    this.traceTimer = setTimeout(() => {
+      this.traceTimer = null;
+      if (this.phase === 'retype' && this.current === cur) this.finishInkCopy();
+    }, delay);
+  }
+
+  cancelTraceAdvance() {
+    clearTimeout(this.traceTimer);
+    this.traceTimer = null;
+  }
+
   /** The pad is not recognised, so Done records the copy and moves on. It is never a second review. */
   finishInkCopy() {
+    this.cancelTraceAdvance();
     if (this.phase !== 'retype' || !this.current?.ink) return;
     if (this.ink.isEmpty()) {
       announce('Write the correct answer once.', { assertive: true });
@@ -1504,6 +1585,7 @@ class StudyScreen {
   }
 
   bypassRetype() {
+    this.cancelTraceAdvance();
     if (this.phase !== 'retype') return;
     this.recordCopy(true, '');
     this.ink.clear();

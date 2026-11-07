@@ -95,44 +95,90 @@ function mid(a, b) {
 }
 
 /**
- * How hard the rendered ink chases the raw samples.
- * `follow` and `pressure` are the share of each new sample kept by the
- * running average (1 = no change). The last sample is always kept, so a
- * predicted tail still ends on the predicted tip.
+ * One-Euro (1€) filter (Casiez, Roussel and Vogel, CHI 2012): a low-pass
+ * filter whose cutoff rises with speed. A slow, careful stroke is steadied
+ * hard; a fast stroke or a flick is followed almost at once, so it does
+ * not lag. It replaces the old Off/Low/Medium/High smoothing control.
+ * Time is in milliseconds, positions in CSS pixels.
  */
-export const SMOOTHING_LEVELS = Object.freeze([
-  { id: 'off', label: 'Off', follow: 1, pressure: 1 },
-  { id: 'low', label: 'Low', follow: 0.62, pressure: 0.55 },
-  { id: 'medium', label: 'Medium', follow: 0.34, pressure: 0.28 },
-  { id: 'high', label: 'High', follow: 0.2, pressure: 0.16 },
-]);
+export const ONE_EURO = Object.freeze({ minCutoff: 1.3, beta: 0.018, dCutoff: 1.0 });
+/** Pressure is steadied with a plain low-pass (no speed term). */
+const PRESSURE_CUTOFF = 4;
+/** Stored strokes from before sample times were kept: assume 120 Hz. */
+const FALLBACK_STEP_MS = 1000 / 120;
 
-export function smoothingLevel(id) {
-  return SMOOTHING_LEVELS.find((level) => level.id === id) || SMOOTHING_LEVELS[2];
+export class OneEuroFilter {
+  constructor(minCutoff = ONE_EURO.minCutoff, beta = ONE_EURO.beta, dCutoff = ONE_EURO.dCutoff) {
+    this.minCutoff = minCutoff;
+    this.beta = beta;
+    this.dCutoff = dCutoff;
+    this.reset();
+  }
+
+  reset() {
+    this.xPrev = null;
+    this.dxPrev = 0;
+    this.tPrev = null;
+  }
+
+  static alpha(cutoff, dt) {
+    const tau = 1 / (2 * Math.PI * cutoff);
+    return 1 / (1 + tau / dt);
+  }
+
+  /** `t` in milliseconds. The first sample passes through unchanged. */
+  filter(x, t) {
+    if (this.tPrev === null) {
+      this.xPrev = x;
+      this.tPrev = t;
+      return x;
+    }
+    const dt = Math.max((t - this.tPrev) / 1000, 0.001);
+    const dx = (x - this.xPrev) / dt;
+    const edx = this.dxPrev + OneEuroFilter.alpha(this.dCutoff, dt) * (dx - this.dxPrev);
+    const cutoff = this.minCutoff + this.beta * Math.abs(edx);
+    const filtered = this.xPrev + OneEuroFilter.alpha(cutoff, dt) * (x - this.xPrev);
+    this.xPrev = filtered;
+    this.dxPrev = edx;
+    this.tPrev = t;
+    return filtered;
+  }
+}
+
+/** Sample times for a stroke: its own where present and increasing, otherwise an even 120 Hz step. */
+function sampleTimes(pts) {
+  const out = new Array(pts.length);
+  let last = null;
+  for (let i = 0; i < pts.length; i++) {
+    const t = pts[i].t;
+    out[i] = Number.isFinite(t) && (last === null || t > last) ? t : (last === null ? 0 : last + FALLBACK_STEP_MS);
+    last = out[i];
+  }
+  return out;
 }
 
 /**
- * Streamline a stroke for drawing. Interior points move toward an
- * exponential average (a light lazy brush). The first point and the last
- * point stay put, and the last few points ease back onto the raw samples
- * so the tip does not lag a Pencil prediction. Pressure is averaged the
- * same way. The input array and its points are not modified.
+ * Streamline a stroke for drawing with the One-Euro filter. The first
+ * point and the last point stay put, and the last few points ease back
+ * onto the raw samples so the tip does not lag a Pencil prediction.
+ * Pressure is steadied too. `mode` 'off' draws the raw samples (tests and
+ * geometry checks). The input array and its points are not modified:
+ * smoothing is a render step and stored points are never rewritten.
  */
-export function stabilizeStroke(points, level = 'medium') {
+export function stabilizeStroke(points, mode = 'auto') {
   const pts = points || [];
-  const spec = smoothingLevel(typeof level === 'string' ? level : level?.id);
-  if (pts.length < 3 || spec.follow >= 1) return pts;
-  const out = pts.map((p) => ({ ...p }));
-  let x = out[0].x;
-  let y = out[0].y;
-  let pressure = finite(out[0].p, 0.5);
-  for (let i = 1; i < out.length - 1; i++) {
-    const rawP = finite(out[i].p, 0.5);
-    x += spec.follow * (out[i].x - x);
-    y += spec.follow * (out[i].y - y);
-    pressure += spec.pressure * (rawP - pressure);
-    out[i] = { ...out[i], x, y, p: pressure };
-  }
+  if (pts.length < 3 || mode === 'off') return pts;
+  const times = sampleTimes(pts);
+  const fx = new OneEuroFilter();
+  const fy = new OneEuroFilter();
+  const fp = new OneEuroFilter(PRESSURE_CUTOFF, 0, 1);
+  const out = pts.map((p, i) => {
+    const x = fx.filter(p.x, times[i]);
+    const y = fy.filter(p.y, times[i]);
+    const pressure = fp.filter(finite(p.p, 0.5), times[i]);
+    return i === 0 ? { ...p } : { ...p, x, y, p: pressure };
+  });
+  out[out.length - 1] = { ...pts[pts.length - 1] };
   const tail = Math.min(4, out.length - 2);
   for (let k = 1; k <= tail; k++) {
     const i = out.length - 1 - k;
@@ -362,11 +408,6 @@ export function segmentSamples(seg) {
 }
 
 /**
- * Samples for a whole stroke, in order. Empty input → [].
- * `smoothing` steadies the points used to draw. Stored points are unchanged.
- * The default is Medium.
- */
-/**
  * True when neighbouring samples' discs overlap, so a round-stamp stroke
  * cannot leave a hole between them. A single ribbon outline is not used:
  * it self-intersects on a loop and the fill goes hollow.
@@ -405,7 +446,7 @@ function fillGaps(points, maxGap = 3.5) {
   }
   if (!sparse) return pts;
   const out = [pts[0]];
-  const keys = ['p', 'scale', 'tiltX', 'tiltY', 'altitude', 'azimuth', 'twist'];
+  const keys = ['p', 't', 'scale', 'tiltX', 'tiltY', 'altitude', 'azimuth', 'twist'];
   for (let i = 1; i < pts.length; i++) {
     const a = pts[i - 1];
     const b = pts[i];
@@ -438,7 +479,12 @@ function isDot(points) {
   return points.every((p) => Math.hypot(p.x - first.x, p.y - first.y) <= DOT_RADIUS);
 }
 
-export function paintSamples(points, smoothing = 'medium') {
+/**
+ * Samples for a whole stroke, in order. Empty input → [].
+ * The One-Euro filter steadies the points used to draw ('off' skips it).
+ * Stored points are unchanged.
+ */
+export function paintSamples(points, smoothing = 'auto') {
   const pts = points || [];
   if (pts.length && isDot(pts)) {
     // A light tap reports little pressure; give the dot a readable size and
@@ -607,6 +653,55 @@ export function ghostPlacement({ imageWidth = 0, imageHeight = 0, padWidth = 0, 
     h,
     scale,
   };
+}
+
+/**
+ * Tracing a missed answer: when the strokes cover enough of the faint
+ * model, the copy is done and the screen moves on after a short pause.
+ * The model's width is cut into buckets; a bucket counts once any stroke
+ * point lands in it (inside a box padded around the model). A short answer
+ * (narrower than `compactWidth` CSS px, one or two characters) needs more
+ * coverage, and the pause is longer when the answer is short or only one
+ * stroke is down, so a '+', '=', 't' or a single digit is never cut off
+ * before its second stroke.
+ */
+export const TRACE = Object.freeze({ buckets: 12, required: 0.75, compactRequired: 0.85, compactWidth: 65, advanceMs: 450, shortAdvanceMs: 900 });
+
+/** The padded box a trace is checked against, from the model's ink bounds in CSS px. */
+export function traceTarget(box) {
+  if (!box) return null;
+  const left = finite(box.left, NaN);
+  const right = finite(box.right, NaN);
+  const top = finite(box.top, NaN);
+  const bottom = finite(box.bottom, NaN);
+  if (![left, right, top, bottom].every(Number.isFinite) || right <= left || bottom < top) return null;
+  const width = right - left;
+  const padY = Math.max(24, (bottom - top) * 0.35);
+  return { left: left - 12, right: right + 12, top: top - padY, bottom: bottom + padY, compact: width < TRACE.compactWidth };
+}
+
+/** Share of the model's width the strokes have covered, 0–1. */
+export function traceCoverage(target, strokes) {
+  if (!target) return 0;
+  const n = TRACE.buckets;
+  const hit = new Array(n).fill(false);
+  const width = Math.max(target.right - target.left, 1);
+  for (const s of strokes || []) {
+    for (const pt of s?.pts || s || []) {
+      if (pt.x < target.left || pt.x > target.right || pt.y < target.top || pt.y > target.bottom) continue;
+      hit[clamp(Math.floor(((pt.x - target.left) / width) * n), 0, n - 1)] = true;
+    }
+  }
+  return hit.filter(Boolean).length / n;
+}
+
+/** Milliseconds to wait after the pencil lifts before the trace counts as done, or null while it is not covered yet. */
+export function traceAdvanceDelay(target, strokes) {
+  if (!target) return null;
+  const list = strokes || [];
+  const required = target.compact ? TRACE.compactRequired : TRACE.required;
+  if (traceCoverage(target, list) < required) return null;
+  return target.compact || list.length < 2 ? TRACE.shortAdvanceMs : TRACE.advanceMs;
 }
 
 /**

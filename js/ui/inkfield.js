@@ -6,7 +6,7 @@
 import { h } from './dom.js';
 import { icon } from './icons.js';
 import { local } from './local.js';
-import { inkPad, smoothingButtons } from './inkpad.js';
+import { inkPad } from './inkpad.js';
 import { PEN_COLORS, PEN_WIDTHS, chooseSideMode, isInkAnswer, isInkSide, penColor, penWidth } from '../core/pencil.js';
 
 export const EDITOR_SIDES_KEY = 'axon-editor-sides';
@@ -72,7 +72,7 @@ export function inkField({ which, label, textarea, initial = [], onChange }) {
   const clearBtn = h('button', { type: 'button', class: 'btn small', 'aria-label': `Clear ${label}`, onclick: () => { touched = true; pad.clear(); paintTools(); onChange(); } }, icon('trash'), 'Clear');
   const colors = h('div', { class: 'pencil-choices', role: 'group', 'aria-label': `${label} pen colour` });
   const widths = h('div', { class: 'pencil-choices', role: 'group', 'aria-label': `${label} pen width` });
-  const tools = h('div', { class: 'editor-ink-tools' }, colors, widths, smoothingButtons({ prefix: `${label} ` }), eraserBtn, undoBtn, redoBtn, clearBtn);
+  const tools = h('div', { class: 'editor-ink-tools' }, colors, widths, eraserBtn, undoBtn, redoBtn, clearBtn);
   const host = h('div', { class: 'editor-ink-host' }, pad.el, tools);
 
   function applyPen() {

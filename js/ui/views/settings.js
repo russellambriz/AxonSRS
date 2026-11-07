@@ -17,8 +17,8 @@ import { systemTimeZone, isValidTimeZone } from '../../core/time.js';
 import { uuid } from '../../core/util.js';
 import { setAllowRemoteImages } from '../render.js';
 import { local } from '../local.js';
-import { PENCIL_ONLY_KEY, inkSmoothing, setInkSmoothing } from '../inkpad.js';
-import { SMOOTHING_LEVELS } from '../../core/ink.js';
+import { PENCIL_ONLY_KEY } from '../inkpad.js';
+import { AUTO_MODALITY_KEY } from '../../study/modality.js';
 
 const SECTIONS = [
   ['appearance', 'Appearance', 'sun'],
@@ -105,7 +105,7 @@ function study() {
     h('section', { class: 'panel' }, h('h2', {}, 'Review flow'),
       settingRow({ title: 'Retype after a mistake', desc: 'Type the correct answer once before moving on (never counted as recall). Turn off if typing is difficult; you can also skip it per card.', control: switchControl({ checked: g().requireRetype !== false, onchange: (v) => saveG({ requireRetype: v }) }) }),
       settingRow({ title: 'Pencil only', desc: 'On the handwriting pad, ignore fingers and palms. Apple Pencil and a mouse still draw. After a pencil has touched the pad on this device, palm touches are ignored from the next session even when this is off.', control: switchControl({ checked: local.get(PENCIL_ONLY_KEY) === '1', onchange: (v) => local.set(PENCIL_ONLY_KEY, v ? '1' : '0') }) }),
-      settingRow({ title: 'Ink smoothing', desc: 'Steadies handwriting. Medium is the default. Saved strokes keep their original points; this only changes how they are drawn. Also on the pen row in Create with Pencil.', control: segmented({ label: 'Ink smoothing', options: SMOOTHING_LEVELS.map((level) => ({ value: level.id, label: level.label })), value: inkSmoothing(), onchange: (v) => setInkSmoothing(v) }) }),
+      settingRow({ title: 'Switch to Pencil automatically', desc: 'Touching the page with Apple Pencil opens the handwriting pad, and so does hovering the pencil over it when the answer box is empty and you have not typed for 3 seconds. Typing a letter on an empty pad goes back to the keyboard. Your typed text and ink are both kept.', control: switchControl({ checked: local.get(AUTO_MODALITY_KEY) !== '0', onchange: (v) => local.set(AUTO_MODALITY_KEY, v ? '1' : '0') }) }),
       settingRow({ title: 'Auto-advance after a correct answer', desc: 'Milliseconds; 0 = off (press Enter to continue).', control: numberInput(g().autoAdvanceMs ?? 0, (v) => saveG({ autoAdvanceMs: v || 0 }), { min: 0, max: 10000, step: 100 }) }),
       settingRow({ title: 'Show “Why this grade?”', control: switchControl({ checked: g().showWhy !== false, onchange: (v) => saveG({ showWhy: v }) }) }),
       settingRow({ title: 'Ask how sure I am before checking', desc: 'Optional Guessing / Unsure / Confident next to the answer box. Guessing means the answer will not count as recall. Leaving it unset is fine.', control: switchControl({ checked: g().confidencePrompt !== false, onchange: (v) => saveG({ confidencePrompt: v }) }) }),

@@ -71,6 +71,7 @@ const PRECACHE = [
   './js/data/sync.js',
   './js/main.js',
   './js/study/drafts.js',
+  './js/study/modality.js',
   './js/study/session.js',
   './js/study/trial.js',
   './js/ui/appearance.js',

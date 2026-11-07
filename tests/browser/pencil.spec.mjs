@@ -37,9 +37,7 @@ export const tests = [
       await page.getByRole('heading', { name: 'Create with Pencil' }).waitFor();
       await page.waitForFunction(() => [...document.querySelectorAll('.pencil-paper .ink-canvas')].some((c) => c.width > 0));
       assert.equal(await page.locator('.pencil-quick').isHidden(), true, 'the under-page actions wait until the back');
-      assert.equal(await page.getAttribute('button[aria-label="Smoothing Medium"]', 'aria-pressed'), 'true');
-      await page.getByRole('button', { name: 'Smoothing High' }).click();
-      assert.equal(await page.evaluate(() => localStorage.getItem('axon-ink-smoothing')), 'high');
+      assert.equal(await page.locator('.pencil-smooth-group').count(), 0, 'no smoothing control: the One-Euro filter adapts to speed');
       assert.equal(await page.locator('textarea.pencil-answer').evaluate((el) => el.tagName), 'TEXTAREA', 'the graded answer is a normal field, so Scribble still works');
       const layout = await page.evaluate(() => {
         const paper = document.querySelector('.pencil-paper').getBoundingClientRect();

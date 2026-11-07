@@ -11,7 +11,7 @@ import { store } from '../../data/store.js';
 import { button } from './common.js';
 import { select, confirmDialog, errorToast } from '../components.js';
 import { announce } from '../appearance.js';
-import { inkPad, smoothingButtons } from '../inkpad.js';
+import { inkPad } from '../inkpad.js';
 import { createCard } from '../../core/model.js';
 import { PAPER, PEN_COLORS, PEN_WIDTHS, composePencilCard, imageRejectReason, penColor, penWidth, splitPencilSide } from '../../core/pencil.js';
 import { pencilLibrary } from '../pencilreel.js';
@@ -350,7 +350,7 @@ export async function view(outlet, _params, query) {
         h('div', { class: 'pencil-paper' }, frontPad.el, backPad.el, ghostEl),
         noteEl,
         backActions,
-        h('div', { class: 'pencil-tools' }, colorHost, widthHost, smoothingButtons(), h('span', { class: 'pencil-tool-gap' }), eraserBtn, undoBtn, redoBtn, clearBtn)),
+        h('div', { class: 'pencil-tools' }, colorHost, widthHost, h('span', { class: 'pencil-tool-gap' }), eraserBtn, undoBtn, redoBtn, clearBtn)),
       h('aside', { class: 'pencil-panel', 'aria-label': 'Text' },
         h('div', { class: 'pencil-kinds', role: 'group', 'aria-label': 'How the answer is stored' }, handBtn, typeBtn),
         h('label', { class: 'pencil-field' }, h('span', {}, 'Prompt text ', h('span', { class: 'faint' }, 'optional')), promptInput),
