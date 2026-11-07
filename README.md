@@ -404,6 +404,17 @@ until a later study day), **postponed** (vacation overlay).
 Sessions can be paused, resumed (also after reloading or updating the app)
 and ended; completed reviews are already saved.
 
+An unfinished answer is saved too, before you check it: typed text, ink,
+your confidence choice, Type or Write, and any hint or solution you opened.
+It comes back after a reload, Pause and Resume, or leaving and returning,
+and switching Type and Write never erases it. Under the answer field,
+**Saved** appears only once the answer is written to this device's storage;
+**Couldn't save** keeps the answer on screen and offers Retry. Typing is
+saved about a quarter of a second after you stop; a stroke, Undo, Clear,
+a confidence choice and a mode switch are saved at once. Once the answer is
+checked or shown, the draft is gone: it never comes back as a fresh answer.
+Details: [`docs/chunk-1-drafts.md`](docs/chunk-1-drafts.md).
+
 ## Scheduling (FSRS)
 
 - **Layer A** is FSRS-6 via the pinned **ts-fsrs 5.4.2**, checked against
