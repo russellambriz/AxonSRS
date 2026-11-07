@@ -36,6 +36,7 @@ export const tests = [
       await page.evaluate((id) => { location.hash = `#/pencil?deck=${id}`; }, deckId);
       await page.getByRole('heading', { name: 'Create with Pencil' }).waitFor();
       await page.waitForFunction(() => [...document.querySelectorAll('.pencil-paper .ink-canvas')].some((c) => c.width > 0));
+      assert.equal(await page.locator('.pencil-quick').isHidden(), true, 'the under-page actions wait until the back');
       assert.equal(await page.getAttribute('button[aria-label="Smoothing Medium"]', 'aria-pressed'), 'true');
       await page.getByRole('button', { name: 'Smoothing High' }).click();
       assert.equal(await page.evaluate(() => localStorage.getItem('axon-ink-smoothing')), 'high');
@@ -69,6 +70,24 @@ export const tests = [
 
       await page.getByRole('button', { name: 'Back' }).click();
       await page.waitForFunction(() => document.querySelector('.pencil-studio')?.dataset.side === 'back');
+      const pencilQuick = await page.evaluate(() => {
+        const quick = document.querySelector('.pencil-quick');
+        const paper = document.querySelector('.pencil-paper');
+        const header = document.querySelector('.pencil-top-actions');
+        const q = quick.getBoundingClientRect();
+        const p = paper.getBoundingClientRect();
+        const heights = [...document.querySelectorAll('.pencil-actions .btn')].map((b) => b.getBoundingClientRect().height).filter((h) => h > 0);
+        return {
+          shown: !quick.hidden && q.height > 0,
+          below: q.top >= p.bottom - 2,
+          header: [...header.querySelectorAll('button')].map((b) => b.textContent),
+          minH: Math.min(...heights),
+        };
+      });
+      assert.equal(pencilQuick.shown, true, 'Save & flip sits under the back page');
+      assert.equal(pencilQuick.below, true);
+      assert.deepEqual(pencilQuick.header, ['Done', 'Save & flip']);
+      assert.ok(pencilQuick.minH >= 44, `pencil touch height ${pencilQuick.minH}`);
       assert.equal(await visibleStrokes(page), '0', 'the back page starts blank');
       await stroke(page, { y: 80, id: 8 });
       assert.equal(await visibleStrokes(page), '1');
@@ -78,10 +97,10 @@ export const tests = [
       assert.equal(await visibleStrokes(page), '1', 'the front sketch is still there');
 
       await page.getByRole('button', { name: 'Typed answer' }).click();
-      await page.getByRole('button', { name: 'Save & flip' }).click();
+      await page.getByRole('button', { name: 'Save & flip' }).first().click();
       await page.getByText('Type the answer Axon should check').waitFor();
       await page.getByRole('textbox', { name: 'Graded answer' }).fill('Lima');
-      await page.getByRole('button', { name: 'Save & flip' }).click();
+      await page.getByRole('button', { name: 'Save & flip' }).first().click();
       await page.getByText('1 saved').waitFor();
       assert.equal(await page.locator('.pencil-answer').inputValue(), '');
       assert.equal(await visibleStrokes(page), '0', 'the next card starts on a clean page');
@@ -95,7 +114,7 @@ export const tests = [
 
       await page.getByRole('textbox', { name: 'Prompt text' }).fill('Capital of Chile');
       await page.getByRole('textbox', { name: 'Graded answer' }).fill('Santiago');
-      await page.getByRole('button', { name: 'Save & flip' }).click();
+      await page.getByRole('button', { name: 'Save & flip' }).first().click();
       await page.getByText('2 saved').waitFor();
       const cards = await idbAll(page, 'cards');
       assert.equal(cards.length, 2);
@@ -142,7 +161,7 @@ export const tests = [
       await page.waitForFunction(() => document.querySelector('.pencil-studio')?.dataset.side === 'back');
       await page.locator('.pencil-ghost').getByText('Write the answer', { exact: true }).waitFor();
       await stroke(page, { y: 70, id: 9 });
-      await page.getByRole('button', { name: 'Save & flip' }).click();
+      await page.getByRole('button', { name: 'Save & flip' }).first().click();
       await page.getByText('1 saved').waitFor();
       const [card] = await idbAll(page, 'cards');
       assert.match(card.front.join('\n'), /!\[[^\]]*\]\(axon-media:sha256-/);
@@ -193,7 +212,7 @@ export const tests = [
       await page.getByRole('button', { name: 'Typed answer' }).click();
       await page.getByRole('textbox', { name: 'Prompt text' }).fill('Alpha');
       await page.getByRole('textbox', { name: 'Graded answer' }).fill('One');
-      await page.getByRole('button', { name: 'Save & flip' }).click();
+      await page.getByRole('button', { name: 'Save & flip' }).first().click();
       await page.getByText('1 saved').waitFor();
 
       await page.getByRole('button', { name: 'Handwritten answer' }).click();
@@ -202,7 +221,7 @@ export const tests = [
       await page.getByRole('button', { name: 'Back' }).click();
       await page.waitForFunction(() => document.querySelector('.pencil-studio')?.dataset.side === 'back');
       await stroke(page, { y: 90, id: 15 });
-      await page.getByRole('button', { name: 'Save & flip' }).click();
+      await page.getByRole('button', { name: 'Save & flip' }).first().click();
       await page.getByRole('button', { name: 'Show 2 saved' }).click();
       const beta = page.getByRole('button', { name: 'Beta', exact: true });
       await beta.waitFor();
