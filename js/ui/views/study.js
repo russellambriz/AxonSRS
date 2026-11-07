@@ -43,6 +43,15 @@ import { local } from '../local.js';
 import { occlusionView } from '../occlusion.js';
 import { inkPad } from '../inkpad.js';
 import { isInkSide } from '../../core/pencil.js';
+import { currentAttempt, isBlankDraft } from '../../core/draft.js';
+import { DraftKeeper } from '../../study/drafts.js';
+
+/** The session as the screen keeps it: the stored draft lives only in the store and the draft keeper. */
+function withoutDraft(session) {
+  if (!session || !('draft' in session)) return session;
+  const { draft: _draft, ...rest } = session;
+  return rest;
+}
 
 const TOOLBAR_PRESETS = {
   general: ['π', '√', '^', '/', '(', ')', '-', '+', '²', '³', 'θ', 'Δ', '±', '∞'],
@@ -57,9 +66,14 @@ export async function view(outlet, { id }) {
     outlet.append(h('div', { class: 'view narrow' }, h('div', { class: 'empty' }, h('h2', {}, 'Session not found'), button('Study', { href: '#/study', kind: 'primary' }))));
     return null;
   }
-  const s = new StudyScreen(outlet, session);
+  const s = new StudyScreen(outlet, withoutDraft(session));
   await s.init();
-  return { destroy: () => s.destroy() };
+  return {
+    destroy: () => s.destroy(),
+    // Tests: the screen itself, and a page that dies without any unload code.
+    screen: s,
+    kill: () => s.kill(),
+  };
 }
 
 class StudyScreen {
@@ -82,6 +96,7 @@ class StudyScreen {
     this.timerRaf = 0;
     this.focusStartActive = 0;
     this.revealedInSession = new Set();
+    this.drafts = null;
     this.gradingConfig = mergeGradingConfig({ ...(store.global.gradingOverrides || {}), hintCeiling: store.global.gradingOverrides?.hintCeiling || 'good' });
     this.destroyed = false;
   }
@@ -98,7 +113,8 @@ class StudyScreen {
     await store.saveSession(this.session);
     app.leaveGuard = async () => {
       if (this.phase === 'submitting') return false;
-      return true;
+      if (this.leaving) return true; // leave() already asked
+      return this.confirmDraftSaved();
     };
     this.setupShortcuts();
     await ensureMath();
@@ -134,6 +150,8 @@ class StudyScreen {
 
   lockLost() {
     this.releaseLock = null;
+    // The other tab owns the attempt now; nothing more is written from here.
+    this.drafts?.disable();
     this.cancelAutoAdvance();
     this.trial.pause('hidden');
     this.screen.hold('hidden');
@@ -145,7 +163,7 @@ class StudyScreen {
     app.shortcuts.enableScope('study', false);
     app.shortcuts.enableScope('study-manual', false);
     app.setBusy('study', null);
-    this.showLocked('Studying moved to another tab', 'Your saved progress is kept. Anything not yet submitted here was not recorded.');
+    this.showLocked('Studying moved to another tab', 'Your saved progress is kept, including your unfinished answer up to its last save. Continue in the other tab.');
   }
 
   showLocked(title, message) {
@@ -159,7 +177,7 @@ class StudyScreen {
     if (!(await this.tryLock(true))) return;
     // Continue from the latest saved state (the other tab may have moved on).
     const latest = await store.getSession(this.session.id);
-    if (latest) this.session = latest;
+    if (latest) this.session = withoutDraft(latest);
     await app.cache.load();
     this.current = null;
     this.composer.hidden = false;
@@ -205,14 +223,20 @@ class StudyScreen {
     this.voiceBtn = h('button', { class: 'btn icon submit-btn voice-btn', type: 'button', 'aria-label': 'Answer by voice', title: 'Voice input (Alt+M)', hidden: true }, icon('mic'));
     this.submitBtn = h('button', { class: 'btn primary submit-btn', type: 'button', 'aria-label': 'Submit answer' }, icon('check'));
     this.actionsEl = h('div', { class: 'actions' });
-    this.ink = inkPad({ onStroke: () => {
-      // Retyping the correct answer is copying, not a new attempt, so it does not move the trial clock.
-      if (this.phase !== 'question') return;
-      this.trial.onInkStroke();
-      this.cancelAutoAdvance();
-    } });
+    this.ink = inkPad({
+      onStroke: () => {
+        // Retyping the correct answer is copying, not a new attempt, so it does not move the trial clock.
+        if (this.phase !== 'question') return;
+        this.trial.onInkStroke();
+        this.cancelAutoAdvance();
+      },
+      // A finished stroke, erase, Undo or Clear on the answer (never the correction trace) is saved at once.
+      onEdit: () => this.saveDraft({ ink: this.ink.strokesData() }, { immediate: true }),
+    });
     this.confEl = h('div', { class: 'confidence-pick', role: 'group', 'aria-label': 'How sure are you? Optional' });
-    this.composer = h('div', { class: 'composer' }, h('div', { class: 'composer-inner' }, this.liveEl, this.symbolsEl, this.ink.el, this.confEl, h('div', { class: 'answer-row' }, this.input, this.voiceBtn, this.submitBtn), this.actionsEl));
+    // Saving / Saved / Couldn't save for the unfinished answer. Errors are announced; progress is not.
+    this.saveEl = h('div', { class: 'draft-state faint small', hidden: true, 'aria-live': 'off', dataset: { state: 'idle' } });
+    this.composer = h('div', { class: 'composer' }, h('div', { class: 'composer-inner' }, this.liveEl, this.symbolsEl, this.ink.el, this.confEl, h('div', { class: 'answer-row' }, this.input, this.voiceBtn, this.submitBtn), h('div', { class: 'composer-foot' }, this.actionsEl, this.saveEl)));
     this.root = h('div', { class: ['study', this.inkMode && 'ink-mode'], role: 'region', 'aria-label': 'Study session' }, top, this.stage, this.composer);
     // Keep focus in the input when tapping composer controls.
     for (const el of [this.submitBtn, this.voiceBtn]) el.addEventListener('pointerdown', (e) => e.preventDefault());
@@ -244,11 +268,14 @@ class StudyScreen {
       e.preventDefault();
       this.primaryAction();
     }, sig);
+    // Leaving the page or the app: save the unfinished answer now. This
+    // supplements the saves made while answering; a browser may stop the
+    // page before it completes, so it is never the only save.
     document.addEventListener('visibilitychange', () => {
-      if (document.hidden) { this.trial.pause('hidden'); this.screen.hold('hidden'); }
+      if (document.hidden) { this.trial.pause('hidden'); this.screen.hold('hidden'); this.drafts?.flush(); }
       else { this.trial.resume(); this.screen.release('hidden'); }
     }, sig);
-    window.addEventListener('pagehide', () => { this.trial.pause('hidden'); this.screen.hold('hidden'); }, sig);
+    window.addEventListener('pagehide', () => { this.trial.pause('hidden'); this.screen.hold('hidden'); this.drafts?.flush(); }, sig);
     window.addEventListener('pageshow', () => { this.trial.resume(); this.screen.release('hidden'); }, sig);
     window.visualViewport?.addEventListener('resize', () => { if (viewportState().shrunk) this.trial.setViewportShrunk(true); }, sig);
     this.unsubs.push(app.onChange(() => this.renderProgress()));
@@ -303,9 +330,23 @@ class StudyScreen {
       /* not supported */
     }
     this.recognition?.abort?.();
+    // Leaving the screen without Pause (a link, Back): save what is pending.
+    this.drafts?.flush();
     if (this.session.status === 'active' && this.session.index < this.session.queue.length) {
       store.saveSession({ ...this.session, status: 'paused', pausedAt: Date.now() }).catch(() => {});
     }
+  }
+
+  /** The page stops dead (tests simulate a reload or a killed tab): nothing more is saved. */
+  kill() {
+    this.destroyed = true;
+    this.abort.abort();
+    for (const u of this.unsubs) u();
+    clearTimeout(this.autoTimer);
+    cancelAnimationFrame(this.timerRaf);
+    this.drafts?.disable();
+    this.releaseLock?.();
+    app.leaveGuard = null;
   }
 
   /* ========================================================= helpers */
@@ -422,6 +463,14 @@ class StudyScreen {
     // undone, or interrupted by a reload) can only come back as practice.
     const exposed = !!this.session.exposed?.[unit.id];
     const live = !exposed && sessionLive && (attempts === 0 || (isLearning && unit.state.due <= now + LEARN_AHEAD_MS));
+    // The unfinished answer for this attempt, if one was saved (reload,
+    // Resume). Read before anything can save; nothing saves until hydrated.
+    const attempt = currentAttempt(this.session);
+    this.drafts?.disable();
+    const storedDraft = store.getDraft(this.session.id).catch((err) => {
+      console.error(err);
+      return null;
+    });
     this.current = {
       unit, card, deck, content, settings, live,
       eventId: uuid(),
@@ -432,6 +481,16 @@ class StudyScreen {
       priorExposure: exposed,
       confidence: null,
     };
+    const cur = this.current;
+    const keeper = new DraftKeeper({
+      key: attempt?.key ?? `${this.session.id}:${this.session.index}:${unit.id}:${attempts}`,
+      meta: { unitId: unit.id, cardId: card.id, cardUpdatedAt: card.updatedAt ?? null },
+      save: (record, baseRev) => store.saveDraft(this.session.id, record, { baseRev }),
+      onStatus: (status) => { if (this.current === cur) this.renderSaveState(status); },
+    });
+    cur.drafts = keeper;
+    this.drafts = keeper;
+    this.renderSaveState('idle');
     this.renderConfidence();
     this.input.value = '';
     this.ink.clear();
@@ -439,9 +498,16 @@ class StudyScreen {
     this.ink.setHint('Write your answer, then check it');
     this.input.className = 'answer-input';
     this.current.inkAnswer = isInkSide((content.answerGroups || []).flat());
+    // Restore before the editor is usable, so start-up defaults never
+    // overwrite the saved draft. A card shown meanwhile (a stale load) is
+    // left alone.
+    const saved = await storedDraft;
+    if (this.destroyed || this.current !== cur) return;
+    if (keeper.hydrate(saved)) this.applyDraft(saved);
+    else if (!cur.inkAnswer) keeper.state.mode = this.inkMode ? 'write' : 'type';
     this.root.classList.toggle('ink-mode', this.usingInk());
     this.root.classList.toggle('ink-card', !!this.current.inkAnswer);
-    if (this.current.inkAnswer) requestAnimationFrame(() => this.ink.resize());
+    if (this.usingInk()) requestAnimationFrame(() => this.ink.resize());
     this.input.placeholder = content.answerGroups.length > 1 ? `${content.answerGroups.length} answers separated by ;` : 'Type your answer';
     this.input.setAttribute('inputmode', 'text');
     clear(this.feedbackEl);
@@ -449,6 +515,8 @@ class StudyScreen {
     this.solutionEl.hidden = true;
     this.liveEl.textContent = '';
     this.stage.scrollTop = 0;
+    this.updateLivePreview();
+    if (cur.restoredAssistance) this.restoreAssistancePanels();
 
     // Meta chips
     const chips = [];
@@ -499,6 +567,9 @@ class StudyScreen {
     this.focusInput();
     const startTrial = () => {
       this.trial.start({ coarsePointer: matchMedia('(pointer: coarse)').matches, finePointer: matchMedia('(any-pointer: fine)').matches, lastPointerType: this.lastPointerType });
+      // Help already used on this attempt before a reload still counts.
+      if (cur.restoredAssistance?.hintShown) this.trial.assistance.hintShown = true;
+      if (cur.restoredAssistance?.solutionViewed) this.trial.assistance.solutionViewed = true;
       if (keyboardLikelyOpen()) this.trial.setViewportShrunk(true);
       if (document.hidden) this.trial.pause('hidden');
       this.presentedAt = Date.now();
@@ -577,6 +648,7 @@ class StudyScreen {
     this.focusInput();
     this.trial.onInput({ inputType: 'insertText' }, { origin: 'toolbar', value: el.value });
     this.updateLivePreview();
+    this.saveDraftText();
   }
 
   /* ============================================================ input */
@@ -608,6 +680,7 @@ class StudyScreen {
     if (this.phase === 'question') {
       this.trial.onInput(e, { value: this.input.value });
       this.updateLivePreview();
+      this.saveDraftText();
     } else if (this.phase === 'retype') {
       this.updateLivePreview();
     }
@@ -654,6 +727,83 @@ class StudyScreen {
     }
   }
 
+  /* ===================================================== drafts */
+
+  /** Put a saved unfinished answer back on screen (reload, Resume). Logs nothing. */
+  applyDraft(d) {
+    const cur = this.current;
+    if (!cur.inkAnswer && d.mode) {
+      this.inkMode = d.mode === 'write';
+      local.set('axon-ink-mode', this.inkMode ? '1' : '0');
+    }
+    this.input.value = d.text || '';
+    if (d.ink.strokes.length) this.ink.loadStrokes(d.ink.strokes);
+    cur.confidence = d.confidence;
+    this.renderConfidence();
+    cur.restoredAssistance = { ...d.assistance };
+    cur.draftRestored = true;
+  }
+
+  /** Show the help panels this attempt had already opened. Logs nothing: the events were logged when they opened. */
+  restoreAssistancePanels() {
+    const cur = this.current;
+    if (cur.restoredAssistance?.hintShown && cur.card.hint) {
+      this.hintEl.hidden = false;
+      renderInto(this.hintEl, cur.card.hint, { media: mediaFetcher });
+    }
+    if (cur.restoredAssistance?.solutionViewed && cur.card.explanation) {
+      this.solutionEl.hidden = false;
+      renderInto(this.solutionEl, cur.card.explanation, { media: mediaFetcher });
+    }
+  }
+
+  /** Record a change to the unfinished answer. Only while answering this card. */
+  saveDraft(patch, opts) {
+    const cur = this.current;
+    if (!cur || this.phase !== 'question' || cur.drafts !== this.drafts) return;
+    this.drafts?.update(patch, opts);
+  }
+
+  /** The text field changed (typing, a symbol, voice). Typing is debounced. */
+  saveDraftText() {
+    this.saveDraft({ text: this.input.value });
+  }
+
+  renderSaveState(status) {
+    const el = this.saveEl;
+    if (!el) return;
+    el.dataset.state = status;
+    if (status === 'idle') {
+      el.hidden = true;
+      replace(el);
+      return;
+    }
+    el.hidden = false;
+    el.classList.toggle('danger', status === 'error' || status === 'conflict');
+    if (status === 'pending' || status === 'saving') replace(el, h('span', {}, 'Saving…'));
+    else if (status === 'saved') replace(el, icon('check'), h('span', {}, 'Saved'));
+    else {
+      const msg = status === 'conflict' ? 'Changed in another tab. Couldn’t save' : 'Couldn’t save';
+      replace(el, h('span', {}, msg), h('button', { type: 'button', class: 'btn small', onclick: () => this.drafts?.retry(), onpointerdown: (e) => e.preventDefault() }, 'Retry'));
+      announce(`${msg}. Your answer is still here. Choose Retry to save it.`, { assertive: true });
+    }
+  }
+
+  /** Before leaving: save the unfinished answer; if that fails, ask before losing it. */
+  async confirmDraftSaved() {
+    const d = this.drafts;
+    if (!d || d.disabled || !d.hydrated || !['question', 'paused'].includes(this.phase)) return true;
+    if (await d.flush()) return true;
+    if (isBlankDraft(d.state)) return true;
+    return confirmDialog({
+      title: 'Leave without saving your answer?',
+      message: 'Your unfinished answer couldn’t be saved on this device. If you leave, it will be lost.',
+      confirmLabel: 'Leave',
+      danger: true,
+      cancelLabel: 'Stay',
+    });
+  }
+
   /** Optional pre-submission confidence; unset is a valid answer, never "confident". */
   renderConfidence() {
     const cur = this.current;
@@ -669,6 +819,7 @@ class StudyScreen {
         if (this.phase !== 'question') return;
         cur.confidence = cur.confidence === value ? null : value;
         this.renderConfidence();
+        this.saveDraft({ confidence: cur.confidence }, { immediate: true });
         if (cur.confidence === 'guessing') announce('Guessing: it will not count as recall, even if it is right.');
       } }, label);
       b.addEventListener('pointerdown', (e) => e.preventDefault());
@@ -679,6 +830,12 @@ class StudyScreen {
   /** The answer is about to be shown without a committed grade: remember that across reloads. */
   markExposed() {
     const id = this.current.unit.id;
+    // The answer is about to show: this attempt's draft must never come back.
+    const d = this.current.drafts;
+    if (d?.active) {
+      d.update({ stage: 'exposed' }, { immediate: true });
+      d.freeze();
+    }
     this.session = { ...this.session, exposed: { ...(this.session.exposed || {}), [id]: Date.now() } };
     store.saveSession(this.session).catch(() => {});
   }
@@ -845,6 +1002,12 @@ class StudyScreen {
 
   async commit(manualRating = null, { guessed = false, selfHelp = false } = {}) {
     const cur = this.current;
+    // The draft stays stored until the review commits (the store drops it in
+    // the same transaction), so a failed submission is still recoverable.
+    if (cur.drafts?.active) {
+      await cur.drafts.flush();
+      cur.drafts.freeze();
+    }
     const key = baselineKey(cur.trial.modality.kind, cur.trial.taskType);
     const baseline = await store.getBaseline(key);
     const params = store.paramsFor(cur.deck);
@@ -1258,7 +1421,8 @@ class StudyScreen {
     this.inkMode = !this.inkMode;
     local.set('axon-ink-mode', this.inkMode ? '1' : '0');
     this.root.classList.toggle('ink-mode', this.usingInk());
-    this.ink.clear();
+    // The ink and the typed text both stay: switching is not erasing.
+    this.saveDraft({ mode: this.inkMode ? 'write' : 'type' }, { immediate: true });
     this.renderActions();
     if (this.inkMode) {
       this.input.blur();
@@ -1488,6 +1652,7 @@ class StudyScreen {
     const cur = this.current;
     if (this.phase !== 'question' || !cur?.card.hint || !this.hintEl.hidden) return;
     this.trial.assistance.hintShown = true;
+    this.saveDraft({ assistance: { hintShown: true } }, { immediate: true });
     this.hintEl.hidden = false;
     renderInto(this.hintEl, cur.card.hint, { media: mediaFetcher });
     store.addEvents([exposureEvent({ id: uuid(), type: 'hint', now: Date.now(), deviceId: store.deviceId, seq: null, unit: cur.unit, card: cur.card, sessionId: this.session.id, studyDay: store.today(), data: { presentationId: cur.eventId } })]).catch(() => {});
@@ -1513,6 +1678,7 @@ class StudyScreen {
     if (this.phase === 'question') {
       if (!this.solutionEl.hidden) return;
       this.trial.assistance.solutionViewed = true;
+      this.saveDraft({ assistance: { solutionViewed: true } }, { immediate: true });
       this.solutionEl.hidden = false;
       renderInto(this.solutionEl, cur.card.explanation, { media: mediaFetcher });
       store.addEvents([exposureEvent({ id: uuid(), type: 'reveal', now: Date.now(), deviceId: store.deviceId, seq: null, unit: cur.unit, card: cur.card, sessionId: this.session.id, studyDay: store.today(), data: { presentationId: cur.eventId, what: 'worked-solution' } })]).catch(() => {});
@@ -1644,6 +1810,7 @@ class StudyScreen {
         this.input.value = this.input.value ? `${this.input.value} ${text}` : text;
         if (this.phase === 'question') this.trial.onInput({ inputType: 'insertText' }, { origin: 'voice', value: this.input.value });
         this.updateLivePreview();
+        this.saveDraftText();
         this.focusInput();
       };
       rec.onerror = (e) => toast(`Voice input: ${e.error === 'not-allowed' ? 'microphone permission was denied' : e.error === 'network' ? 'speech recognition needs a connection in this browser' : e.error}`, { kind: 'error' });
@@ -1662,11 +1829,17 @@ class StudyScreen {
     const prev = this.phase;
     this.trial.pause('hidden');
     this.screen.hold('paused');
+    const draftSaved = prev === 'question' && this.drafts?.active ? await this.drafts.flush() : null;
     this.session = { ...this.session, status: 'paused', pausedAt: Date.now() };
     await store.saveSession(this.session);
     this.phase = 'paused';
     app.setBusy('study', null);
-    this.showOverlay('Paused', 'Your completed reviews are saved. Timing for this card is paused.', [
+    const text = draftSaved === false && !isBlankDraft(this.drafts?.state)
+      ? 'Your completed reviews are saved, but your unfinished answer couldn’t be saved on this device. Resume to keep it, or leave and lose it. Timing for this card is paused.'
+      : draftSaved
+        ? 'Your completed reviews and your unfinished answer are saved. Timing for this card is paused.'
+        : 'Your completed reviews are saved. Timing for this card is paused.';
+    this.showOverlay('Paused', text, [
       { label: 'Resume', primary: true, run: async () => {
         this.session = { ...this.session, status: 'active', warmupPending: true };
         await store.saveSession(this.session);
@@ -1710,7 +1883,11 @@ class StudyScreen {
 
   async leave() {
     if (this.phase === 'submitting') return;
-    await this.logAbandon('left');
+    if (!(await this.confirmDraftSaved())) return;
+    // A saved unfinished answer means the learner is coming back to it: not abandoned.
+    const keptDraft = this.drafts?.status === 'saved' && !isBlankDraft(this.drafts.state);
+    if (!keptDraft) await this.logAbandon('left');
+    this.leaving = true;
     if (this.session.index < this.session.queue.length) {
       this.session = { ...this.session, status: 'paused', pausedAt: Date.now() };
       await store.saveSession(this.session);
