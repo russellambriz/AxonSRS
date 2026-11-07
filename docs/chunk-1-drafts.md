@@ -94,10 +94,13 @@ not misread. Starting the app again is repeat-safe (tested).
 
 PR #18 (live 1b8b734) changed `js/ui/views/editor.js` and
 `js/ui/views/pencil.js` without a version bump, so `sw.js` did not change
-and installed copies of the app kept the 1.0.17 files from before #18. The
-same would happen to this change: it adds two files to the precache list,
-which changes `sw.js`, but the release bump makes the update explicit and
-names it. The bump is a release step, not evidence that anything works.
+and installed copies of the app kept the 1.0.17 files from before #18.
+This change adds two files to the precache list, so `sw.js` changes and a
+new worker installs; but with the same cache name it would write the new
+files into the cache the old worker is still serving from, mixing versions.
+The separate release commit (1.0.18, `axon-v19`) gives it a fresh cache, so
+the update is all-or-nothing and also carries #18's files to installed
+copies. The bump is a release step, not evidence that anything works.
 
 Deployment check after merging:
 
